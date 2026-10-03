@@ -8,7 +8,7 @@ One Render web service serves the website, the API and the MCP endpoint, with th
 
 | Item | Render plan | Price |
 |---|---|---|
-| Web service `tracex` | Starter (0.5 CPU, 512 MB) | $7 / month |
+| Web service `tracex` | `0.5c-512mb` (0.5 CPU, 512 MB; formerly Starter) | $7 / month |
 | Disk `tracex-data` | 1 GB persistent | $0.25 / month |
 | **Total** | | **about $7.25 / month** |
 

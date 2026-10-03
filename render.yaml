@@ -3,13 +3,14 @@
 #
 # One web service runs everything: the website (/), the API (/v0), the MCP endpoint for agents (/mcp) and the
 # epoch clock (clears the auctions and settles once a day). The database is SQLite on a 1 GB persistent disk, so a
-# redeploy keeps every trace, bounty and wallet. A disk needs a paid instance: Starter is the smallest.
+# redeploy keeps every trace, bounty and wallet. A disk needs a paid instance: 0.5c-512mb (formerly Starter) is the
+# smallest, $7/month, plus $0.25/GB/month for the disk.
 # It runs as a testnet: every wallet takes $25 of test credits once, and no real money moves. See DEPLOY.md.
 services:
   - type: web
     name: tracex
     runtime: python
-    plan: starter
+    plan: 0.5c-512mb
     buildCommand: pip install ./sdk/python
     startCommand: python node/exchange.py
     healthCheckPath: /healthz

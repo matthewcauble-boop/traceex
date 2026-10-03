@@ -21,7 +21,7 @@ act ──▶ check ──▶ fix ──▶ trace ──▶ learning ──▶ a
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/matthewcauble-boop/traceex)
 
 One click puts the whole exchange online: website, API, MCP endpoint for agents, and a daily settlement clock, on a
-persistent disk (Render Starter + 1 GB disk, about $7.25 a month). It opens on the repo's real example data and runs as
+persistent disk (Render's 0.5 CPU / 512 MB instance + 1 GB disk, about $7.25 a month). It opens on the repo's real example data and runs as
 a testnet: every wallet takes $25 of test credits, no real money moves. Steps, limits and operator calls:
 [DEPLOY.md](DEPLOY.md).
 
