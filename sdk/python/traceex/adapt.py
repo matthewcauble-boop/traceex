@@ -59,8 +59,8 @@ def first_pass_score(docs, extract, check, *, fields, clean=lambda r: r):
 def attest(validator, eval_docs, metric, before, after):
     """A validator's statement that a learning improved a hidden eval. The eval set is committed by hash only.
     'sig' here is a digest; a live network replaces it with the validator's EIP-191 signature over the same bytes."""
-    a = {"validator": validator, "eval_set": "sha256:" + hashlib.sha256(canonical(sorted(eval_docs.items()))).hexdigest(),
-         "metric": metric, "before": before, "after": after}
+    eval_set = eval_docs if isinstance(eval_docs, str) else         "sha256:" + hashlib.sha256(canonical(sorted(eval_docs.items()))).hexdigest()    # docs, or a hash already taken
+    a = {"validator": validator, "eval_set": eval_set, "metric": metric, "before": before, "after": after}
     a["sig"] = "digest:" + hashlib.sha256(canonical(a)).hexdigest()
     return a
 
@@ -71,17 +71,21 @@ class AdaptiveAgent:
         agent = AdaptiveAgent(extract, check, fields=FIELDS, clean=clean, narrow=context_for, evidence=evidence, ...)
         agent.run(email)          # QA loop; every fix becomes a skeleton trace in agent.traces
         agent.adopt(learning)     # apply a learning (its own, or one bought on the exchange)
+
+    With autopilot=Autopilot(...), every run also uses the exchange on its own: fixes are submitted, unresolved
+    failures trigger a search for a proven learning (adopted automatically when this agent can apply it), and
+    recurring failures nobody has fixed become bounties.
     """
 
     def __init__(self, base_extract, check, *, fields, task, base_model, checker, producer,
-                 clean=lambda r: r, narrow=None, evidence=None):
+                 clean=lambda r: r, narrow=None, evidence=None, autopilot=None):
         from .loop import extract_checked
         from .trace import Trace
         self._loop, self._Trace = extract_checked, Trace
         self.base_extract, self.extract = base_extract, base_extract
         self.check, self.fields, self.clean, self.narrow, self.evidence = check, fields, clean, narrow, evidence
         self.task, self.base_model, self.checker, self.producer = task, base_model, checker, producer
-        self.traces, self.adopted = [], []
+        self.traces, self.adopted, self.autopilot = [], [], autopilot
 
     def run(self, text, *, created=None):
         out = self._loop(text, self.extract, self.check, fields=list(self.fields), clean=self.clean,
@@ -94,6 +98,14 @@ class AdaptiveAgent:
             if t["fixed_fields"]:
                 self.traces.append(t)
                 out["trace"] = t
+        if self.autopilot is not None:
+            out["autopilot"] = self.autopilot.on_result(text, out)
+            for act in out["autopilot"]:
+                L = act.get("learning")
+                fresh = L and L.get("id") not in {a.get("id") for a in self.adopted}
+                if act["action"] == "adopt" and fresh and L["artifact"].get("body", {}).get("kind") == "routing":
+                    self.adopt(L)
+                    act["adopted"] = True
         return out
 
     def adopt(self, learning):

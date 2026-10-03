@@ -1,0 +1,8 @@
+{
+ "set_at": "2026-10-03T20:18:57+00:00",
+ "rule": "target = base pass@1 + 0.03, fixed before any LoRA is trained or evaluated",
+ "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "eval_set": "sha256:ec7ea9e5c690bcb117d9b421621906dfecd76ce2b3b0afc1e6fd4e2811889675",
+ "base_rate": 0.278,
+ "target": 0.308
+}

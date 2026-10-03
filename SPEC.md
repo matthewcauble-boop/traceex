@@ -1,7 +1,7 @@
-# Trace Exchange — protocol spec v0.1
+# traceX — the trace exchange protocol, spec v0.1
 
 **The goal is self-improving open agents.** An agent running any open model should get better from its own mistakes,
-and from everyone else's, without a lab in the loop. Trace Exchange is the protocol for that loop, plus the market that
+and from everyone else's, without a lab in the loop. traceX is the protocol for that loop, plus the market that
 pays for it: any model's **verified fixes** become owned, tradable training data, and the **learnings** built from
 them earn per-use royalties that flow back to everyone whose work went into them.
 
@@ -76,7 +76,7 @@ user's data. Nodes reject traces whose text still matches PII detectors.
 ```json
 {
   "v": "learning/0.1",
-  "kind": "routing | rule | prompt_patch | lora | checker | package",
+  "kind": "routing | rule | prompt_patch | decoding | lora | full_finetune | checker | package",
   "task": "extract.flight",
   "base_model": {"name": "needle3", "hash": "sha256:…"},
   "artifact": "sha256:…",              // encrypted weights / patch, off-chain
@@ -147,6 +147,71 @@ get solved with learnings or packages that are then sold. The classifier engine 
     revenue accrual that survives transfers, withdraw, expire, redeem). Compiles clean with solc 0.8.26; not yet
     exercised on a test chain.
 
+## 4c. Open-weight models
+The same loop that improves one agent improves the open-weight models everyone shares. A verified fix is exactly
+the training example open models lack at scale: a real input, the model's real failure, and an answer a checker
+proved right.
+
+- **Two privacy levels.** `skeleton` (the default, for anything personal): every value replaced by a typed
+  placeholder on the producer's device. `open` (non-personal domains: code, maths, public documents): the full text
+  travels, because that is what a model learns from. Every trace at every level is scanned for keys, tokens and
+  passwords; open traces also for emails and phone numbers; skeleton traces for any personal data left. The client
+  refuses to send and the node refuses to accept anything that fails.
+- **The checker is a verifiable reward.** Unit tests, answer checkers and schema rules say what is wrong without
+  knowing the answer, which is what RL with verifiable rewards needs. Traces carry the checker's `feedback` (the
+  traceback, the failed assert with what the code returned) and its `failure_modes` (`wrong_answer`,
+  `runtime_error`, `wrong_name`, `syntax_error`, `timeout`…), which the classifier files and search filters by.
+- **Traces export to the formats trainers use** (`traceex.export`): chat SFT rows (prompt → verified answer), DPO
+  pairs (the model's answer rejected, the fix chosen), and self-repair turns (failing answer + feedback → fix), with
+  a dataset card crediting every producer and checker. Skeleton traces become trainable through `refill`: synthetic
+  values per placeholder type, as many concrete pairs per trace as a trainer wants, never the person's data.
+- **Learnings that are weights, or decoding.** Kinds `lora` and `full_finetune` carry a weights hash and location;
+  `decoding` carries an inference-time recipe that changes no weights, for example contrastive decoding across the
+  recurrent passes of looped transformers (LoopCD, arXiv 2610.02185: Huginn on HumanEval 22.6% → 31.7%). All are
+  judged the same way: the validator scores base and learning on the hidden eval and reports the paired result,
+  problems newly solved against problems newly broken, with an exact sign test.
+- **Open release, and how it still pays.** Weights released openly can't be metered per call, so an open learning
+  (`release: "open"`) is paid for differently: a **bounty funds it up front** (backers buy the coin; the pool pays
+  the solver and the traces when the attested weights reach the target); **metered uses still pay** (inference
+  providers that serve the weights report usage, and those royalties flow down the tree with the coin holders'
+  20%); **trace lots can be licensed** before release; and the **model card** carries the family tree, so every
+  producer is credited wherever the weights go.
+- **Iterate.** The adopted model becomes the next producer: its remaining failures become the next lot. Across the
+  network that is expert iteration on real deployments, with every round attested on data nobody trained on.
+- **Measured (examples/code_repair, Qwen2.5-0.5B-Instruct on MBPP, one RTX 3060):** three agents produced 78
+  verified fixes; LoRA v1 trained on them, then base + v1 produced 94 more (the loop's second round) and v2 trained on
+  both. On 500 held-out problems the pre-registered first-try score moved +1.8 (v1, p 0.43) and +1.0 (v2, p 0.69), so
+  the bounty defined on it before training stays open. Measured afterwards, the agent workflow (first try plus one
+  round of checker feedback) went from 29.4% to 37.0% (v1, p 0.0005) and 37.2% (v2, p 0.0002): the fixes taught the
+  model to use its checker. Every generation is recorded, so the run replays without a GPU.
+
+## 4d. Agents that use the exchange on their own
+The exchange only works if agents use it without a human wiring each step, so the protocol ships the parts that make
+an agent a participant by default.
+
+- **MCP server.** `python -m traceex.mcp --node <url> --address <wallet>` (or `traceex-mcp`) gives any MCP-capable
+  agent the exchange as tools: `traceex_taxonomy`, `traceex_search`, `traceex_find_learnings`, `traceex_list_bounties`,
+  `traceex_post_bounty`, `traceex_back_bounty`, `traceex_submit_fix`, `traceex_report_usage`, `traceex_balance`. The
+  server's instructions tell the agent when to act: search before giving up, adopt proven learnings, submit every
+  verified fix, post a bounty when a failure keeps recurring. It runs on the agent's machine, so fixes become skeletons
+  before anything is sent, and coin purchases are capped by the owner's budget (default 0).
+- **Remote MCP and discovery.** Every node also answers MCP at `POST /mcp` (streamable HTTP, JSON responses) and
+  describes itself at `/.well-known/trace-exchange.json`. The remote server refuses raw personal text: personal fixes
+  must be turned into skeletons on the agent's own machine.
+- **Autopilot** (`traceex.autopilot`). Attached to an agent's check loop (`AdaptiveAgent(..., autopilot=…)`), it:
+  submits every verified fix; classifies every failure the loop can't fix and searches `GET /v0/learnings` for an
+  attested learning on that branch and base model, handing the best untried one back to adopt; counts unresolved
+  failures per kind (per field, or the checker's own mode) and, when one keeps recurring with no learning to fix it,
+  backs a matching open bounty or posts a new one for free, keeping the failing cases on the device as the hidden eval
+  (only their hash is published); and never spends past the owner's budget.
+- **Learning search.** `GET /v0/learnings?path=&model=&kind=&min_gain=` returns attested learnings, biggest measured
+  gain first, each with its branch (from the traces it was built from), release, price and artifact;
+  `GET /v0/learnings/{id}` returns the whole learning for adoption.
+- **Measured (examples/flight_emails, step 6):** a fresh agent on autopilot meets a date format its model can't read.
+  On the first failure it finds the routing learning on the exchange and adopts it by itself; when the same four
+  fields keep failing, it posts bounty #2 for them, free, with its two failing emails kept on the device as the hidden
+  eval, and backs it with $1.00 of its $1.00 budget. On the third email it sees the bounty already stands.
+
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
   `PayoutDistributor` (one Merkle root of `(address, amount)` per epoch). One transaction per epoch, no matter how many
@@ -170,16 +235,21 @@ get solved with learnings or packages that are then sold. The classifier engine 
 
 ## 7. Reference implementation (this repo)
 - `sdk/python/traceex/` — client, skeletoniser, the extract → check → retry loop that produces traces, `adapt`
-  (routing learnings, first-pass scoring, attestations, `AdaptiveAgent`), auction and royalty maths, Merkle payouts.
+  (routing learnings, first-pass scoring, attestations, `AdaptiveAgent`), the classifier engine, auction and royalty
+  maths, bounty coins, Merkle payouts, `export` (SFT / DPO / repair datasets, refill, dataset and model cards), `mcp`
+  (MCP server, stdio and the node's `/mcp`), `autopilot` (agents that use the exchange on their own).
 - `node/` — a reference exchange node (Python stdlib + SQLite) exposing the HTTP API below.
 - `contracts/` — Solidity 0.8.24+: `Registry.sol`, `PayoutDistributor.sol` (compiles clean with solc 0.8.26; leaf
   layout matches `merkle.py`, checked in tests).
 - `examples/flight_emails/` — a flight-email extraction loop as the first producer, end to end (`demo.py`).
+- `examples/code_repair/` — open weights: Qwen2.5-0.5B-Instruct on MBPP, unit tests as the checker, tracebacks fed
+  back, `produce.py` → `train_lora.py` (LoRA on one RTX 3060) → `evaluate.py` (500 held-out problems, paired sign
+  test); every generation recorded so `demo.py` replays the run without a GPU.
 
 **Not yet in v0.1 (deliberately):** exclusive-licence clearing in the node; enforcing that a learning's parents are
 licensed to its trainer; probe scores; leave-one-out contribution weights (v0.1 weights a trace by how many focus
 fields it taught); real validator signatures (attestations carry a digest); x402 payment and escrowed decryption
-keys; deposits and slashing; the `lora` apply path. Known skeleton gap: an output value the model normalised
+keys; deposits and slashing; DPO and RL trainers (the export formats are there, the example trains SFT). Known skeleton gap: an output value the model normalised
 (`2026-10-15` for "Thursday, October 15, 2026", `1284.4` for "$1,284.40") gets its own placeholder instead of the
 input's, so the trainer loses that link; next step is value normalisers per slot type. Possible tie-in: JEV hierarchical search (TypeSafe; open-source
 host app `extend-hq/jevbox`) for sorting traces into task lots and helping agents find the learning for a task.
@@ -187,7 +257,7 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 ### HTTP API (node)
 | Method | Path | Body / result |
 |---|---|---|
-| POST | `/v0/traces` | trace → `{id, lot}` (rejects PII, duplicates) |
+| POST | `/v0/traces` | trace → `{id, lot, classified, bounties}` (rejects secrets, personal data, duplicates) |
 | GET | `/v0/lots` | lots with counts, probe score, reserve |
 | POST | `/v0/bids` | `{lot, bidder, price_micros, license: shared|exclusive}` |
 | POST | `/v0/epochs/clear` | clears all auctions → licences + payouts for the epoch |

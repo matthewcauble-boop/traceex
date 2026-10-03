@@ -4,17 +4,31 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .skeleton import find_pii
+from .skeleton import find_pii, find_secrets, find_open_risks
+
+
+def privacy_leaks(trace):
+    """The check both the client (before sending) and the node (before accepting) run. Secrets are refused at every
+    privacy level; skeleton traces must also be free of personal data; open traces of emails and phone numbers."""
+    text = "\n".join([trace.get("input", ""), *map(str, trace.get("model_output", {}).values()),
+                      *map(str, trace.get("verified_output", {}).values()), *trace.get("feedback", [])])
+    if trace.get("privacy") == "open":
+        return find_open_risks(text)
+    return find_secrets(text) + find_pii(text)
 
 
 class Client:
-    def __init__(self, endpoint: str, address: str = None, timeout: float = 30):
-        self.endpoint, self.address, self.timeout = endpoint.rstrip("/"), address, timeout
+    def __init__(self, endpoint: str, address: str = None, timeout: float = 30, token: str = None):
+        """token: the operator's admin token, for the calls a public node keeps to its operator (settle, clear,
+        register learnings, claim bounties)."""
+        self.endpoint, self.address, self.timeout, self.token = endpoint.rstrip("/"), address, timeout, token
 
     def _call(self, method, path, body=None):
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         req = urllib.request.Request(self.endpoint + path, method=method,
-                                     data=json.dumps(body).encode() if body is not None else None,
-                                     headers={"Content-Type": "application/json"})
+                                     data=json.dumps(body).encode() if body is not None else None, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return json.loads(r.read() or b"{}")
@@ -24,7 +38,7 @@ class Client:
             raise RuntimeError(f"{e.code}: {e.read().decode()[:300]}")
 
     def submit(self, trace):
-        leaks = find_pii(trace["input"])
+        leaks = privacy_leaks(trace)
         if leaks:
             raise ValueError(f"refusing to send: trace still contains {leaks[:3]}")
         return self._call("POST", "/v0/traces", dict(trace))
@@ -70,6 +84,17 @@ class Client:
     def transfer_coins(self, bounty_id, to, coins):
         return self._call("POST", f"/v0/bounties/{bounty_id}/transfer", {"from": self.address, "to": to, "coins": coins})
 
+    def find_learnings(self, path="", model="", kind="", min_gain=0.0, limit=20):
+        qs = urllib.parse.urlencode({k: v for k, v in dict(path=path, model=model, kind=kind, min_gain=min_gain,
+                                                           limit=limit).items() if v})
+        return self._call("GET", f"/v0/learnings?{qs}")
+
+    def learning(self, learning_id):
+        return self._call("GET", f"/v0/learnings/{learning_id}")
+
+    def describe(self):
+        return self._call("GET", "/.well-known/trace-exchange.json")
+
     def holders(self, bounty_id):
         return self._call("GET", f"/v0/bounties/{bounty_id}/holders")
 
@@ -85,6 +110,19 @@ class Client:
 
     def balance(self, address=None):
         return self._call("GET", f"/v0/balances/{address or self.address}")
+
+    def faucet(self, address=None):
+        """On a testnet node: open a wallet with test credits (no real money)."""
+        return self._call("POST", "/v0/faucet", {"address": address or self.address})
+
+    def wallet(self, address=None):
+        return self._call("GET", f"/v0/wallets/{address or self.address}")
+
+    def stats(self):
+        return self._call("GET", "/v0/stats")
+
+    def events(self, limit=30):
+        return self._call("GET", f"/v0/events?limit={int(limit)}")
 
 
 class PaymentRequired(Exception):

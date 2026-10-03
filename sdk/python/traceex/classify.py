@@ -49,8 +49,9 @@ TAXONOMY = {
     }),
     "code": ("Write, fix or test code.", ["code", "function", "bug", "test", "compile", "stack trace", "def ", "error"], {
         "repair": ("Fix failing code.", ["fix", "bug", "error", "traceback", "exception", "failing"], {}),
-        "generate": ("Write new code.", ["implement", "write", "generate", "create"], {}),
-        "test": ("Write or fix tests.", ["test", "assert", "unittest", "pytest"], {}),
+        "generate": ("Write new code from a description.", ["implement", "write a function", "write a python function",
+                                                             "write a program", "write a class", "generate", "create"], {}),
+        "test": ("Write or fix tests.", ["unittest", "pytest", "write a test", "write tests", "test case", "mock"], {}),
     }),
     "reasoning": ("Answers that need calculation or logic.", ["calculate", "how many", "total", "date", "convert", "units", "compare"], {
         "arithmetic": ("Sums, totals, percentages.", ["sum", "total", "percent", "multiply", "add"], {}),
@@ -84,7 +85,11 @@ def trace_text(trace):
 
 # --- how it failed ------------------------------------------------------------------------------------------------
 def failure_modes(trace):
-    """{field: mode} for every fixed field, read exactly from the placeholders."""
+    """{field: mode} for every fixed field. A checker that names the failure itself (unit tests: wrong_answer,
+    runtime_error, wrong_name, syntax_error, timeout…) is taken at its word; otherwise the mode is read exactly from
+    the placeholders of a skeleton trace."""
+    if trace.get("failure_modes"):
+        return dict(trace["failure_modes"])
     m_out, v_out = trace.get("model_output", {}), trace.get("verified_output", {})
     text = trace.get("input", "")
     fixed_by = trace.get("fixed_by", {})

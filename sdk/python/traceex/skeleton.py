@@ -109,6 +109,35 @@ def skeletonize(text: str, *outputs: dict, private_terms=()):
     return s, sk_outputs, slots
 
 
+SECRETS = [
+    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("aws_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b")),
+    ("api_key", re.compile(r"\b(?:sk|pk|rk)[-_](?:live[-_]|test[-_]|ant[-_]|proj[-_])?[A-Za-z0-9_-]{20,}\b")),
+    ("google_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("slack_token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b")),
+    ("hf_token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
+    ("password", re.compile(r"(?i)\b(?:password|passwd|secret|api_key|apikey|token)\s*[:=]\s*['\"][^'\"\s]{6,}['\"]")),
+    ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}=*")),
+]
+
+
+def find_secrets(text: str):
+    """Keys, tokens and passwords: never allowed in any trace, whatever its privacy level."""
+    return [(kind, m.group(0)[:12] + "…") for kind, rx in SECRETS for m in rx.finditer(text or "")]
+
+
+def find_open_risks(text: str):
+    """What an `open` trace (code, maths, public text) must not contain: secrets, plus emails and phone numbers.
+    Names are allowed (code is full of capitalised identifiers); personal content belongs in a skeleton trace."""
+    hits = find_secrets(text)
+    for kind, rx in DETECTORS[:3]:            # email, url, phone
+        if kind != "url":
+            hits += [(kind, m.group(0)) for m in rx.finditer(text or "")]
+    return hits
+
+
 CAP_WORD = re.compile(r"\b[A-Z][a-z]{2,}\b")
 
 

@@ -18,6 +18,7 @@ import threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..", "..", "sdk", "python"), os.path.join(HERE, "..", "..", "node")]
 from traceex import AdaptiveAgent, Client, Learning, routing_from_traces, first_pass_score, attest, apply_routing, merkle
+from traceex.autopilot import Autopilot, Policy
 from exchange import serve
 import flight
 from model import Model
@@ -25,7 +26,7 @@ from model import Model
 A = lambda c: "0x" + c * 40
 PRODUCERS = {"ana": A("a"), "ben": A("b")}
 TRAINER, BIDDER2, CONSUMER, CHECKER_AUTHOR, VALIDATOR = A("c"), A("d"), A("e"), A("f"), A("5")
-KIM, RAJ, LEE = A("7"), A("8"), A("6")
+KIM, RAJ, LEE, AUTO = A("7"), A("8"), A("6"), A("4")
 NAMES = {**{v: k for k, v in PRODUCERS.items()}, TRAINER: "trainer", BIDDER2: "bidder-2", CONSUMER: "consumer",
          CHECKER_AUTHOR: "checker author", VALIDATOR: "validator", KIM: "kim (coin)", RAJ: "raj (coin)",
          LEE: "lee (coin)"}
@@ -132,9 +133,33 @@ def main(port=8799, live=None):
     prov = node.provenance(lid)
     print("   provenance: learning <- " + ", ".join(f"{NAMES[p['producer']]}'s trace (w {p['weight']:.2f})"
                                                  for p in prov["parents"]))
+
+    print("\n6. A new agent on autopilot: nobody tells it about the exchange")
+    pilot = Autopilot(Client(url, AUTO), task=flight.TASK, base_model=Model.name, checker=flight.CHECKER,
+                      policy=Policy(bounty_after=2, back_micros=1_000_000, budget_micros=1_000_000))
+    auto = agent(AUTO)
+    auto.autopilot = pilot
+    acts = []
+    for name, email in flight.LIVE.items():
+        out = auto.run(email)
+        for a in out["autopilot"]:
+            acts.append(a)
+            if a["action"] == "adopt":
+                print(f"   {name:10} fails {len(out['failing'])} fields -> finds a learning on the exchange "
+                      f"(attested +{a['gain'] * 100:.0f} points on held-out data) and adopts it" + (" automatically" if a.get("adopted") else ""))
+            elif a["action"] == "noted":
+                print(f"   {name:10} still fails {len(out['failing'])} fields; no learning fixes them yet (seen {a['seen']}x)")
+            elif a["action"] in ("posted_bounty", "backed_existing_bounty"):
+                print(f"   {name:10} same failure again -> posts bounty #{a['bounty']} for it, free: "
+                      f"{a['failure'].split(':', 1)[1].replace(',', ', ')}")
+                print(f"              its {a['cases']} failing emails stay on this device as the hidden eval "
+                      f"({a.get('eval_set', '')[:19]}…); target {a.get('target', 0):.0%}; "
+                      f"backed with {usd(a.get('backed_micros', 0))} of its {usd(pilot.policy.budget_micros)} budget")
+            elif a["action"] == "already_posted":
+                print(f"   {name:10} same failure: bounty #{a['bounty']} already stands, nothing new to post")
     srv.shutdown()
     srv.server_close()
-    return {"before": before, "after": after, "settle": s}
+    return {"before": before, "after": after, "settle": s, "autopilot": acts}
 
 
 if __name__ == "__main__":

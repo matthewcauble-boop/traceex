@@ -1,0 +1,2246 @@
+[
+{
+"task_id": 601,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 602,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 603,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 604,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 605,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 606,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 607,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 608,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 609,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 610,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 611,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 612,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 613,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 614,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 615,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 616,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 617,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 618,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 619,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 620,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 621,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 622,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 623,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 624,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 625,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 626,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 627,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 628,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 629,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 630,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 631,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 632,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 633,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 634,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 635,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 636,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 637,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 638,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 639,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 640,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 641,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 642,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 643,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 644,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 645,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 646,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 647,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 648,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 649,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 650,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 651,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 652,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 653,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 654,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 655,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 656,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 657,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 658,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 659,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 660,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 661,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 662,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 663,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 664,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 665,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 666,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 667,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 668,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 669,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 670,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 671,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 672,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 673,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 674,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 675,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 676,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 677,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 678,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 679,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 680,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 681,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 682,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 683,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 684,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 685,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 686,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 687,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 688,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 689,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 690,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 691,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 692,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 693,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 694,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 695,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 696,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 697,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 698,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 699,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 700,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 701,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 702,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 703,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 704,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 705,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 706,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 707,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 708,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 709,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 710,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 711,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 712,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 713,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 714,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 715,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 716,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 717,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 718,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 719,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 720,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 721,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 722,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 723,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 724,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 725,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 726,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 727,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 728,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 729,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 730,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 731,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 732,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 733,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 734,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 735,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 736,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 737,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 738,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 739,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 740,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 741,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 742,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 743,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 744,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 745,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 746,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 747,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 748,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 749,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 750,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 751,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 752,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 753,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 754,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 755,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 756,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 757,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 758,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 759,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 760,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 761,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 762,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "syntax_error"
+},
+{
+"task_id": 763,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 764,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 765,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 766,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 767,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 768,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 769,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 770,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 771,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 772,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 773,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 774,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 775,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 776,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 777,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 778,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 779,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 780,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 781,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 782,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 783,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 784,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 785,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 786,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 787,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 788,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 789,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 790,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 791,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 792,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 793,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 794,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 795,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 796,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 797,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 798,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 799,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 800,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 801,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 802,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 803,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 804,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 805,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 806,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 807,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 808,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 809,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 810,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "syntax_error"
+},
+{
+"task_id": 811,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 812,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 813,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 814,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 815,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 816,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 817,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 818,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 819,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 820,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 821,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 822,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 823,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 824,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 825,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 826,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 827,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 828,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 829,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 830,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 831,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 832,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 833,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 834,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "syntax_error"
+},
+{
+"task_id": 835,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 836,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 837,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 838,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 839,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 840,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 841,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 842,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 843,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 844,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 845,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 846,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 847,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 848,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 849,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 850,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 851,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 852,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 853,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 854,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 855,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "repair_1",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 856,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 857,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 858,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 859,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 860,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 861,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 862,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 863,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 864,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 865,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 866,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 867,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 868,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 869,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 870,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 871,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 872,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 873,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 874,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 875,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 876,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 877,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 878,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 879,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 880,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 881,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 882,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 883,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 884,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 885,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 886,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 887,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 888,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 889,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 890,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 891,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 892,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 893,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "repair_1",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 894,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 895,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 896,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 897,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 898,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 899,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 900,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 901,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 902,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 903,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 904,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 905,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 906,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 907,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 908,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 909,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 910,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 911,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 912,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 913,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 914,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 915,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 916,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 917,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 918,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 919,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 920,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 921,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 922,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 923,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 924,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 925,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_name"
+},
+{
+"task_id": 926,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 927,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 928,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 929,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 930,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 931,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 932,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 933,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 934,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 935,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 936,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 937,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 938,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 939,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 940,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "repair_1",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 941,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 942,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 943,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 944,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 945,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 946,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 947,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 948,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 949,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 950,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "sampled",
+"first_mode": "syntax_error"
+},
+{
+"task_id": 951,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 952,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 953,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 954,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 955,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 956,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 957,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 958,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 959,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 960,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 961,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "sampled",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 962,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 963,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 964,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 965,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 966,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 967,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 968,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 969,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "unsolved",
+"first_mode": "runtime_error"
+},
+{
+"task_id": 970,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 971,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "unsolved",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 972,
+"producer": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+"how": "sampled",
+"first_mode": "wrong_answer"
+},
+{
+"task_id": 973,
+"producer": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+"how": "first_try",
+"first_mode": null
+},
+{
+"task_id": 974,
+"producer": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+"how": "first_try",
+"first_mode": null
+}
+]

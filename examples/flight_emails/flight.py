@@ -198,3 +198,19 @@ Leaving 3/14/2027: Flight 623, Boston (BOS) departs 2:10 PM, New Orleans (MSY) a
 Coming home 3/18/2027: Flight 624, New Orleans (MSY) departs 6:05 PM, Boston (BOS) arrives 10:31 PM
 Traveler Sam Rivera. Trip total $401.18""",
 }
+
+# New traffic for an agent running on autopilot: the numeric-date format the routing learning doesn't fix.
+LIVE = {
+"spirit": """Spirit Airlines receipt - confirmation KD4M9P
+Departing 4/2/2027: Flight 1287, Las Vegas (LAS) departs 7:10 AM, Denver (DEN) arrives 10:02 AM
+Returning 4/6/2027: Flight 1288, Denver (DEN) departs 4:45 PM, Las Vegas (LAS) arrives 5:41 PM
+Traveler Pat Morgan. Total $212.48""",
+"frontier": """Frontier booking - code FT7Q2W
+Going 5/11/2027: Flight 2213, Orlando (MCO) departs 6:30 AM, Raleigh (RDU) arrives 8:18 AM
+Back 5/15/2027: Flight 2214, Raleigh (RDU) departs 9:05 PM, Orlando (MCO) arrives 10:57 PM
+Passenger Lee Ortiz. Paid $158.30""",
+"suncountry": """Sun Country itinerary, record locator SC8H3N
+Outbound 6/20/2027: Flight 405, Minneapolis (MSP) departs 8:15 AM, Phoenix (PHX) arrives 10:20 AM
+Return 6/27/2027: Flight 406, Phoenix (PHX) departs 11:40 AM, Minneapolis (MSP) arrives 4:05 PM
+Guest Dana Reyes. Total $389.16""",
+}
