@@ -13,7 +13,7 @@ One Render web service serves the website, the API and the MCP endpoint, with th
 | **Total** | | **about $7.25 / month** |
 
 Prices are Render's list prices when this was written; the checkout page shows the current ones. The free instance
-type can't attach a disk (the data would be wiped on every deploy) and sleeps when idle, so Starter is the smallest
+type can't attach a disk (the data would be wiped on every deploy) and sleeps when idle, so `0.5c-512mb` is the smallest
 plan that works for a public exchange.
 
 ## Steps
