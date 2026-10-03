@@ -85,6 +85,17 @@ def skeletonize(text: str, *outputs: dict, private_terms=()):
         holes = PLACEHOLDER.findall(s)
         s = "".join(rx.sub(sub, p) + (holes[i] if i < len(holes) else "") for i, p in enumerate(parts))
 
+    # 3. lone capitalised words mid-sentence (single-word names and places)
+    parts, holes = PLACEHOLDER.split(s), PLACEHOLDER.findall(s)
+    out = []
+    for i, p in enumerate(parts):
+        last = 0
+        for m in _lone_names(p):
+            out.append(p[last:m.start()] + placeholder(m.group(0), "name"))
+            last = m.end()
+        out.append(p[last:] + (holes[i] if i < len(holes) else ""))
+    s = "".join(out)
+
     sk_outputs = []
     for out in outputs:
         sk = {}
@@ -98,6 +109,23 @@ def skeletonize(text: str, *outputs: dict, private_terms=()):
     return s, sk_outputs, slots
 
 
+CAP_WORD = re.compile(r"\b[A-Z][a-z]{2,}\b")
+
+
+def _sentence_start(text, i):
+    """True when position i begins a line or a sentence, where a capital letter says nothing about names."""
+    j = i - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    return j < 0 or text[j] in "\n.!?"      # not after ':' '-' '(' etc: "Passenger: Riley", "- Austin, TX"
+
+
+def _lone_names(text):
+    """Single capitalised words mid-sentence ("departs Austin", "call Riley") are treated as names: redacting a
+    harmless word costs a little signal, missing a real name leaks it."""
+    return [m for m in CAP_WORD.finditer(text) if m.group(0) not in KEEP and not _sentence_start(text, m.start())]
+
+
 def find_pii(text: str):
     """What a node checks before accepting a trace: any detector hit outside a placeholder is a leak."""
     hits = []
@@ -107,4 +135,5 @@ def find_pii(text: str):
         for m in DETECTORS[8][1].finditer(part):    # names
             if not all(w in KEEP for w in m.group(0).split()):
                 hits.append(("name", m.group(0)))
+        hits += [("name", m.group(0)) for m in _lone_names(part)]
     return hits

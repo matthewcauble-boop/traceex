@@ -35,6 +35,18 @@ class Skeleton(unittest.TestCase):
             self.assertNotIn(raw, str(t["verified_output"]), raw)
         self.assertEqual(find_pii(t["input"]), [])
 
+    def test_lone_names_and_places(self):
+        sk, _, _ = skeletonize("Flight 1123 departs Austin (AUS) 8:05 AM. Passenger Jordan Parker, call Riley at noon.\n"
+                               "Thanks for flying with us.")
+        for raw in ("Austin", "Jordan", "Parker", "Riley"):
+            self.assertNotIn(raw, sk)
+        self.assertIn("Thanks for flying", sk)              # sentence starts are left alone
+        self.assertEqual(find_pii(sk), [])
+        self.assertTrue(find_pii("we land in Denver at noon"))
+        sk, _, _ = skeletonize("Passenger: Riley. Meet at the (Hilton) - Boston, MA")
+        for raw in ("Riley", "Hilton", "Boston"):
+            self.assertNotIn(raw, sk)
+
     def test_structure_survives(self):
         t = make_trace()
         self.assertIn("Departs {", t["input"])
