@@ -160,7 +160,7 @@ input[type=range]{width:100%;accent-color:var(--brand)}
 .readout b{font:600 28px/1 var(--font);letter-spacing:-.03em;font-variant-numeric:tabular-nums}
 .then{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(16px,2.5vw,28px);margin-top:clamp(40px,6vw,72px)}
 @media (max-width:760px){.then{grid-template-columns:minmax(0,1fr)}.readout{grid-template-columns:minmax(0,1fr)}}
-.then>div{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:24px}
+.then>div{border-top:2px solid var(--text);padding-top:20px}   /* three outcomes read as a sequence, not three boxes */
 .then h3{font:600 22px/1.15 var(--font);letter-spacing:-.025em;margin-bottom:10px}
 .then p{color:var(--text-2);font-size:15.5px}
 .then .big{font:600 13px/1 var(--font);color:var(--brand);display:block;margin-bottom:14px}
