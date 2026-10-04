@@ -64,9 +64,10 @@ class Client:
     def taxonomy(self):
         return self._call("GET", "/v0/taxonomy")
 
-    def search(self, q="", path="", failure="", model="", limit=20):
-        qs = urllib.parse.urlencode({k: v for k, v in dict(q=q, path=path, failure=failure, model=model,
-                                                           limit=limit).items() if v})
+    def search(self, q="", path="", failure="", model="", limit=20, sort="", offset=0, facets=False):
+        """sort: "relevant" (default with words), "new" (default without), or "bounty"."""
+        qs = urllib.parse.urlencode({k: v for k, v in dict(q=q, path=path, failure=failure, model=model, limit=limit,
+                                                           sort=sort, offset=offset, facets=int(facets)).items() if v})
         return self._call("GET", f"/v0/search?{qs}")
 
     def post_bounty(self, *, title, path, eval_set, target, seed_micros=0, failure="", base_model="", epochs=4):

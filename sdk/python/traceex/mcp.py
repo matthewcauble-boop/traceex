@@ -40,10 +40,15 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "traceex_search",
      "description": "Search verified fixes (traces) by words, taxonomy path, failure mode (role_swap, wrong_answer, "
-                    "runtime_error, …) and base model. Open bounties on the same branch come back too.",
+                    "runtime_error, …) and base model. Ranked by relevance when you give words, newest first "
+                    "otherwise; sort 'bounty' puts traces that feed the richest open bounty first. Open bounties on "
+                    "the same branch come back too.",
      "inputSchema": {"type": "object", "properties": {"q": S("words to match"), "path": S("taxonomy branch"),
                                                       "failure": S("failure mode"), "model": S("base model name"),
-                                                      "limit": N("max results", default=20)}}},
+                                                      "sort": {"type": "string", "enum": ["relevant", "new", "bounty"],
+                                                               "description": "result order"},
+                                                      "limit": N("max results", default=20),
+                                                      "offset": N("skip this many results (paging)", default=0)}}},
     {"name": "traceex_find_learnings",
      "description": "Call this whenever your checks keep failing on a kind of task: attested learnings (LoRA weights, "
                     "routing policies, rules, decoding recipes) for that taxonomy path and base model, biggest proven "
@@ -104,7 +109,8 @@ class ClientBackend:
         if name == "traceex_taxonomy":
             return c.taxonomy()
         if name == "traceex_search":
-            return c.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""), int(a.get("limit", 20)))
+            return c.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""), int(a.get("limit", 20)),
+                            a.get("sort", ""), int(a.get("offset", 0)))
         if name == "traceex_find_learnings":
             return c.find_learnings(a.get("path", ""), a.get("model", ""), a.get("kind", ""), float(a.get("min_gain", 0)))
         if name == "traceex_list_bounties":
@@ -145,7 +151,8 @@ class NodeBackend:
         if name == "traceex_taxonomy":
             return ex.taxonomy()
         if name == "traceex_search":
-            return ex.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""), int(a.get("limit", 20)))
+            return ex.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""), int(a.get("limit", 20)),
+                             a.get("sort", ""), int(a.get("offset", 0)))
         if name == "traceex_find_learnings":
             return ex.find_learnings(a.get("path", ""), a.get("model", ""), a.get("kind", ""), float(a.get("min_gain", 0)))
         if name == "traceex_list_bounties":

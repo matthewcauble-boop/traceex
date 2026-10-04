@@ -107,6 +107,11 @@ section{position:relative;padding-inline:var(--gut)}
 .modes{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
 .modes button{all:unset;cursor:pointer;font:500 13px/1 var(--mono);padding:9px 13px;border-radius:999px;border:1px solid var(--line);color:var(--text-2);background:#fff}
 .modes button[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+.qrow{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+.qrow .searchbox{flex:1 1 280px}
+.qsort select{height:100%;min-height:52px;border:1px solid var(--line);border-radius:999px;padding:0 38px 0 18px;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%235b616e' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 16px center;-webkit-appearance:none;appearance:none;font:600 14px var(--font);color:var(--text);cursor:pointer}
+.qsort select:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .searchbox{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 22px;background:#fff}
 .searchbox input{flex:1;min-width:0;background:transparent;border:0;color:var(--text);font:500 18px/2.2 var(--font);outline:none}
 .searchbox input::placeholder{color:var(--text-3)}
@@ -369,14 +374,17 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
   <div class="wrap">
     <div class="kick">02 · Sorted and searchable</div>
     <h2 class="serif-h" id="sort-h" style="margin-top:18px;max-width:16ch">Every trace is filed, and every mistake has a name.</h2>
-    <p class="lede" style="margin-top:22px">The classifier places each trace in a task taxonomy (TypeSafe Jev hierarchical search, with an offline fallback) and reads exactly how the model failed straight from the placeholders. Pick a branch or a failure mode to search.</p>
+    <p class="lede" style="margin-top:22px">The classifier places each trace in a task taxonomy (TypeSafe Jev hierarchical search, with an offline fallback) and reads exactly how the model failed straight from the placeholders. Search ranks the best match first; pick a branch or a failure mode to narrow it, or sort by what feeds an open bounty.</p>
     <div class="sorted-grid">
       <div>
         <div class="tree" id="tree" role="group" aria-label="Task taxonomy"></div>
         <div class="modes" id="modes" role="group" aria-label="Failure modes"></div>
       </div>
       <div>
-        <label class="searchbox" for="q"><input id="q" type="search" placeholder="Search traces: departs, invoice, role_swap…" autocomplete="off"><span class="n" id="qn"></span></label>
+        <div class="qrow">
+          <label class="searchbox" for="q"><input id="q" type="search" placeholder="Search traces: departs, invoice, role_swap…" autocomplete="off"><span class="n" id="qn"></span></label>
+          <label class="qsort"><span class="vh">Sort</span><select id="qsort" aria-label="Sort results"><option value="">Best match</option><option value="new">Newest</option><option value="bounty">Feeds a bounty</option></select></label>
+        </div>
         <div class="results" id="results" aria-live="polite"></div>
       </div>
     </div>
@@ -675,41 +683,67 @@ let T = [
   {path:'code/repair', model:'qwen3-coder', sig:{invented:1}, sn:'Traceback: KeyError <i>{CODE_1}</i> in parse_row, failing test <i>{NAME_1}</i>…', who:'raj'}];
 let BOUNTIES = [{path:'extract/travel/flight', text:'Bounty · 70% first-pass on unseen airlines · pool $5.00 · next coin $0.0332'}];
 
-let fPath = '', fMode = '';
-const treeEl = document.getElementById('tree'), modesEl = document.getElementById('modes'), q = document.getElementById('q'), resEl = document.getElementById('results'), qn = document.getElementById('qn');
+let fPath = '', fMode = '', remote = null, FACETS = null, TOTAL = null, seq = 0, qt = 0;
+const treeEl = document.getElementById('tree'), modesEl = document.getElementById('modes'), q = document.getElementById('q'), resEl = document.getElementById('results'), qn = document.getElementById('qn'), qsort = document.getElementById('qsort');
+const h = x => String(x).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function buildTree(){
   treeEl.innerHTML = '';
-  const paths = new Set(); T.forEach(t => { const parts = t.path.split('/'); for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('/')); });
+  const leaf = {};                                    // branch -> traces filed exactly there
+  if (FACETS) Object.assign(leaf, FACETS.paths); else T.forEach(t => { leaf[t.path] = (leaf[t.path] || 0) + 1; });
+  const paths = new Set(), add = p => { const parts = p.split('/'); for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('/')); };
+  Object.keys(leaf).forEach(add); if (fPath) add(fPath);
   [...paths].sort().forEach(p => { const d = p.split('/').length; const b = document.createElement('button'); b.type = 'button'; b.className = 'd' + d; b.setAttribute('aria-pressed','false'); b.dataset.p = p;
-    const n = T.filter(t => t.path === p || t.path.startsWith(p + '/')).length; b.innerHTML = '<span>' + (d > 1 ? '<span class="br">└ </span>' : '') + p.split('/').pop() + '</span><span>' + n + '</span>';
-    b.onclick = () => { fPath = fPath === p ? '' : p; render(); }; treeEl.appendChild(b); });
+    const n = Object.entries(leaf).reduce((a, [k, v]) => a + (k === p || k.startsWith(p + '/') ? v : 0), 0);
+    b.innerHTML = '<span>' + (d > 1 ? '<span class="br">└ </span>' : '') + h(p.split('/').pop()) + '</span><span>' + n + '</span>';
+    b.onclick = () => { fPath = fPath === p ? '' : p; render(true); }; treeEl.appendChild(b); });
 }
 function buildModes(){
   modesEl.innerHTML = '';
-  const ms = [...new Set(T.flatMap(t => Object.keys(t.sig)))].sort();
-  ms.forEach(m => { const b = document.createElement('button'); b.type = 'button'; b.textContent = m; b.setAttribute('aria-pressed','false'); b.onclick = () => { fMode = fMode === m ? '' : m; render(); }; modesEl.appendChild(b); });
+  const ms = FACETS ? Object.keys(FACETS.modes) : [...new Set(T.flatMap(t => Object.keys(t.sig)))];
+  if (fMode && !ms.includes(fMode)) ms.push(fMode);
+  ms.sort().forEach(m => { const b = document.createElement('button'); b.type = 'button'; b.textContent = m; b.setAttribute('aria-pressed','false'); b.onclick = () => { fMode = fMode === m ? '' : m; render(true); }; modesEl.appendChild(b); });
 }
 buildTree(); buildModes();
 window.__tx = {
-  setTraces(rows){ if (!rows || !rows.length) return; T = rows; if (fMode && !T.some(t => t.sig[fMode])) fMode = ''; buildTree(); buildModes(); render(); },
-  setBounties(list){ BOUNTIES = list || []; render(); }
+  setTraces(rows){ if (!rows || !rows.length || remote) return; T = rows; if (fMode && !T.some(t => t.sig[fMode])) fMode = ''; buildTree(); buildModes(); render(); },
+  setBounties(list){ if (remote) return; BOUNTIES = list || []; render(); },
+  setRemote(fn){ remote = fn; render(true); },          // a node serves this page: search runs there, ranked
+  refresh(){ render(true); }
 };
-function render(){
+const onBounty = t => BOUNTIES.some(b => t.path === b.path || t.path.startsWith(b.path + '/'));
+function render(now){              // typing waits for a pause; clicks and sort changes search at once
+  if (remote) { clearTimeout(qt); if (now === true) remoteSearch(); else qt = setTimeout(remoteSearch, 160); return; }
+  const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+  let hits = T.filter(t => (!fPath || t.path === fPath || t.path.startsWith(fPath + '/')) && (!fMode || t.sig[fMode]) &&
+    words.every(w => ((t.plain || t.sn) + ' ' + t.path + ' ' + t.model + ' ' + Object.keys(t.sig).join(' ')).toLowerCase().replace(/<[^>]+>/g,'').includes(w)));
+  if (qsort.value === 'new') hits = hits.slice().reverse();
+  if (qsort.value === 'bounty') hits = hits.slice().sort((a, b) => onBounty(b) - onBounty(a));
+  paint(hits, hits.length);
+}
+async function remoteSearch(){
+  const my = ++seq;
+  resEl.setAttribute('aria-busy', 'true');
+  try {
+    const r = await remote({q: q.value.trim(), path: fPath, mode: fMode, sort: qsort.value});
+    if (my !== seq) return;                          // a newer search already went out
+    T = r.rows; FACETS = r.facets; BOUNTIES = r.bounties; TOTAL = r.total;
+    buildTree(); buildModes(); paint(T, r.total);
+  } catch (e) { if (my === seq) resEl.innerHTML = '<p class="empty">Search is unavailable right now (' + h(e.message || e.code || 'error') + ').</p>'; }
+  resEl.removeAttribute('aria-busy');
+}
+function paint(hits, total){
   treeEl.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.p === fPath)));
   modesEl.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.textContent === fMode)));
-  const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = T.filter(t => (!fPath || t.path === fPath || t.path.startsWith(fPath + '/')) && (!fMode || t.sig[fMode]) &&
-    words.every(w => ((t.plain || t.sn) + ' ' + t.path + ' ' + t.model + ' ' + Object.keys(t.sig).join(' ')).toLowerCase().replace(/<[^>]+>/g,'').includes(w)));
-  qn.textContent = hits.length + ' trace' + (hits.length === 1 ? '' : 's');
+  qn.textContent = total.toLocaleString() + ' trace' + (total === 1 ? '' : 's');
   let html = '';
   BOUNTIES.filter(b => !fPath || b.path === fPath || b.path.startsWith(fPath + '/') || fPath.startsWith(b.path + '/')).slice(0, 3).forEach(b => {
-    html += '<div class="res bounty"><div class="top"><span class="p">open bounty on ' + b.path + '</span><a href="#board">back it ↓</a></div><div class="sn" style="color:var(--brand)">' + b.text + '</div></div>'; });
-  hits.slice(0, 40).forEach(t => { html += '<div class="res"><div class="top"><span class="p">' + t.path + '</span><span>' + t.model + ' · ' + t.who + '</span></div><div class="sn">' + t.sn + '</div><div class="sig">' +
+    html += '<div class="res bounty"><div class="top"><span class="p">open bounty on ' + h(b.path) + '</span><a href="#board">back it ↓</a></div><div class="sn" style="color:var(--brand)">' + b.text + '</div></div>'; });
+  hits.slice(0, 40).forEach(t => { html += '<div class="res"><div class="top"><span class="p">' + h(t.path) + '</span><span>' + t.model + ' · ' + t.who + '</span></div><div class="sn">' + t.sn + '</div><div class="sig">' +
     Object.entries(t.sig).map(([k, v]) => '<span>' + k + ':' + v + '</span>').join('') + '</div></div>'; });
-  if (hits.length > 40) html += '<p class="empty">and ' + (hits.length - 40) + ' more. Narrow it with a branch, a failure mode or a word.</p>';
+  if (total > 40) html += '<p class="empty">and ' + (total - 40).toLocaleString() + ' more. Narrow it with a branch, a failure mode or a word.</p>';
   resEl.innerHTML = html || '<p class="empty">No traces match yet. That gap is exactly what a bounty is for.</p>';
 }
-q.addEventListener('input', render); render();
+q.addEventListener('input', () => render()); qsort.addEventListener('change', () => render(true)); render();
 
 /* ---------- 4. bonding curve ---------- */
 const BASE = .01, SLOPE = .0001;   // $ per coin, same curve as the protocol
@@ -1042,12 +1076,20 @@ async function nodeLoad(full) {
     status: L.solved_bounty ? 'solved bounty #' + L.solved_bounty : 'attested'}));
   live.feed = ev.events;
   live.account = w.opened ? {balance: w.balance_micros, coins: w.coins} : null;
-  if (full) {
-    const s = await api.get('/v0/search?limit=1000');
-    live.traces = s.results.map(t => ({path: t.path, model: t.model, failureModes: sigModes(t.signature), input: t.snippet, task: t.task,
-      agent: t.producer === live.uid ? 'you' : short(t.producer), producer: t.producer}));
-  }
-  pushSearch(); stats(); renderBoard(); renderLearnings(); renderFeed(); renderWallet();
+  if (full && window.__tx) window.__tx.refresh();      // re-run the visible search so new traces show up
+  stats(); renderBoard(); renderLearnings(); renderFeed(); renderWallet();
+}
+function rowFromHit(t) {
+  const sig = {}; sigModes(t.signature).forEach(m => { m = esc(m); sig[m] = (sig[m] || 0) + 1; });
+  return {path: t.path || 'uncategorised', model: esc(t.model), sig, sn: snip(t.snippet),
+          who: esc(t.producer === live.uid ? 'you' : short(t.producer))};
+}
+async function nodeSearch({q, path, mode, sort}) {
+  const p = new URLSearchParams({limit: '40', facets: '1'});
+  if (q) p.set('q', q); if (path) p.set('path', path); if (mode) p.set('failure', mode); if (sort) p.set('sort', sort);
+  const s = await api.get('/v0/search?' + p);
+  return {rows: s.results.map(rowFromHit), total: s.total, facets: s.facets,
+          bounties: s.bounties.map(b => ({path: b.path, text: esc('Bounty #' + b.id + ' · ' + b.title + ' · pool ' + usd(b.pool_micros) + ' · next coin $' + (b.price_micros / 1e6).toFixed(4))}))};
 }
 async function openWallet() {
   try { await api.post('/v0/faucet', {address: live.uid}); toast('Wallet opened: $25 of test credits. Back a bounty, post one, or share a fix.', true); await nodeLoad(false); }
@@ -1210,6 +1252,7 @@ async function start() {
   if (node) {
     live.mode = 'node'; live.uid = myAddress();
     if (window.__tx && window.__tx.setOrigin) window.__tx.setOrigin(location.origin);
+    if (window.__tx && window.__tx.setRemote) window.__tx.setRemote(nodeSearch);
     const ok = () => setChip('Live exchange · testnet: test credits, no real money', 'on');
     const paused = e => setChip('Live data paused (' + (e.message || 'error') + ')', 'off');
     ok(); await nodeLoad(true).catch(paused);

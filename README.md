@@ -158,9 +158,13 @@ Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it 
 
 Every trace is filed under a versioned task taxonomy (extract › travel › flight, extract › commerce › invoice,
 tool_call › device, code › repair, …) by **TypeSafe Jev** hierarchical beam search when `TYPESAFE_API_KEY` is set, or a
-standard-library keyword engine otherwise. How the model failed is read exactly from the placeholders, no model
-needed: `type_mismatch`, `role_swap`, `wrong_span`, `invented`, `omission`, `normalised`. Search by words, branch,
-failure mode and base model; open bounties on the same branch come back with the results.
+standard-library keyword engine otherwise (one request per level of the tree, each asking about every branch still
+on the beam; a daily request cap for public nodes; `POST /v0/admin/reclassify` re-files keyword-filed traces once a
+key is added). How the model failed is read exactly from the placeholders, no model needed: `type_mismatch`,
+`role_swap`, `wrong_span`, `invented`, `omission`, `normalised`; checkers can name their own (`wrong_answer`,
+`runtime_error`). Search by words, branch, failure mode and base model, ranked by relevance (a match in the branch or
+failure label counts most), newest first, or by the richest open bounty a trace feeds; facets give counts per branch
+and failure mode for browsing. Open bounties on the same branch come back with the results.
 
 ## Status
 

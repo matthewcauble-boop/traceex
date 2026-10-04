@@ -206,14 +206,31 @@ class Classifier(unittest.TestCase):
         from traceex.classify import JevEngine
         asked = []
 
-        def fake(req):
-            asked.append(req["questions"]["category"]["instructions"])
-            kids = list(req["questions"]["category"]["criteria"])
-            pick = {"extract", "travel", "flight"} & set(kids)
-            return {k: (.9 if k in pick else .1 / len(kids)) for k in kids}
-        out = JevEngine("k", beam=1).classify("x", ask=fake)
+        def fake(req):                     # one request per level, one question per branch on the beam
+            asked.append(sorted(req["questions"]))
+            out = {}
+            for name, qn in req["questions"].items():
+                kids = list(qn["criteria"])
+                pick = {"extract", "travel", "flight"} & set(kids)
+                out[name] = {k: (.9 if k in pick else .1 / len(kids)) for k in kids}
+            return out
+        out = JevEngine("k", beam=2).classify("x", ask=fake)
         self.assertEqual(out["path"], ["extract", "travel", "flight"])
-        self.assertEqual(len(asked), 3)
+        self.assertEqual(len(asked), 3)                       # three levels, three requests
+        self.assertEqual(asked[0], ["p0"])                    # the top level is one question
+
+    def test_jev_daily_budget_falls_back_to_rules(self):
+        import datetime as dt
+        from traceex.classify import JevEngine, JevBudget, classify
+        eng = JevEngine("k", daily_requests=2)
+        eng._spend(); eng._spend()
+        with self.assertRaises(JevBudget):
+            eng._spend()
+        c = classify(make_trace(), eng)
+        self.assertEqual((c["engine"], c["path_str"]), ("rules", "extract/travel/flight"))
+        self.assertIn("JevBudget", c["fallback"])
+        eng.usage["day"] = (dt.date.today() - dt.timedelta(days=1)).isoformat()   # a new day resets the count
+        eng._spend()
 
     def test_hosted_engine_failure_falls_back(self):
         from traceex.classify import JevEngine, classify
@@ -221,6 +238,82 @@ class Classifier(unittest.TestCase):
         c = classify(make_trace(), broken)
         self.assertEqual(c["engine"], "rules")
         self.assertIn("fallback", c)
+
+
+class FakeJev:
+    """Stands in for the hosted engine: files everything under one branch, and checks it is never called while the
+    node holds its write lock."""
+    name = "jev"
+
+    def __init__(self, path, ex=None):
+        self.path, self.ex, self.calls = path, ex, 0
+
+    def classify(self, text):
+        self.calls += 1
+        if self.ex is not None:
+            assert not self.ex.lock.locked(), "classified while holding the write lock"
+        return {"path": self.path.split("/"), "confidence": .9, "engine": self.name}
+
+
+CODE = "Write a python function to find the shared elements from the given two lists.\nassert similar((3, 4), (4, 5)) == (4,)"
+
+
+def search_trace(producer=A("b"), text=CODE, mode="wrong_answer"):
+    return Trace.from_fix(task="code.python", base_model="Qwen/Qwen2.5-0.5B-Instruct", input=text,
+                          model_output={"code": "def f(): pass"}, verified_output={"code": "def f(): return 1"},
+                          checker="mbpp-tests@1", producer=producer, created="2026-10-03T00:00:00Z", privacy="open",
+                          failure_modes={"code": mode})
+
+
+class Search(unittest.TestCase):
+    def setUp(self):
+        self.ex = Exchange(":memory:", validators=(A("5"),))
+        self.flight = self.ex.submit_trace(dict(make_trace()))["id"]
+        self.code = [self.ex.submit_trace(dict(search_trace(text=CODE + f"\n# case {i}", mode=m)))["id"]
+                     for i, m in enumerate(["wrong_answer", "runtime_error", "wrong_answer"])]
+
+    def test_relevance_new_and_bounty_sorts(self):
+        r = self.ex.search("flight")
+        self.assertEqual(r["sort"], "relevant")
+        self.assertEqual(r["results"][0]["id"], self.flight)
+        self.assertEqual([h["id"] for h in self.ex.search(limit=10)["results"]][0], self.code[-1])   # newest first
+        b = self.ex.post_bounty({"poster": A("8"), "path": "code", "eval_set": "sha256:E", "target": .5, "failure": "runtime_error"})
+        self.ex.buy_coins(b["id"], A("8"), 2_000_000)
+        top = self.ex.search(sort="bounty")["results"][0]
+        self.assertEqual((top["id"], top["bounty_pool_micros"]), (self.code[1], 2_000_000))
+        with self.assertRaises(ValueError):
+            self.ex.search(sort="sideways")
+
+    def test_filters_paging_and_facets(self):
+        r = self.ex.search(path="code", failure="wrong_answer", limit=1, facets=True)
+        self.assertEqual((r["total"], r["count"]), (2, 1))
+        self.assertEqual(self.ex.search(path="code", failure="wrong_answer", limit=1, offset=1)["count"], 1)
+        self.assertEqual(r["facets"]["modes"], {"wrong_answer": 2, "runtime_error": 1})   # modes within the branch
+        self.assertEqual(sum(r["facets"]["paths"].values()), 4)                            # paths across all branches
+        self.assertEqual(self.ex.search(failure="swap")["total"], 0)                      # whole labels, not substrings
+
+    def test_any_word_when_all_words_find_nothing(self):
+        self.assertEqual(self.ex.search("flight zebra")["results"][0]["id"], self.flight)
+        for odd in ('"', "--", "*", "AND OR NOT", "(("):
+            self.assertIsInstance(self.ex.search(odd)["total"], int)
+
+    def test_reclassify_moves_keyword_labels(self):
+        self.assertEqual(self.ex.reclassify()["skipped"][:3], "the")      # nothing to gain without a hosted engine
+        jev = FakeJev("code/test")                 # several workers: another one may hold the lock, that's fine
+        st = self.ex.reclassify(engine=jev)
+        self.assertEqual((st["done"], st["total"], st["running"]), (4, 4, False))
+        self.assertEqual(self.ex.search(path="code/test")["total"], 4)
+        self.assertEqual(self.ex.search("test")["total"], 4)             # the full-text row moved too
+        self.assertEqual(self.ex.stats()["classifier"]["filed_by"], {"jev": 4})
+        self.assertEqual(self.ex.reclassify(engine=jev)["total"], 0)     # only keyword labels are re-filed
+
+    def test_hosted_engine_runs_outside_the_lock(self):
+        ex = Exchange(":memory:", validators=(A("5"),))
+        ex.engine = FakeJev("code/repair", ex)
+        r = ex.submit_trace(dict(search_trace()))
+        self.assertEqual(r["classified"]["path_str"], "code/repair")
+        self.assertTrue(ex.submit_trace(dict(search_trace()))["duplicate"])
+        self.assertEqual(ex.engine.calls, 1)                              # a duplicate is never paid for twice
 
 
 class Bounties(unittest.TestCase):

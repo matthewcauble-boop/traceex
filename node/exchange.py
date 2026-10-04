@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -29,7 +30,7 @@ from traceex.client import privacy_leaks  # noqa: E402
 from traceex.auction import Bid, clear_shared  # noqa: E402
 from traceex.royalty import split_trace_sale, split_usage  # noqa: E402
 from traceex.merkle import leaf, build_tree, proof  # noqa: E402
-from traceex.classify import classify, default_engine, nodes, TAXONOMY_VERSION  # noqa: E402
+from traceex.classify import classify, default_engine, nodes, RulesEngine, TAXONOMY_VERSION  # noqa: E402
 from traceex import bountycoin as coin  # noqa: E402
 
 # A bounty's pool, when a learning claims it: the solver is paid most, the traces it was built from still earn.
@@ -57,6 +58,8 @@ CREATE TABLE IF NOT EXISTS grants   (account TEXT PRIMARY KEY, micros INT, at TE
 """
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 PATH = re.compile(r"[a-z_]+(/[a-z_]+){0,5}")
+SORTS = ("relevant", "new", "bounty")
+FTS_WEIGHTS = "0, 4.0, 3.0, 2.0, 2.0, 1.0"        # id, path, signature, model, task, body: a hit in the branch name counts most
 LIMITS = {"title": 200, "failure": 200, "base_model": 120, "open_bounties_per_poster": 20, "wallets_per_source_day": 3,
           "trace_bytes": 32 * 1024, "task": 80, "model": 120, "checker": 80}
 MODE = re.compile(r"[a-z0-9_:.,-]{1,80}")         # a failure mode label: wrong_answer, role_swap, unresolved:date…
@@ -87,6 +90,7 @@ class Exchange:
         self.db.executescript(SCHEMA)
         self.test_credits = int(test_credits)
         self.quiet = False                        # bulk loads (the seed) write one summary event instead of one per row
+        self.refile = None                        # status of the last re-classification run
         try:
             self.db.execute(FTS)
             self.fts = True
@@ -181,7 +185,10 @@ class Exchange:
                 "pools_open_micros": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='open'"),
                 "pools_paid_micros": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='solved'"),
                 "last_root": {"epoch": r[0], "root": r[1], "total_micros": r[2]} if r else None,
-                "testnet": bool(self.test_credits), "epoch_hours": getattr(self, "epoch_hours", 0)}
+                "testnet": bool(self.test_credits), "epoch_hours": getattr(self, "epoch_hours", 0),
+                "classifier": {"engine": self.engine.name,
+                               "filed_by": dict(self.db.execute("SELECT engine, COUNT(*) FROM labels GROUP BY engine")),
+                               "usage": getattr(self.engine, "usage", None), "refile": self.refile}}
 
     # --- API -----------------------------------------------------------------------------------------------------
     def register_checker(self, checker_id, author):
@@ -217,23 +224,77 @@ class Exchange:
         tid = object_id(t)
         ck = f"{t['checker']['id']}@{t['checker']['version']}"
         lot = f"{t['task']}|{t['base_model']['name']}|{ck}"
+        if self.db.execute("SELECT 1 FROM traces WHERE id=?", (tid,)).fetchone():   # before paying to classify it
+            return {"id": tid, "lot": lot, "duplicate": True}
+        c = classify(t, self.engine)            # may call a hosted engine: never while holding the write lock
         with self.lock:
-            dup = self.db.execute("SELECT id FROM traces WHERE id=?", (tid,)).fetchone()
-            if dup:
+            if self.db.execute("SELECT 1 FROM traces WHERE id=?", (tid,)).fetchone():
                 return {"id": tid, "lot": lot, "duplicate": True}
             self.db.execute("INSERT INTO traces VALUES (?,?,?,?,?,?)",
                             (tid, lot, t["producer"], t["checker"]["id"], canonical(t).decode(), self.epoch))
-            c = classify(t, self.engine)
-            self.db.execute("INSERT INTO labels VALUES (?,?,?,?,?,?,?,?)",
-                            (tid, c["path_str"], c["confidence"], c["engine"], c["signature"], json.dumps(c["failure_modes"]),
-                             t["base_model"]["name"], t["task"]))
-            if self.fts:
-                self.db.execute("INSERT INTO trace_fts VALUES (?,?,?,?,?,?)",
-                                (tid, c["path_str"].replace("/", " "), c["signature"], t["base_model"]["name"], t["task"],
-                                 t["input"] + " " + " ".join(t["fixed_fields"]).replace("_", " ")))
+            self._index(tid, t, c)
             self._event(f"trace filed under {c['path_str'] or 'uncategorised'}" + (f" · {c['signature']}" if c["signature"] else ""))
             self.db.commit()
         return {"id": tid, "lot": lot, "epoch": self.epoch, "classified": c, "bounties": self._matching_bounties(c, t)}
+
+    def _index(self, tid, t, c):
+        """Write (or rewrite) a trace's label and full-text row. Callers hold the lock."""
+        self.db.execute("INSERT OR REPLACE INTO labels VALUES (?,?,?,?,?,?,?,?)",
+                        (tid, c["path_str"], c["confidence"], c["engine"], c["signature"], json.dumps(c["failure_modes"]),
+                         t["base_model"]["name"], t["task"]))
+        if self.fts:
+            self.db.execute("DELETE FROM trace_fts WHERE id=?", (tid,))
+            self.db.execute("INSERT INTO trace_fts VALUES (?,?,?,?,?,?)",
+                            (tid, c["path_str"].replace("/", " "), c["signature"], t["base_model"]["name"], t["task"],
+                             t["input"] + " " + " ".join(t["fixed_fields"]).replace("_", " ")))
+
+    def reclassify(self, engine=None, only="rules", limit=0, workers=4):
+        """Re-file traces with `engine` (the node's own by default). only="rules" re-files what the keyword engine
+        filed, which is what to run once a Jev key is added; "all" re-files everything (after a taxonomy change). The
+        engine is called in parallel outside the lock and each result is written as it lands. A run stops early if
+        the engine falls back (its daily budget is spent), so nothing is relabelled worse than it was."""
+        engine = engine or self.engine
+        if only not in ("rules", "all"):
+            raise ValueError("only is 'rules' or 'all'")
+        if only == "rules" and engine.name == "rules":
+            return {"skipped": "the node's classifier is the keyword engine; add TYPESAFE_API_KEY to re-file with Jev"}
+        if self.refile and self.refile.get("running"):
+            raise ValueError("a re-file is already running")
+        where = "WHERE l.engine = 'rules'" if only == "rules" else ""
+        rows = self.db.execute(f"SELECT l.id, t.body, l.path FROM labels l JOIN traces t ON t.id = l.id {where} "
+                               "ORDER BY t.rowid").fetchall()
+        rows = rows[:int(limit)] if limit else rows
+        st = self.refile = {"running": True, "engine": engine.name, "only": only, "total": len(rows), "done": 0,
+                            "moved": 0, "stopped": None,
+                            "started": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+        def one(row):
+            tid, body, old = row
+            if st["stopped"]:
+                return
+            t = json.loads(body)
+            c = classify(t, engine)
+            if c.get("fallback"):                 # engine unavailable or out of budget: keep the old label
+                st["stopped"] = c["fallback"]
+                return
+            with self.lock:
+                if self.db.execute("SELECT 1 FROM labels WHERE id=?", (tid,)).fetchone():   # not taken down meanwhile
+                    self._index(tid, t, c)
+                    self.db.commit()
+                st["done"] += 1
+                st["moved"] += c["path_str"] != old
+
+        try:
+            with ThreadPoolExecutor(max(1, int(workers))) as pool:
+                list(pool.map(one, rows))
+        finally:
+            st["running"] = False
+        if st["done"]:
+            with self.lock:
+                self._event(f"re-filed {st['done']} traces with the {engine.name} classifier: {st['moved']} moved to a "
+                            "better branch", force=True)
+                self.db.commit()
+        return st
 
     # --- classifier, search, bounties -----------------------------------------------------------------------------
     def taxonomy(self):
@@ -245,40 +306,103 @@ class Exchange:
             out.append({"path": p, "description": desc, "traces": n})
         return {"version": TAXONOMY_VERSION, "engine": self.engine.name, "nodes": out}
 
-    def search(self, q="", path="", failure="", model="", limit=20):
-        """Find traces by words, taxonomy branch, failure mode and base model. Open bounties on the same branch come back
-        with the results, so a trainer sees both the supply (traces) and the demand (bounties)."""
-        sql, args = ["SELECT l.id, l.path, l.signature, l.model, l.task, t.lot, t.body FROM labels l JOIN traces t ON t.id=l.id"], []
-        where = []
-        if q:
-            if self.fts:
-                terms = " ".join('"' + w.replace('"', '') + '"' for w in q.split())
-                where.append("l.id IN (SELECT id FROM trace_fts WHERE trace_fts MATCH ?)")
-                args.append(terms)
-            else:
-                where.append("(t.body LIKE ? OR l.path LIKE ?)")
-                args += [f"%{q}%", f"%{q}%"]
-        if path:
-            where.append("(l.path = ? OR l.path LIKE ?)")
-            args += [path, path + "/%"]
+    WORD = re.compile(r"[\w.:/@+-]*\w[\w.:/@+-]*")
+
+    @classmethod
+    def _fts_query(cls, q, op=" "):
+        return op.join('"' + w + '"*' for w in cls.WORD.findall(q)[:8])
+
+    def search(self, q="", path="", failure="", model="", limit=20, sort="", offset=0, facets=False):
+        """Find traces by words, taxonomy branch, failure mode and base model.
+
+        sort: "relevant" (default with words: full-text rank, a match in the branch name or failure label counts most),
+        "new" (default without words) or "bounty" (traces that feed the richest open bounty first). Open bounties on the
+        same branch come back with the results, so a trainer sees supply (traces) and demand (bounties) together.
+        facets=True adds counts per branch and per failure mode, for building a browse tree."""
+        q, path = (q or "").strip(), (path or "").strip("/")
+        sort = sort or ("relevant" if q else "new")
+        if sort not in SORTS:
+            raise ValueError(f"sort is one of {SORTS}")
+        limit, offset = max(1, min(int(limit), 1000)), max(0, int(offset))
+        modes_of = lambda sig: [m.split(":")[0] for m in sig.split()]
+        every = self._candidates(q, model)       # (id, path, model, signature, rowid, rank, task)
+        rows = [r for r in every if not path or r[1] == path or r[1].startswith(path + "/")]
+        mode_counts = {}
+        for r in rows:
+            for m in modes_of(r[3]):
+                mode_counts[m] = mode_counts.get(m, 0) + 1
         if failure:
-            where.append("l.signature LIKE ?")
-            args.append(f"%{failure}:%")
-        if model:
-            where.append("l.model = ?")
-            args.append(model)
-        if where:
-            sql.append("WHERE " + " AND ".join(where))
-        sql.append("ORDER BY l.path, l.id LIMIT ?")
-        args.append(max(1, min(int(limit), 1000)))
+            rows = [r for r in rows if failure in modes_of(r[3])]
+        open_all = self.bounties(status="open")["bounties"]
+        pool = lambda r: max([b["pool_micros"] for b in open_all if self._feeds(b, r[1], r[2], modes_of(r[3]))] or [0])
+        if sort == "relevant":
+            rows.sort(key=lambda r: (r[5], -r[4]))
+        elif sort == "new":
+            rows.sort(key=lambda r: -r[4])
+        else:
+            pools = {r[0]: pool(r) for r in rows} if open_all else {}
+            rows.sort(key=lambda r: (-pools.get(r[0], 0), r[5], -r[4]))
+        page = rows[offset:offset + limit]
+        stored = {i: (lot, body) for i, lot, body in self.db.execute(
+            f"SELECT id, lot, body FROM traces WHERE id IN ({','.join('?' * len(page))})", [r[0] for r in page])} if page else {}
         hits = []
-        for tid, p, sig, m, task, lot, body in self.db.execute(" ".join(sql), args):
+        for r in page:
+            tid, p, m, sig, _, rank, task = r
+            lot, body = stored[tid]
             b = json.loads(body)
             lines = [ln for ln in b["input"].splitlines() if ln.strip()]
-            hits.append({"id": tid, "path": p, "signature": sig, "model": m, "task": task, "lot": lot,
-                         "fixed_fields": b["fixed_fields"], "snippet": (lines[0] if lines else "")[:140],
-                         "producer": b["producer"], "privacy": b["privacy"], "created": b.get("created")})
-        return {"results": hits, "count": len(hits), "bounties": self.bounties(path=path, status="open")["bounties"]}
+            hit = {"id": tid, "path": p, "signature": sig, "model": m, "task": task, "lot": lot,
+                   "fixed_fields": b["fixed_fields"], "snippet": (lines[0] if lines else "")[:140],
+                   "producer": b["producer"], "privacy": b["privacy"], "created": b.get("created")}
+            if q and self.fts:
+                hit["score"] = round(-rank, 3)
+            feeds = pool(r) if open_all else 0
+            if feeds:
+                hit["bounty_pool_micros"] = feeds
+            hits.append(hit)
+        out = {"results": hits, "count": len(hits), "total": len(rows), "sort": sort, "offset": offset,
+               "bounties": [b for b in open_all if not path or path == b["path"] or path.startswith(b["path"] + "/")
+                            or b["path"].startswith(path + "/")]}
+        if facets:
+            paths = {}
+            for r in every:
+                paths[r[1]] = paths.get(r[1], 0) + 1
+            out["facets"] = {"paths": paths, "modes": mode_counts}
+        return out
+
+    def _candidates(self, q, model, cap=50_000):
+        """(id, path, model, signature, rowid, rank, task) for every trace matching the words and model. Rank is FTS5's
+        bm25 (lower is better), 0 without words. When all the words together find nothing, any of them will do."""
+        mwhere, margs = ("AND l.model = ?", [model]) if model else ("", [])
+        if q and self.fts:
+            words = self.WORD.findall(q)
+            for op in ((" ", " OR ") if len(words) > 1 else (" ",)):
+                expr = self._fts_query(q, op)
+                if not expr:
+                    return []
+                try:
+                    rows = self.db.execute(
+                        f"SELECT l.id, l.path, l.model, l.signature, t.rowid, bm25(trace_fts, {FTS_WEIGHTS}), l.task "
+                        f"FROM trace_fts JOIN labels l ON l.id = trace_fts.id JOIN traces t ON t.id = l.id "
+                        f"WHERE trace_fts MATCH ? {mwhere} LIMIT ?", [expr, *margs, cap]).fetchall()
+                except sqlite3.OperationalError:     # a query FTS5 can't parse matches nothing
+                    return []
+                if rows:
+                    return rows
+            return []
+        base = ("SELECT l.id, l.path, l.model, l.signature, t.rowid, 0, l.task FROM labels l "
+                "JOIN traces t ON t.id = l.id WHERE ")
+        if q:                                    # SQLite without FTS5: substring match
+            like = f"%{q}%"
+            return self.db.execute(base + f"(t.body LIKE ? OR l.path LIKE ?) {mwhere} LIMIT ?",
+                                   [like, like, *margs, cap]).fetchall()
+        return self.db.execute(base + f"1=1 {mwhere} LIMIT ?", [*margs, cap]).fetchall()
+
+    @staticmethod
+    def _feeds(b, path, model, modes):
+        """Would a trace on `path` from `model` with these failure modes count toward bounty `b`?"""
+        on_branch = path == b["path"] or path.startswith(b["path"] + "/")
+        return on_branch and (not b["base_model"] or b["base_model"] == model) and (not b["failure"] or b["failure"] in modes)
 
     def post_bounty(self, b):
         """Posting is free. A bounty names a taxonomy branch (optionally a failure mode and base model), a hidden eval
@@ -708,7 +832,8 @@ STATIC = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8"
 MAX_BODY = 64 * 1024
 # On a public node these stay with the operator: attestations and settlement are not signed yet, so whoever could call
 # them could mint payouts. Coin transfers wait for signed wallets for the same reason.
-ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove"}
+ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove",
+                "/v0/admin/reclassify"}
 ADMIN_ACTIONS = {"claims", "transfer"}
 
 
@@ -838,7 +963,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     return self._send(200, ex.taxonomy())
                 if u.path == "/v0/search":
                     return self._send(200, ex.search(q.get("q", ""), q.get("path", ""), q.get("failure", ""),
-                                                      q.get("model", ""), int(q.get("limit", 20))))
+                                                      q.get("model", ""), int(q.get("limit", 20)), q.get("sort", ""),
+                                                      int(q.get("offset", 0)), q.get("facets") in ("1", "true")))
                 if u.path == "/v0/bounties":
                     return self._send(200, ex.bounties(q.get("path", ""), q.get("status", "")))
                 if u.path.startswith("/v0/learnings/"):
@@ -895,6 +1021,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                           "/v0/checkers": lambda b: ex.register_checker(b["id"], b["author"]),
                           "/v0/bounties": ex.post_bounty,
                           "/v0/admin/remove": lambda b: ex.remove(b.get("kind"), b.get("id")),
+                          "/v0/admin/reclassify": lambda b: refile_in_background(ex, b.get("only", "rules"),
+                                                                                  int(b.get("limit") or 0)),
                           "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
                 fn, admin = routes.get(self.path), self.path in ADMIN_ROUTES
                 m = re.fullmatch(r"/v0/bounties/(\d+)/(claims|buy|sell|transfer)", self.path)
@@ -931,6 +1059,17 @@ def serve(port=8787, db="exchange.db", host="127.0.0.1", public=False, admin_tok
     srv = ThreadingHTTPServer((host, port), make_handler(ex, public=public, admin_token=admin_token))
     srv.daemon_threads = True
     return ex, srv
+
+
+def refile_in_background(ex, only="rules", limit=0):
+    """Start a re-classification run without holding up the caller; progress shows in /v0/stats."""
+    if ex.refile and ex.refile.get("running"):
+        raise ValueError("a re-file is already running")
+    if only == "rules" and ex.engine.name == "rules":
+        return {"skipped": "the node's classifier is the keyword engine; add TYPESAFE_API_KEY to re-file with Jev"}
+    n = ex.db.execute("SELECT COUNT(*) FROM labels" + (" WHERE engine = 'rules'" if only == "rules" else "")).fetchone()[0]
+    threading.Thread(target=ex.reclassify, kwargs={"only": only, "limit": limit}, daemon=True, name="refile").start()
+    return {"started": True, "traces": min(n, limit) if limit else n, "engine": ex.engine.name}
 
 
 def run_epochs(ex, hours):
@@ -983,6 +1122,8 @@ if __name__ == "__main__":
         print(seed_if_empty(ex), flush=True)
     if a.epoch_hours > 0:
         run_epochs(ex, a.epoch_hours)
+    if ex.engine.name != "rules" and ex.db.execute("SELECT 1 FROM labels WHERE engine = 'rules' LIMIT 1").fetchone():
+        print("re-filing keyword-classified traces with", ex.engine.name, refile_in_background(ex), flush=True)
     mode = "public" if a.public else "local"
     print(f"traceX node on http://{a.host}:{a.port}  (db {a.db}, {mode}, "
           f"{'testnet' if a.test_credits else 'USDC settlement'}, epochs {a.epoch_hours or 'manual'}h)", flush=True)

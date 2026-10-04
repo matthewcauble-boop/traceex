@@ -117,16 +117,27 @@ get solved with learnings or packages that are then sold. The classifier engine 
 - **Every trace is classified on arrival** (`traceex/classify.py`):
   - *Where it belongs:* a path down a versioned task taxonomy (`taxonomy/0.1`: extract > travel > flight,
     extract > commerce > invoice, tool_call > device, code > repair, …). Engines are interchangeable: **TypeSafe Jev**
-    hierarchical beam search (one `choice` question per level, beam 2, the engine jevbox uses) when a key is present,
-    and a standard-library keyword engine otherwise. A hosted engine that fails never blocks a submission; the node
-    falls back to the rules engine and records that it did.
+    hierarchical beam search when a key is present (one request per level, holding a `choice` question for each
+    branch still on the beam, beam 2; the method of TypeSafe's hierarchical-classification cookbook; about 0.5 s and
+    560 input tokens per level), and a standard-library keyword engine otherwise. A hosted engine that fails, or a
+    node's daily request cap, never blocks a submission: the node falls back to the rules engine, records which engine
+    filed each trace, and classifies outside its write lock. `POST /v0/admin/reclassify` re-files keyword-filed traces
+    once a key is added (a node with a key does this by itself on startup). Measured on the 247 seeded traces: the
+    keyword engine misfiled 7 of the 244 code traces (6 MBPP problems under extract > commerce > receipt, 1 under
+    code > repair); Jev (jev-1.13.0) re-filed all 247 with 497 requests and 279k input tokens, about 2 requests and
+    1,100 tokens a trace, and moved exactly those 7 to code > generate.
   - *How it failed:* read exactly from the placeholders, no model: `type_mismatch` (a code where a number belongs),
     `role_swap` (a value that belongs to another field), `wrong_span`, `invented`, `omission`, `normalised`. The
     signature (`role_swap:2 type_mismatch:1`) is searchable. On the demo traces the dominant failure is role swaps,
     which is exactly what the routing learning fixes.
-- **Search** (`GET /v0/search?q=&path=&failure=&model=`): SQLite FTS5 over skeleton text, path, signature and model,
-  filtered by taxonomy branch and failure mode. Results come back with the open bounties on the same branch, so a
-  trainer sees supply and demand together. `GET /v0/taxonomy` gives the tree with trace counts per branch.
+- **Search** (`GET /v0/search?q=&path=&failure=&model=&sort=&offset=&facets=`): SQLite FTS5 over skeleton text,
+  path, signature, model and task, filtered by taxonomy branch and failure mode. `sort=relevant` (the default with
+  words) ranks by BM25 with a match in the branch name weighted 4x, the failure label 3x, model and task 2x, the text
+  1x; when every word together finds nothing, any word will do. `sort=new` (the default without words) is newest
+  first; `sort=bounty` puts traces that feed the richest open bounty first. `facets=1` adds counts per branch and per
+  failure mode, so a browse tree can be built from one call. Results come back with the open bounties on the same
+  branch, so a trainer sees supply and demand together. `GET /v0/taxonomy` gives the tree with trace counts per
+  branch.
 - **Bounties are free to post and each one mints a coin.** Buying the coin stakes the bounty, and everyone who holds
   it shares in the solution. A bounty names a taxonomy branch (optionally a failure mode and base model), a hidden eval set by
   hash, and the score a solution must reach.
@@ -267,7 +278,8 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 | GET | `/v0/provenance/{id}` | the family tree under a learning |
 | GET | `/v0/balances/{address}` | earnings, with Merkle proofs per epoch |
 | GET | `/v0/taxonomy` | the task tree with trace counts per branch, and which engine is classifying |
-| GET | `/v0/search` | `q`, `path`, `failure`, `model`, `limit` → traces + open bounties on that branch |
+| GET | `/v0/search` | `q`, `path`, `failure`, `model`, `sort` (relevant / new / bounty), `limit`, `offset`, `facets` → ranked traces, total, facets, open bounties on that branch |
+| POST | `/v0/admin/reclassify` | operator: `{only: rules|all, limit?}` → re-file traces with the node's classifier in the background |
 | POST | `/v0/bounties` | `{poster, title, path, eval_set, target, seed_micros?, failure?, base_model?, epochs?}` → free; mints the coin |
 | GET | `/v0/bounties` | `path`, `status` filters; each with pool, supply, current coin price |
 | POST | `/v0/bounties/{id}/buy` | `{buyer, micros}` → coins on the curve |

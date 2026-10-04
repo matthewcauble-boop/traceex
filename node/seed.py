@@ -61,14 +61,17 @@ def seed_if_empty(ex):
     if ex.db.execute("SELECT COUNT(*) FROM traces").fetchone()[0]:
         return "seed: database already has traces; left alone"
     from exchange import make_handler
+    from traceex.classify import RulesEngine
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(ex))       # loopback only, never exposed
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_address[1]}"
-    ex.quiet = True
+    # The seed files with the keyword engine: offline, quick, the same on every boot. A node with a hosted engine
+    # (Jev) re-files these traces in the background once it is serving.
+    ex.quiet, engine, ex.engine = True, ex.engine, RulesEngine()
     try:
         story = seed(ex, url)
     finally:
-        ex.quiet = False
+        ex.quiet, ex.engine = False, engine
         srv.shutdown()
         srv.server_close()
     for line in story:
@@ -81,6 +84,7 @@ def seed_if_empty(ex):
 def seed(ex, url):
     from traceex import AdaptiveAgent, Client, Learning, apply_routing, attest, first_pass_score, routing_from_traces
     from traceex.autopilot import Autopilot, Policy
+    from traceex.classify import RulesEngine
     import flight
     from model import Model
     import tasks
@@ -146,7 +150,7 @@ def seed(ex, url):
     for t in lot1:
         Client(url, t["producer"]).submit(t)
     prompts = {t["task_id"]: tasks.prompt(t) for t in tasks.load("train")}
-    pilots = {p: Autopilot(Client(url, p), task=tasks.TASK, base_model=QWEN, checker=tasks.CHECKER,
+    pilots = {p: Autopilot(Client(url, p), task=tasks.TASK, base_model=QWEN, checker=tasks.CHECKER, engine=RulesEngine(),
                            policy=Policy(privacy="open", bounty_after=3, back_micros=500_000, budget_micros=500_000,
                                          bounty_epochs=EPOCHS))
               for p in CODE_PRODUCERS}
@@ -176,7 +180,7 @@ def seed(ex, url):
 
     # --- an agent on autopilot meets a failure nobody has fixed, and posts a bounty for it ---------------------------
     pilot = Autopilot(Client(url, AUTO), task=flight.TASK, base_model=Model.name, checker=flight.CHECKER,
-                      policy=Policy(bounty_after=2, back_micros=1_000_000, budget_micros=1_000_000, bounty_epochs=EPOCHS))
+                      engine=RulesEngine(), policy=Policy(bounty_after=2, back_micros=1_000_000, budget_micros=1_000_000, bounty_epochs=EPOCHS))
     auto = agent(AUTO)
     auto.autopilot = pilot
     posted = []
