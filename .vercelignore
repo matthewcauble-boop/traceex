@@ -1,0 +1,16 @@
+.git
+.gstack
+.pytest_cache
+.venv
+.env*
+__pycache__
+*.pyc
+*.db
+*.log
+*.safetensors
+examples/code_repair/runs/dataset
+video
+contracts
+tests
+build
+node_modules

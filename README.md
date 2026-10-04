@@ -2,6 +2,9 @@
 
 **The trace exchange: self-improving open agents, paid for by the fixes they share.**
 
+Live preview: **https://tracex-indol.vercel.app** (the seeded testnet, read-only; the API and MCP endpoint answer
+there too).
+
 Every time an agent's checker catches a model mistake and the fix is verified, that fix is the most valuable training
 signal there is. traceX turns it into a **trace**: a skeleton of the failure (no names, codes, dates or prices
 leave your device) that you own. A classifier files every trace by task and by *how* the model failed, so anyone can
@@ -42,6 +45,8 @@ Farming is designed to lose because **only payments pay, and whoever pays judges
 - Forfeited bonds and stakes burn. Validators earn only from what the learnings they vouched for go on to earn.
 - Decoys with a sealed true gain catch validators who don't measure.
 - Copies, reworded copies and padded parents earn nothing.
+- Every transaction pays one standard fee, $0.0000004: about the electricity it uses
+  (`python examples/fees/measure.py` shows the measurement).
 
 ```
 python examples/farming/attacks.py              # every farming strategy against a real node, with its profit or loss
@@ -177,6 +182,7 @@ Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it 
 | `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a coin node it also stakes three validators and runs the federation on real held-out slices |
 | `node/coin.py`, `node/validator.py` | the coin economy (pool, burn and match, federated validation, decoys, licence escrow, vesting, challenges) and a validator's commit/reveal tool |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real coin node, with profit or loss |
+| `examples/fees/` | `measure.py`: what each kind of transaction costs in electricity, and so the standard fee |
 | `render.yaml`, `DEPLOY.md` | one-click hosting on Render, costs, limits and operator calls |
 | `contracts/` | `Registry.sol` (ownership + family tree), `PayoutDistributor.sol` (per-epoch Merkle root, claim with proof), `BountyMarket.sol` (free bounties, bonding-curve coins, holder revenue share) |
 | `examples/flight_emails/` | the first producer: flight-booking extraction, a rules checker, train and held-out emails, `demo.py` |

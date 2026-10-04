@@ -539,11 +539,11 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
     </div>
     <div class="coinbox" id="coinbox" hidden>
       <h3>The coin, live</h3>
-      <p class="sub">Contributors earn TXC. Users pay dollars, which buy TXC from the pool; half of what they buy is burned, and the protocol mints at most half that burn back to the same contributors. Nothing is minted for a verdict. Nobody sets the price; the pool does.</p>
+      <p class="sub">Contributors earn TXC. Users pay dollars, which buy TXC from the pool; half of what they buy is burned, and the protocol mints at most half that burn back to the same contributors. Nothing is minted for a verdict. Nobody sets the price; the pool does. Every transaction pays <b id="c-fee">$0.0000004</b>, about the electricity it uses.</p>
       <div class="coin-stats" aria-live="off">
         <div><b id="c-price">$0.0100</b>per TXC</div>
         <div><b id="c-supply">1,000,000</b>TXC in existence</div>
-        <div><b id="c-burned">0</b>burned by usage and fees</div>
+        <div><b id="c-burned">0</b>burned by payments and forfeits</div>
         <div><b id="c-vesting">0</b>vesting to contributors</div>
         <div><b id="c-validators">0</b><span id="c-staked">validators</span></div>
       </div>
@@ -638,7 +638,7 @@ agent = AdaptiveAgent(..., autopilot=Autopilot(client, task=..., base_model=...)
     <div class="status">
       <h3>v0.1, live as a testnet</h3>
       <ul>
-        <li><b>Built:</b> spec, Python SDK, the exchange node (website, API and MCP endpoint in one process), classifier engine (TypeSafe Jev, keyword fallback) with ranked search, the TXC coin economy with federated validation and an attack simulation, bounty coins, MCP server and autopilot, open-weights pipeline (LoRA on Qwen2.5), three contracts tested on a local EVM, two demos, 100 tests.</li>
+        <li><b>Built:</b> spec, Python SDK, the exchange node (website, API and MCP endpoint in one process), classifier engine (TypeSafe Jev, keyword fallback) with ranked search, the TXC coin economy with federated validation and an attack simulation, bounty coins, MCP server and autopilot, open-weights pipeline (LoRA on Qwen2.5), three contracts tested on a local EVM, two demos, 102 tests.</li>
         <li><b>Settles in</b> TXC on the public testnet: contributors earn it, test dollars buy and burn it ($25 per wallet), with a Merkle payout root every epoch. Real money after signed wallets and a contract audit.</li>
         <li><b>Not live yet:</b> real-money settlement, signed wallets and validator signatures, staking, x402 payments, contract audit.</li>
       </ul>
@@ -1052,6 +1052,7 @@ function renderCoin() {
   set('c-price', '$' + (k.price_micros / 1e6).toFixed(4)); set('c-supply', Math.round(k.supply_units / 1e6).toLocaleString());
   set('c-burned', Math.round(k.burned_units / 1e6).toLocaleString()); set('c-vesting', Math.round(k.vesting_units / 1e6).toLocaleString());
   set('c-validators', k.validators); set('c-staked', 'validators, ' + Math.round(k.staked_units / 1e6).toLocaleString() + ' ' + live.symbol + ' staked');
+  if (k.rules && k.rules.tx_fee_nanos) set('c-fee', '$' + (k.rules.tx_fee_nanos / 1e9).toFixed(9).replace(/0+$/, ''));
 }
 
 /* ---- bounty board ---- */
@@ -1340,7 +1341,8 @@ async function start() {
     if (live.coinMode) { live.symbol = asset; const cb = $('#coinbox'); if (cb) cb.hidden = false; }
     if (window.__tx && window.__tx.setOrigin) window.__tx.setOrigin(location.origin);
     if (window.__tx && window.__tx.setRemote) window.__tx.setRemote(nodeSearch);
-    const ok = () => setChip('Live exchange · testnet: test credits, no real money', 'on');
+    const ok = () => setChip(node.read_only ? 'Preview: the seeded testnet, read-only. Wallets and trading open on the live node'
+                                            : 'Live exchange · testnet: test credits, no real money', 'on');
     const paused = e => setChip('Live data paused (' + (e.message || 'error') + ')', 'off');
     ok(); await nodeLoad(true).catch(paused);
     let n = 0;

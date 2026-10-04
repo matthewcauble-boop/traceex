@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "",
+  "outputDirectory": "site",
+  "functions": {
+    "api/node.py": {
+      "maxDuration": 60,
+      "includeFiles": "{node,sdk/python,examples/flight_emails,examples/code_repair}/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/v0/:x_tail*", "destination": "/api/node?x_route=/v0/:x_tail*" },
+    { "source": "/mcp", "destination": "/api/node?x_route=/mcp" },
+    { "source": "/.well-known/:x_tail*", "destination": "/api/node?x_route=/.well-known/:x_tail*" }
+  ],
+  "headers": [
+    { "source": "/(.*)", "headers": [{ "key": "X-Content-Type-Options", "value": "nosniff" }] }
+  ]
+}

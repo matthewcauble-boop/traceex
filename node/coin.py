@@ -35,7 +35,9 @@ Why farming loses (each rule is a test in tests/test_coin.py and an attack in ex
      original's slot; junk that no buyer uses never receives licence money; royalties and matches follow the protocol's
      split, equal per distinct parent; a learning cited by another passes its slice through to its own traces, so a
      wrapper around someone's traces takes nothing; padded parents lose their share and half the bond.
-  7. A minuscule fee on every trace, swap, backing and payout is burned.
+  7. Every transaction pays one standard fee, about the electricity it uses: $0.0000004 (exchange.TX_FEE_NANOS, measured
+     by examples/fees/measure.py), billed each epoch in whole micro-dollars to whoever runs the node. No rule above
+     depends on it being large: the attacks that earn nothing lose exactly their fees.
 
 Units: dollars in micros (1e-6 $), TXC in units (1e-6 TXC).
 """
@@ -58,9 +60,7 @@ class Params:
     symbol: str = "TXC"
     genesis_coins: int = 1_000_000 * UNIT      # protocol-owned liquidity at genesis...
     genesis_usd: int = 10_000 * 1_000_000      # ...beside $10,000: TXC opens at $0.01
-    amm_fee_bps: int = 30                      # 0.3% per swap, stays in the pool
-    protocol_fee_bps: int = 10                 # 0.1% of every swap, backing and payout, burned
-    trace_fee_micros: int = 500                # $0.0005 per trace, bought and burned
+    amm_fee_bps: int = 30                      # the pool's spread: 0.3% of a swap stays in the pool, nobody collects it
     burn_share: float = 0.5                    # of the coins a payment buys: half burned, half to contributors
     match: float = 0.5                         # then at most half of what a learning's usage burned is minted back
     emission: int = 50_000 * UNIT              # the most an epoch can mint, halving every `halving_epochs`
@@ -218,9 +218,6 @@ class CoinExchange(Exchange):
             raise ValueError(f"not enough {self.p.symbol}: {account[:10]}… has {have / UNIT:,.2f}, this needs "
                              f"{units / UNIT:,.2f} (POST /v0/swap buys {self.p.symbol} with test dollars)")
 
-    def _fee(self, units):
-        return units * self.p.protocol_fee_bps // 10_000
-
     def supply(self):
         return self._m("minted") - self._m("burned")
 
@@ -256,13 +253,13 @@ class CoinExchange(Exchange):
         x, y = self._m("pool_usd"), self._m("pool_coin")
         if side == "buy":
             dx = int(amount) * (10_000 - self.p.amm_fee_bps) // 10_000
-            out = y * dx // (x + dx)
-            return {"side": "buy", "pay_micros": int(amount), "get_units": out - self._fee(out)}
-        dy = (int(amount) - self._fee(int(amount))) * (10_000 - self.p.amm_fee_bps) // 10_000
+            return {"side": "buy", "pay_micros": int(amount), "get_units": y * dx // (x + dx)}
+        dy = int(amount) * (10_000 - self.p.amm_fee_bps) // 10_000
         return {"side": "sell", "pay_units": int(amount), "get_micros": x * dy // (y + dy)}
 
     def swap(self, account, side, amount):
-        """Test dollars for TXC or back, at the pool's price. 0.3% stays in the pool; 0.1% of the TXC side is burned."""
+        """Test dollars for TXC or back, at the pool's price; the pool keeps its 0.3% spread. Like every transaction it
+        pays the standard fee (TX_FEE_NANOS)."""
         need_address(account, "account")
         amount = int(amount)
         if amount <= 0 or side not in ("buy", "sell"):
@@ -270,40 +267,31 @@ class CoinExchange(Exchange):
         with self.lock:
             if side == "buy":
                 self._need_funds(account, amount)
+                self._tx_fee(account)
                 self._credit(account, -amount, f"swap: buy {self.p.symbol}")
                 out = self._amm_buy(amount)
-                fee = self._fee(out)
-                self._burn(fee)
-                self._coin(account, out - fee, "swap: bought")
-                got = {"bought_units": out - fee}
-                self._event(f"${amount / 1e6:,.2f} bought {(out - fee) / UNIT:,.1f} {self.p.symbol}; "
+                self._coin(account, out, "swap: bought")
+                got = {"bought_units": out}
+                self._event(f"${amount / 1e6:,.2f} bought {out / UNIT:,.1f} {self.p.symbol}; "
                             f"price ${self.price() / 1e6:.4f}")
             else:
                 self._need_coins(account, amount)
-                fee = self._fee(amount)
+                self._tx_fee(account)
                 self._coin(account, -amount, "swap: sold")
-                self._burn(fee)
-                usd = self._amm_sell(amount - fee)
+                usd = self._amm_sell(amount)
                 self._credit(account, usd, f"swap: sold {self.p.symbol}")
                 got = {"paid_micros": usd}
                 self._event(f"{amount / UNIT:,.1f} {self.p.symbol} sold for ${usd / 1e6:,.2f}; price ${self.price() / 1e6:.4f}")
             self.db.commit()
         return dict(got, price_micros=self.price(), symbol=self.p.symbol)
 
-    # --- traces: a minuscule fee, and copies earn nothing extra -------------------------------------------------------
+    # --- traces: copies earn nothing extra -----------------------------------------------------------------------------
     def submit_trace(self, t):
-        fee = self.p.trace_fee_micros if self.test_credits else 0
-        if fee:
-            need_address(t.get("producer"), "producer")
-            self._need_funds(t["producer"], fee)
-        out = super().submit_trace(t)
+        out = super().submit_trace(t)                      # (which charges the standard fee)
         if out.get("duplicate"):
             return out
         key, fix = dup_key(t), fix_key(t)
         with self.lock:
-            if fee:
-                self._credit(t["producer"], -fee, "trace fee")
-                self._burn(self._amm_buy(fee))
             first = self.db.execute("SELECT canonical FROM dups WHERE key=? LIMIT 1", (key,)).fetchone()
             if not first and len(fix_text(t)) >= 20:               # the same distinctive fix, its input reworded
                 mine = words(t.get("input", ""))
@@ -351,11 +339,10 @@ class CoinExchange(Exchange):
             if status != "open":
                 raise ValueError(f"bounty {bounty_id} is {status}; buy its coins from a holder")
             self._need_coins(buyer, units)
-            fee = self._fee(units)
-            net = units - fee
+            self._tx_fee(buyer)
+            net = units
             n = coin.coins_for(supply, net, **self._curve())
             self._coin(buyer, -units, f"bounty {bounty_id} backing")
-            self._burn(fee)
             self._coin(f"escrow:bounty:{bounty_id}", net, "pool")
             self._set_holding(bounty_id, buyer, self._holding(bounty_id, buyer) + n)
             self._set_basis(bounty_id, buyer, self._basis(bounty_id, buyer) + net)
@@ -379,20 +366,18 @@ class CoinExchange(Exchange):
             coins = min(float(coins), have)
             if coins <= 0:
                 raise ValueError("no coins to sell")
+            self._tx_fee(seller)
             basis = self._basis(bounty_id, seller)
             cost = int(basis * coins / have)
             value = min(cost, pool)
-            fee = self._fee(value)
             self._set_basis(bounty_id, seller, basis - cost)
             self._set_holding(bounty_id, seller, have - coins)
             self.db.execute("UPDATE bounties SET pool=pool-?, supply=supply-? WHERE id=?", (value, coins, bounty_id))
-            self._coin(f"escrow:bounty:{bounty_id}", -value, "sell back")
-            self._burn(fee)
-            self._coin(seller, value - fee, f"bounty {bounty_id} sell")
+            self._move(f"escrow:bounty:{bounty_id}", seller, value, f"bounty {bounty_id} sell")
             self._event(f"{coins:,.1f} coins of bounty #{bounty_id} sold back for what they cost, "
-                        f"{(value - fee) / UNIT:,.1f} {self.p.symbol}")
+                        f"{value / UNIT:,.1f} {self.p.symbol}")
             self.db.commit()
-        return {"bounty": bounty_id, "sold": round(coins, 6), "paid_units": value - fee,
+        return {"bounty": bounty_id, "sold": round(coins, 6), "paid_units": value,
                 "next_price_units": round(coin.price(supply - coins, **self._curve()))}
 
     def holders(self, bounty_id):
@@ -469,6 +454,7 @@ class CoinExchange(Exchange):
                                    (lot, buyer)).fetchall()
             if not rows:
                 raise ValueError("none of your licence money is waiting on that lot")
+            self._tx_fee(buyer)
             trace_info, _ = self._tree()
             paid = 0
             for rid, tjson in rows:
@@ -520,6 +506,7 @@ class CoinExchange(Exchange):
             if (have[0] if have else 0) + stake < self.p.validator_min_stake:
                 raise ValueError(f"validators stake at least {self.p.validator_min_stake / UNIT:,.0f} {self.p.symbol}")
             self._need_coins(address, stake)
+            self._tx_fee(address)
             self._move(address, f"escrow:stake:{address}", stake, "validator stake")
             if have:
                 self.db.execute("UPDATE validators SET stake=stake+? WHERE address=?", (stake, address))
@@ -577,6 +564,7 @@ class CoinExchange(Exchange):
                 if first:
                     raise ValueError(f"rejected: these weights are already learning {first[0][:19]}…; a learning built "
                                      "on it has weights of its own")
+            self._tx_fee(bond_from or l["trainer"])
             bond = self.p.learning_bond if self.p.quorum > 0 else 0
             if bond:
                 self._need_coins(bond_from or l["trainer"], bond)
@@ -650,6 +638,7 @@ class CoinExchange(Exchange):
             if self.db.execute("SELECT 1 FROM commits WHERE learning=? AND round=? AND validator=?",
                                (lid, rnd, validator)).fetchone():
                 raise ValueError("already committed")
+            self._tx_fee(validator)
             self.db.execute("INSERT INTO commits VALUES (?,?,?,?,?)", (lid, rnd, validator, str(digest), self.epoch))
             self.db.commit()
         return {"learning": lid, "round": rnd, "committed": validator,
@@ -678,6 +667,7 @@ class CoinExchange(Exchange):
             if int(audit.get("checked", 0)) < min(self.p.audit_min, parents):
                 raise ValueError(f"every reveal audits at least {min(self.p.audit_min, parents)} of the learning's parents "
                                  "(audit: {checked, bad})")
+            self._tx_fee(validator)
             self.db.execute("INSERT OR REPLACE INTO reveals VALUES (?,?,?,?,?,?,?)",
                             (lid, rnd, validator, canonical(attestation).decode(), after - before, self.epoch, None))
             done = len(self.db.execute("SELECT validator FROM reveals WHERE learning=? AND round=?", (lid, rnd)).fetchall())
@@ -813,6 +803,7 @@ class CoinExchange(Exchange):
             if v[0] != "accepted":
                 raise ValueError("only an accepted learning can be challenged")
             self._need_coins(challenger, self.p.challenge_stake)
+            self._tx_fee(challenger)
             self._move(challenger, f"escrow:challenge:{lid}", self.p.challenge_stake, "challenge stake")
             rnd = v[2] + 1
             self.db.execute("UPDATE verdicts SET status='challenged', round=?, challenger=?, challenge_stake=? WHERE learning=?",
@@ -902,6 +893,7 @@ class CoinExchange(Exchange):
                                  "measurement there, at the target")
             if base_model and L["base_model"]["name"] != base_model:
                 raise ValueError(f"the bounty is for {base_model}")
+            self._tx_fee(L["trainer"])
             padded = v[1] is not None and v[1] > self.p.audit_max_bad
             shares = self._shares(learning_id, pool, BOUNTY_SPLIT, withhold=padded)
             payout = {}
@@ -1117,6 +1109,7 @@ class CoinExchange(Exchange):
                 if not self._decoy(lid):
                     self._release_bond(lid, to=trainer)
             self._pay_licences()
+            self._bill_fees()                                # transaction fees, in dollars, to whoever runs the node
             payouts = {}
             for a, u in self.db.execute("SELECT account, SUM(units) FROM coin_ledger WHERE epoch=? AND payout=1 AND units > 0 "
                                         "GROUP BY account", (e,)):
@@ -1162,7 +1155,7 @@ class CoinExchange(Exchange):
                 "learnings": dict(self.db.execute("SELECT status, COUNT(*) FROM verdicts WHERE status != 'decoy' "
                                                   "GROUP BY status")),
                 "rules": {"burn_share": self.p.burn_share, "match": self.p.match,
-                          "protocol_fee_bps": self.p.protocol_fee_bps, "trace_fee_micros": self.p.trace_fee_micros,
+                          "tx_fee_nanos": self.tx_fee_nanos, "amm_fee_bps": self.p.amm_fee_bps,
                           "quorum": self.p.quorum, "vest_epochs": self.p.vest_epochs, "overclaim": self.p.overclaim,
                           "learning_bond_units": self.p.learning_bond,
                           "validator_min_stake_units": self.p.validator_min_stake}}

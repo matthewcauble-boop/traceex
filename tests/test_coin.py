@@ -68,24 +68,36 @@ def worth(ex, account, price=None):
 
 
 class Pool(unittest.TestCase):
-    def test_swaps_move_the_price_and_burn_a_fee(self):
+    def test_swaps_move_the_price_and_a_round_trip_costs_the_spread(self):
         ex, _ = make_ex(validators=0)
         p0 = ex.price()
         r = ex.swap(CONSUMER, "buy", 5_000_000)
         self.assertGreater(ex.price(), p0)
-        self.assertGreater(ex.coin_stats()["burned_units"], 0)
         ex.swap(CONSUMER, "sell", r["bought_units"])
-        self.assertLess(ex.wallet(CONSUMER)["balance_micros"], 25_000_000)   # a round trip costs the fees
+        self.assertLess(ex.wallet(CONSUMER)["balance_micros"], 25_000_000)   # the pool keeps its 0.3% each way
         self.assertTrue(ex.audit()["balanced"])
         with self.assertRaisesRegex(ValueError, "not enough TXC"):
             ex.swap(CONSUMER, "sell", 10 * UNIT)
 
-    def test_trace_fee_is_burned_and_near_duplicates_pay_the_first_producer(self):
+    def test_every_transaction_pays_the_standard_fee_billed_in_whole_micro_dollars(self):
+        from exchange import TX_FEE_NANOS
         ex, _ = make_ex(validators=0)
-        burned = ex.coin_stats()["burned_units"]
+        owed = lambda who: (ex.db.execute("SELECT nanos FROM fees WHERE account=?", (who,)).fetchone() or [0])[0]
+        for i in range(3):                                                   # three traces: 1,200 nano-dollars
+            ex.submit_trace(dict(trace(f"Write a function number {i} to add two numbers.", code=f"return a + b + {i}")))
+        self.assertEqual(owed(PRODUCER), 3 * TX_FEE_NANOS)
+        self.assertEqual(ex.wallet(PRODUCER)["balance_micros"], 25_000_000)  # nothing billed until settlement
+        ex.settle()
+        self.assertEqual(ex.wallet(PRODUCER)["balance_micros"], 25_000_000 - 1)   # one whole micro-dollar
+        self.assertEqual(owed(PRODUCER), 3 * TX_FEE_NANOS - 1_000)           # the fraction carries over
+        self.assertEqual(ex.fees()["billed_micros"], 1)                      # to whoever runs the node
+        with self.assertRaisesRegex(ValueError, "not enough test credits"):
+            ex.submit_trace(dict(trace(producer=A("9"))))                    # no wallet, no transaction
+        self.assertTrue(ex.audit()["balanced"])
+
+    def test_near_duplicates_pay_the_first_producer(self):
+        ex, _ = make_ex(validators=0)
         t1 = ex.submit_trace(dict(trace()))
-        self.assertEqual(ex.wallet(PRODUCER)["balance_micros"], 25_000_000 - 500)
-        self.assertGreater(ex.coin_stats()["burned_units"], burned)
         copier = A("7")
         ex.faucet(copier)
         t2 = ex.submit_trace(dict(trace(text="write a function to  add two numbers.\nassert add(1, 2) == 3", producer=copier)))
@@ -600,6 +612,25 @@ class Hosted(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
             self.assertTrue(all(pool.map(work, people)))                     # one connection, many threads
         self.assertTrue(ex.audit()["balanced"])
+
+
+class VercelPreview(unittest.TestCase):
+    def test_the_vercel_function_serves_the_seed_and_refuses_every_write(self):
+        import importlib.util
+        import io
+        import json
+        spec = importlib.util.spec_from_file_location("vercel_node", os.path.join(ROOT, "api", "node.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        self.assertEqual(m.original_path("/api/node?x_route=/v0/search&q=add&path=code&x_tail=search"),
+                         "/v0/search?q=add&path=code")                      # however Vercel hands the request over
+        self.assertEqual(m.original_path("/v0/faucet?x_route=%2Fv0%2Ffaucet&x_tail=faucet"), "/v0/faucet")
+        self.assertEqual(m.ex.stats()["traces"], 247)
+        self.assertTrue(m.ex.describe()["read_only"])
+        for name in m.WRITES:
+            with self.assertRaisesRegex(PermissionError, "read-only preview"):
+                getattr(m.ex, name)()
+        self.assertGreater(m.ex.search(q="flight")["total"], 0)
 
 
 class Seed(unittest.TestCase):

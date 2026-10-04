@@ -240,8 +240,19 @@ Contributors earn a network coin, TXC; users keep paying dollars; the market pri
   submission or a stake. Usage burns tie the coin's value to real use, as in Render (operators are minted for jobs
   users paid for) and Helium, which moved rewards from proof-of-coverage, farmed by GPS spoofers, toward paid data.
 - **The pool sets the price.** A constant-product pool (Uniswap v2 maths) holds protocol-owned liquidity from
-  genesis: 1,000,000 TXC beside $10,000, so TXC opens at $0.01. Swaps pay 0.3% to the pool; 0.1% of the TXC side of
-  every swap, bounty backing and payout is burned.
+  genesis: 1,000,000 TXC beside $10,000, so TXC opens at $0.01. The pool keeps a 0.3% spread on each swap; nobody
+  collects it, it stays in the pool.
+- **One standard transaction fee: its electricity.** Every transaction (a trace, a swap, a backing or sale, a bid, a
+  learning, a usage report, a validator's commitment or reveal, a challenge, a claim) pays the same fee, $0.0000004
+  (`exchange.TX_FEE_NANOS` = 400 nano-dollars). `examples/fees/measure.py` runs each kind of transaction on the reference
+  node and prices what it uses: CPU time at 10 W a busy core, bytes moved at 0.02 kWh/GB, bytes stored in three copies
+  for ten years, a data-centre PUE of 1.4, electricity at $0.15/kWh. The cheapest came to about $0.00000001 (backing a
+  bounty); the dearest, registering a learning, to $0.00000038, nearly all of it the ten years of storage. The standard
+  fee is set just above the dearest, so every transaction pays for its own electricity and none pays much more. Fees
+  accrue per account and are billed each epoch in whole micro-dollars, the smallest amount USDC can move; the fraction
+  carries over. They go to whoever runs the node (`--fee-to`), who pays for the electricity. Operator actions
+  (checkers, clearing, settling, decoys) don't pay. The hosted classifier, when a node uses it, costs more than this
+  (about $0.00004 a trace); a node caps its classifier calls per day instead.
 - **An emission cap, not a target.** At most 50,000 TXC an epoch, halving every 180 epochs; when an epoch's matches
   add up to more, each is scaled down. Whatever isn't earned isn't minted.
 - **The protocol's split.** Royalties and matches go traces 60, trainer 25, checkers 10, validators 5, with equal
@@ -300,8 +311,9 @@ of stake can still block honest work, but it has nothing to print and nothing to
    whose inputs share 30% of their words: a reworded copy. The same weights can't be registered twice, even citing
    the first. Every reveal audits at least 10 parents; if the median audit finds more than 10% junk, the parents' share
    is withheld (burned) and half the bond burns.
-9. **A minuscule fee on everything**: $0.0005 per trace, 0.1% of every swap, backing and payout, all burned. For the
-   attacks that earn nothing (spam, copies, stuffing a lot) it is the whole loss; no rule depends on it being large.
+9. **The standard fee: $0.0000004 a transaction, its electricity** (4e). For the attacks that earn nothing (spam,
+   copies, stuffing a lot) it is the whole loss: 1,000 junk traces cost $0.0004, exactly the electricity they use. No
+   rule depends on the fee being large.
 10. **Users judge.** The SDK's `AdaptiveAgent` tries a learning on its own failing cases before adopting it
     (`helps`), and the MCP instructions tell agents to do the same: an attested gain is where to look, not proof it
     helps you.
@@ -315,22 +327,22 @@ independent red-team pass; both paid before the fixes in 4e and 4f.
 
 | attack | mean vs honest work, 30 runs | best run for the attacker |
 |---|---|---|
-| trace spam (1,000 junk traces) | -$0.50 | -$0.50 |
-| 1,000 junk traces stuffed into an honest lot | -$0.50 | -$0.50 |
-| near-copies, or reworded copies, of honest traces | -$0.01 | -$0.01 |
-| fake learning (+30 points claimed, true gain 0) | -$5.14 | -$5.14 |
-| fake learning, 1 bribed validator | -$4.99 | -$0.54 |
-| 12 fake learnings, 2 of 7 validators bribed | -$65.71 | -$51.97 |
-| wash usage ($100 of one's own usage) | -$31.62 | -$31.62 |
-| self-funded bounty solved with one's own learning | -$14.69 | -$14.69 |
-| real learning padded with 200 junk parents (honest or lazy audits) | -$2.66 | -$2.66 |
-| 13. real learning citing a wrapper of one's own (100% to itself) around honest traces | -$0.05 | -$0.04 |
-| 14. pump and dump: back one's own bounty first, sell into an honest backer's $60 | -$0.02 | -$0.02 |
-| a validator that never measures (6 decoys among 24 learnings) | -$4.40 | -$3.22 |
-| **4 of 7 validator seats (57% of stake):** fake learnings | -$23.13 | -$3.17 |
-| 4 of 7 seats: wash usage of its own accepted fake | -$26.09 | -$26.09 |
-| 4 of 7 seats: claim an honest bounty with a fake | -$0.10 | -$0.10 |
-| 4 of 7 seats: block honest work | -$3.17 | -$0.04 |
+| trace spam (1,000 junk traces) | -$0.0004 | -$0.0004 |
+| 1,000 junk traces stuffed into an honest lot | -$0.0004 | -$0.0004 |
+| 20 near-copies, or reworded copies, of honest traces | -$0.000008 | -$0.000008 |
+| fake learning (+30 points claimed, true gain 0) | -$5.13 | -$5.13 |
+| fake learning, 1 bribed validator | -$4.98 | -$0.53 |
+| 12 fake learnings, 2 of 7 validators bribed | -$65.64 | -$51.90 |
+| wash usage ($100 of one's own usage) | -$31.61 | -$31.61 |
+| self-funded bounty solved with one's own learning | -$14.62 | -$14.62 |
+| real learning padded with 200 junk parents (honest or lazy audits) | -$2.56 | -$2.56 |
+| 13. real learning citing a wrapper of one's own (100% to itself) around honest traces | -$0.05 | -$0.03 |
+| 14. pump and dump: back one's own bounty first, sell into an honest backer's $60 | -$0.01 | -$0.01 |
+| a validator that never measures (6 decoys among 24 learnings) | -$6.34 | -$3.05 |
+| **4 of 7 validator seats (57% of stake):** fake learnings | -$23.09 | -$3.13 |
+| 4 of 7 seats: wash usage of its own accepted fake | -$26.07 | -$26.07 |
+| 4 of 7 seats: claim an honest bounty with a fake | -$0.08 | -$0.08 |
+| 4 of 7 seats: block honest work | -$3.16 | -$0.04 |
 
 Decoys are spot checks: a validator that is never drawn for one keeps its savings (about one run in 30 at this decoy
 rate), but on average it loses. The last row is what a majority of stake can still do. It controls the vote, so it can

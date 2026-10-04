@@ -4,6 +4,26 @@ One Render web service serves the website, the API and the MCP endpoint, with th
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/matthewcauble-boop/traceex)
 
+## On Vercel, now
+
+**https://tracex-indol.vercel.app** is live. Vercel serves the website from its edge, and a Python function
+(`api/node.py`) answers `/v0`, `/mcp` and `/.well-known` from a snapshot of the seeded testnet. Search, bounties,
+learnings, verdicts, the coin's numbers and the read-only MCP tools all work. Anything that writes (a wallet, a swap, a
+trace, a bounty) gets a note that it opens on the live node.
+
+A Vercel function keeps no disk from one instance to the next, so it can't hold wallets and a ledger; the live
+exchange runs on Render, below. Once it does, point Vercel at it so the same address serves the live exchange. In
+`vercel.json`, give each rewrite the node's URL:
+
+```json
+{ "source": "/v0/:x_tail*", "destination": "https://tracex.onrender.com/v0/:x_tail*" },
+{ "source": "/mcp", "destination": "https://tracex.onrender.com/mcp" },
+{ "source": "/.well-known/:x_tail*", "destination": "https://tracex.onrender.com/.well-known/:x_tail*" }
+```
+
+Then push. The GitHub repo is connected, so every push to `main` redeploys. Afterwards, check that the node's rate
+limits count each visitor separately: it reads the visitor's address from `X-Forwarded-For`, which Vercel sets.
+
 ## What it costs
 
 | Item | Render plan | Price |
@@ -69,6 +89,9 @@ Operator-only, with the admin token:
   hides it.
 - **Licence money.** It waits until each buyer shows which traces it used. A buyer's learnings do that automatically.
   A buyer that builds nothing names the traces: `POST /v0/licences/direct {"lot": ..., "buyer": ..., "traces": [...]}`.
+- **Transaction fees.** Every transaction pays $0.0000004, about its electricity, billed each epoch in whole
+  micro-dollars to `TRACEX_FEE_TO`, the address that pays the hosting bill (set it in the Render dashboard). Until it
+  is set they collect in an account called `network`. `GET /v0/stats` shows what has been billed.
 - **Bounty claims** carry the poster's own measurement on its hidden eval:
   `POST /v0/bounties/<id>/claims {"learning": ..., "attestation": {"validator": <poster>, "eval_set": ..., "after": ...}}`.
 

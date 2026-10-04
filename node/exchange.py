@@ -35,6 +35,11 @@ from traceex import bountycoin as coin  # noqa: E402
 
 # A bounty's pool, when a learning claims it: the solver is paid most, the traces it was built from still earn.
 BOUNTY_SPLIT = {"trainer": 0.70, "traces": 0.20, "checkers": 0.05, "validators": 0.05}
+# The standard transaction fee, in nano-dollars: $0.0000004, the electricity of the dearest transaction measured by
+# examples/fees/measure.py (registering a learning, whose 5.5 KB is kept in three copies for ten years). Every
+# transaction pays it, so each pays for its own electricity and none much more. Fees accrue per account and are billed
+# each epoch in whole micro-dollars, the smallest amount USDC can move; the fraction carries over.
+TX_FEE_NANOS = 400
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS traces   (id TEXT PRIMARY KEY, lot TEXT, producer TEXT, checker TEXT, body TEXT, epoch INT);
@@ -54,6 +59,7 @@ CREATE TABLE IF NOT EXISTS bounties (id INTEGER PRIMARY KEY, poster TEXT, title 
                                      epoch INT);
 CREATE TABLE IF NOT EXISTS holdings (bounty INT, holder TEXT, coins REAL, PRIMARY KEY (bounty, holder));
 CREATE TABLE IF NOT EXISTS bases    (bounty INT, holder TEXT, amount INT, PRIMARY KEY (bounty, holder));
+CREATE TABLE IF NOT EXISTS fees     (account TEXT PRIMARY KEY, nanos INT);
 CREATE TABLE IF NOT EXISTS events   (id INTEGER PRIMARY KEY, at TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS grants   (account TEXT PRIMARY KEY, micros INT, at TEXT, source TEXT);
 """
@@ -138,11 +144,15 @@ class SafeDB:
 
 class Exchange:
     def __init__(self, path=":memory:", *, k=10, reserve_micros=1_000, validators=("0x" + "5" * 40,),
-                 fee_micros=0, engine=None, test_credits=0, max_db_bytes=0):
+                 tx_fee_nanos=None, fee_to=None, engine=None, test_credits=0, max_db_bytes=0):
         """test_credits: run as a testnet. Each new wallet can take this many micros of test credits once, and every
-        spend (coins, bids, metered usage) must be covered by the wallet's balance. 0 = settlement is external
-        (x402 / USDC), the reference behaviour."""
+        spend (coins, bids, metered usage, the transaction fee) must be covered by the wallet's balance. 0 = settlement
+        is external (x402 / USDC), the reference behaviour. A node that keeps wallets charges every transaction the
+        standard fee (TX_FEE_NANOS unless `tx_fee_nanos` says otherwise) and pays it to `fee_to`, whoever runs it and
+        so pays its electricity ("network" until the operator names an address)."""
         self.path, self.max_db_bytes = path, int(max_db_bytes)
+        self.tx_fee_nanos = int(TX_FEE_NANOS if tx_fee_nanos is None and test_credits else tx_fee_nanos or 0)
+        self.fee_to = fee_to or "network"
         self.lock = threading.RLock()
         self.db = SafeDB(sqlite3.connect(path, check_same_thread=False), self.lock)
         self.db.executescript(SCHEMA)
@@ -198,6 +208,34 @@ class Exchange:
             raise ValueError(f"not enough test credits: {account[:10]}… has ${(self._funds(account) - pending) / 1e6:,.2f}"
                              f", this needs ${micros / 1e6:,.2f} (POST /v0/faucet opens a wallet)")
 
+    def _tx_fee(self, account):
+        """Charge one transaction its standard fee: accrued in nano-dollars, billed at settlement (see TX_FEE_NANOS).
+        The account must be able to cover what it owes, rounded up to the micro-dollar."""
+        if not self.tx_fee_nanos or not account:
+            return
+        r = self.db.execute("SELECT nanos FROM fees WHERE account=?", (account,)).fetchone()
+        owed = (r[0] if r else 0) + self.tx_fee_nanos
+        self._need_funds(account, -(-owed // 1000))
+        self.db.execute("INSERT OR REPLACE INTO fees VALUES (?,?)", (account, owed))
+
+    def _bill_fees(self):
+        """At settlement: every account pays its whole micro-dollars of transaction fees to whoever runs the node; the
+        fraction of a micro-dollar carries over to the next epoch."""
+        for account, nanos in self.db.execute("SELECT account, nanos FROM fees WHERE nanos >= 1000").fetchall():
+            due = nanos // 1000
+            self._credit(account, -due, "transaction fees")
+            self._credit(self.fee_to, due, "transaction fees")
+            self.db.execute("UPDATE fees SET nanos = nanos - ? WHERE account=?", (due * 1000, account))
+
+    def fees(self):
+        """The standard fee, and what it has collected."""
+        billed = self.db.execute("SELECT COALESCE(SUM(micros), 0) FROM ledger WHERE account=? AND memo='transaction fees'",
+                                 (self.fee_to,)).fetchone()[0]
+        accrued = self.db.execute("SELECT COALESCE(SUM(nanos), 0) FROM fees").fetchone()[0]
+        return {"per_transaction_nanos": self.tx_fee_nanos, "per_transaction_usd": f"{self.tx_fee_nanos / 1e9:.7f}",
+                "billed": "each epoch, in whole micro-dollars", "to": self.fee_to, "billed_micros": billed,
+                "accrued_nanos": accrued, "how_it_was_set": "examples/fees/measure.py"}
+
     # --- testnet wallets, feed, stats -------------------------------------------------------------------------------
     def faucet(self, account, source=""):
         """Open a testnet wallet: test credits once per address, a few addresses per source (hashed IP) per day."""
@@ -243,6 +281,7 @@ class Exchange:
                 "pools_paid_micros": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='solved'"),
                 "last_root": {"epoch": r[0], "root": r[1], "total_micros": r[2]} if r else None,
                 "testnet": bool(self.test_credits), "epoch_hours": getattr(self, "epoch_hours", 0),
+                "fees": self.fees(),
                 "classifier": {"engine": self.engine.name,
                                "filed_by": dict(self.db.execute("SELECT engine, COUNT(*) FROM labels GROUP BY engine")),
                                "usage": getattr(self.engine, "usage", None), "refile": self.refile}}
@@ -287,6 +326,7 @@ class Exchange:
         with self.lock:
             if self.db.execute("SELECT 1 FROM traces WHERE id=?", (tid,)).fetchone():
                 return {"id": tid, "lot": lot, "duplicate": True}
+            self._tx_fee(t["producer"])
             self.db.execute("INSERT INTO traces VALUES (?,?,?,?,?,?)",
                             (tid, lot, t["producer"], t["checker"]["id"], canonical(t).decode(), self.epoch))
             self._index(tid, t, c)
@@ -488,6 +528,7 @@ class Exchange:
                                     (b["poster"],)).fetchone()[0]
                 if n >= LIMITS["open_bounties_per_poster"]:
                     raise ValueError(f"{LIMITS['open_bounties_per_poster']} open bounties per poster")
+            self._tx_fee(b["poster"])
             cur = self.db.execute(
                 "INSERT INTO bounties (poster,title,path,failure,base_model,eval_set,target,deadline,status,epoch)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -539,6 +580,7 @@ class Exchange:
             if status != "open":
                 raise ValueError(f"bounty {bounty_id} is {status}; buy its coins from a holder")
             self._need_funds(buyer, micros)
+            self._tx_fee(buyer)
             n = coin.coins_for(supply, micros)
             self._set_holding(bounty_id, buyer, self._holding(bounty_id, buyer) + n)
             self._set_basis(bounty_id, buyer, self._basis(bounty_id, buyer) + micros)
@@ -563,6 +605,7 @@ class Exchange:
             coins = min(float(coins), have)
             if coins <= 0:
                 raise ValueError("no coins to sell")
+            self._tx_fee(seller)
             basis = self._basis(bounty_id, seller)
             cost = int(basis * coins / have)
             value = min(cost, pool)
@@ -585,6 +628,7 @@ class Exchange:
             coins = float(coins)
             if coins <= 0 or coins > have + 1e-9:
                 raise ValueError(f"{sender} holds {have:.6f} coins")
+            self._tx_fee(sender)
             basis = self._basis(bounty_id, sender)                 # the coins carry what they cost
             moved = int(basis * min(coins / have, 1.0))
             self._set_basis(bounty_id, sender, basis - moved)
@@ -644,6 +688,7 @@ class Exchange:
                 raise ValueError(f"scored {a['after']}, the bounty needs {target}")
             if base_model and L["base_model"]["name"] != base_model:
                 raise ValueError(f"the bounty is for {base_model}")
+            self._tx_fee(L["trainer"])
             trace_info, learnings = self._tree()
             payout = split_usage(pool, dict(L, royalty=dict(L["royalty"], split=BOUNTY_SPLIT)), trace_info,
                                  self.validators, learnings)
@@ -714,6 +759,7 @@ class Exchange:
             pending = self.db.execute("SELECT COALESCE(SUM(price), 0) FROM bids WHERE bidder=? AND epoch=?",
                                       (b["bidder"], self.epoch)).fetchone()[0]
             self._need_funds(b["bidder"], price, pending)
+            self._tx_fee(b["bidder"])
             self.db.execute("INSERT INTO bids VALUES (?,?,?,?,?)", (b["lot"], b["bidder"], price, "shared", self.epoch))
             self.db.commit()
         return {"accepted": True, "epoch": self.epoch}
@@ -781,6 +827,8 @@ class Exchange:
             raise ValueError(f"rejected: learnings nest at most {MAX_DEPTH} deep")
         lid = object_id(l)
         with self.lock:
+            if not self.db.execute("SELECT 1 FROM learnings WHERE id=?", (lid,)).fetchone():
+                self._tx_fee(l["trainer"])
             new = self.db.execute("INSERT OR IGNORE INTO learnings VALUES (?,?,?)",
                                   (lid, canonical(l).decode(), self.epoch)).rowcount
             if new:
@@ -805,6 +853,7 @@ class Exchange:
                     "SELECT learning, SUM(calls) FROM usage WHERE consumer=? AND epoch=? GROUP BY learning",
                     (u["consumer"], self.epoch)).fetchall())
                 self._need_funds(u["consumer"], calls * json.loads(r[0])["royalty"]["per_call_micros"], pending)
+            self._tx_fee(u["consumer"])
             self.db.execute("INSERT INTO usage VALUES (?,?,?,?)", (u["learning"], u["consumer"], calls, self.epoch))
             self.db.commit()
         return {"metered": calls}
@@ -831,6 +880,7 @@ class Exchange:
                     amount -= sum(cut.values())
                 for acct, m in split_usage(amount, L, trace_info, self.validators, learnings).items():
                     self._credit(acct, m, f"royalty {lid[:19]}")
+            self._bill_fees()
             # debits were collected up front (x402 / payment channel); the root pays out every credit, gross
             payouts = {a: m for a, m in self.db.execute(
                 "SELECT account, SUM(micros) FROM ledger WHERE epoch=? AND micros > 0 GROUP BY account", (e,))
@@ -904,6 +954,7 @@ class Exchange:
         return {"protocol": "trace-exchange/0.1", "name": "traceX", "api": "/v0", "mcp": "/mcp",
                 "taxonomy": TAXONOMY_VERSION, "classifier": self.engine.name, "epoch": self.epoch,
                 "settlement": settlement, "privacy": ["skeleton", "open"],
+                "fee_per_transaction_nanos": self.tx_fee_nanos,
                 "start_here": ["GET /v0/taxonomy", "GET /v0/search", "GET /v0/learnings", "GET /v0/bounties"]}
 
     def provenance(self, oid, _depth=0):
@@ -1112,6 +1163,7 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
         def do_POST(self):
             if self._limited("write"):
                 return
+            self.path = urlparse(self.path).path         # a POST says everything in its body; a proxy's query is noise
             try:
                 if self.path == "/mcp":                  # agents connect here as an MCP server (JSON-RPC over HTTP)
                     from traceex.mcp import handle, NodeBackend
@@ -1246,13 +1298,16 @@ if __name__ == "__main__":
                     help="stop taking new traces and bounties when the database file passes this size (0 = no limit)")
     ap.add_argument("--epoch-hours", type=float, default=float(env("TRACEX_EPOCH_HOURS", 0)),
                     help="clear and settle automatically every N hours (0 = only when the operator calls it)")
+    ap.add_argument("--fee-to", default=env("TRACEX_FEE_TO") or None,
+                    help="the address that receives the transaction fees (it pays for the electricity); default: 'network'")
     a = ap.parse_args()
     token = env("TRACEX_ADMIN_TOKEN") or None
     if a.public and not token:
         print("warning: --public without TRACEX_ADMIN_TOKEN: operator calls are switched off", flush=True)
     os.makedirs(os.path.dirname(os.path.abspath(a.db)), exist_ok=True)
     ex, srv = serve(a.port, a.db, host=a.host, public=a.public, admin_token=token, k=a.k, economy=a.economy,
-                    reserve_micros=a.reserve_micros, test_credits=a.test_credits, max_db_bytes=a.max_db_mb * 1024 * 1024)
+                    reserve_micros=a.reserve_micros, test_credits=a.test_credits, max_db_bytes=a.max_db_mb * 1024 * 1024,
+                    fee_to=a.fee_to)
     if a.seed:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from seed import seed_if_empty

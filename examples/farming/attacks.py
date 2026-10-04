@@ -29,7 +29,7 @@ V = lambda i: "0x" + f"{0xa0 + i:02x}" * 20
 ATTACKER, HONEST, WATCHDOG, BACKER, USER, POSTER, BUYER, OPERATOR = (A(c) for c in "6bd89743")
 N_VALIDATORS, TRUE_GAIN, GPU = 7, 0.08, 50_000            # $0.05 of GPU time per honest measurement
 TASK = "Write a function number {} that adds two numbers."
-usd = lambda m: f"{'-' if m < 0 else '+'}${abs(m) / 1e6:,.2f}"
+usd = lambda m: f"{'-' if m < 0 else '+'}${abs(m) / 1e6:,.{6 if 0 < abs(m) < 10_000 else 2}f}"   # sub-cent: 6 places
 
 
 def fund(ex, who, micros):
