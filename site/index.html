@@ -12,7 +12,7 @@
 :root{
   color-scheme:light;
   --bg:#ffffff; --surface:#f7f8fa; --surface-2:#eef0f3; --line:#e3e6eb; --line-2:#cfd3da;
-  --text:#0a0b0d; --text-2:#5b616e; --text-3:#8a919e;
+  --text:#0a0b0d; --text-2:#5b616e; --text-3:#687080;   /* text-3: 5.0:1 on white, 4.7:1 on surface (was 3.2:1) */
   --brand:#0052ff; --brand-hover:#0045d6; --brand-soft:#e9f0ff; --brand-tint:#7aa2ff;
   --font:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:"Geist Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
@@ -778,7 +778,7 @@ function drawCurve(){
   const pad = {l: 56, r: 18, t: 22, b: 40}, maxS = Math.max(1100, s1 * 1.15), maxP = BASE + SLOPE * maxS;
   const X = s => pad.l + s / maxS * (w - pad.l - pad.r), Y = p => h - pad.b - p / maxP * (h - pad.t - pad.b);
   c.fillStyle = C.paper2; c.fillRect(0, 0, w, h);
-  c.strokeStyle = 'rgba(10,11,13,.08)'; c.lineWidth = 1; c.font = '500 11px "Geist Mono", monospace'; c.fillStyle = '#8a919e';
+  c.strokeStyle = 'rgba(10,11,13,.08)'; c.lineWidth = 1; c.font = '500 11px "Geist Mono", monospace'; c.fillStyle = '#687080';
   for (let k = 0; k <= 4; k++) { const p = maxP * k / 4, y = Y(p); c.beginPath(); c.moveTo(pad.l, y); c.lineTo(w - pad.r, y); c.stroke(); c.fillText('$' + p.toFixed(3), 6, y + 4); }
   c.fillText('coins in circulation →', w - pad.r - 160, h - 12);
   const area = (a, b, col) => { c.beginPath(); c.moveTo(X(a), Y(0)); for (let s = a; s <= b; s += (b - a) / 40 || 1) c.lineTo(X(s), Y(BASE + SLOPE * s)); c.lineTo(X(b), Y(BASE + SLOPE * b)); c.lineTo(X(b), Y(0)); c.closePath(); c.fillStyle = col; c.fill(); };
@@ -792,7 +792,7 @@ function drawCurve(){
   if (s0 > 0 && X(s0) - X(0) > 120) c.fillText('earlier backers', X(s0 / 2), Y(0) - 12);
   c.fillStyle = '#fff'; if (X(s1) - X(s0) > 40) c.fillText('you', X(s0 + n / 2), Y(0) - 12);
   c.textAlign = 'left';
-  c.fillStyle = '#8a919e'; c.font = '500 11px "Geist Mono", monospace'; c.fillText('pool = shaded area = $' + (o + m), pad.l + 8, pad.t + 12);
+  c.fillStyle = '#687080'; c.font = '500 11px "Geist Mono", monospace'; c.fillText('pool = shaded area = $' + (o + m), pad.l + 8, pad.t + 12);
 }
 others.addEventListener('input', drawCurve); mine.addEventListener('input', drawCurve); addEventListener('resize', drawCurve); drawCurve();
 document.fonts && document.fonts.ready.then(drawCurve);
