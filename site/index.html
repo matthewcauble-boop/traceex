@@ -126,7 +126,9 @@ section{position:relative;padding-inline:var(--gut)}
 .res{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;padding:16px 4px;border-bottom:1px solid var(--line);min-width:0}
 .res .top{display:flex;justify-content:space-between;gap:12px;font:500 12px/1.3 var(--mono);color:var(--text-3)}
 .res .top .p{color:var(--brand)}
-.res .sn{font:400 13.5px/1.55 var(--mono);color:var(--text);overflow-x:auto;white-space:nowrap}
+.res .sn{font:400 13.5px/1.55 var(--mono);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.more{justify-self:start;margin-top:6px}
+@media (min-width:901px){.sorted-grid>div:first-child{position:sticky;top:24px;align-self:start}}
 .res .sn i{font-style:normal;color:var(--brand)}
 .res .sig{display:flex;gap:6px;flex-wrap:wrap}
 .res .sig span{font:500 11.5px/1 var(--mono);padding:6px 8px;border-radius:999px;background:var(--surface-2);color:var(--text-2)}
@@ -690,7 +692,8 @@ let T = [
   {path:'code/repair', model:'qwen3-coder', sig:{invented:1}, sn:'Traceback: KeyError <i>{CODE_1}</i> in parse_row, failing test <i>{NAME_1}</i>…', who:'raj'}];
 let BOUNTIES = [{path:'extract/travel/flight', text:'Bounty · 70% first-pass on unseen airlines · pool $5.00 · next coin $0.0332'}];
 
-let fPath = '', fMode = '', remote = null, FACETS = null, TOTAL = null, seq = 0, qt = 0;
+let fPath = '', fMode = '', remote = null, FACETS = null, TOTAL = null, seq = 0, qt = 0, shown = 8;
+const FIRST = 8, STEP = 20;          // a landing page shows a handful; the rest is one click away
 const treeEl = document.getElementById('tree'), modesEl = document.getElementById('modes'), q = document.getElementById('q'), resEl = document.getElementById('results'), qn = document.getElementById('qn'), qsort = document.getElementById('qsort');
 const h = x => String(x).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function buildTree(){
@@ -719,21 +722,23 @@ window.__tx = {
 };
 const onBounty = t => BOUNTIES.some(b => t.path === b.path || t.path.startsWith(b.path + '/'));
 function render(now){              // typing waits for a pause; clicks and sort changes search at once
+  shown = FIRST;
   if (remote) { clearTimeout(qt); if (now === true) remoteSearch(); else qt = setTimeout(remoteSearch, 160); return; }
   const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
   let hits = T.filter(t => (!fPath || t.path === fPath || t.path.startsWith(fPath + '/')) && (!fMode || t.sig[fMode]) &&
     words.every(w => ((t.plain || t.sn) + ' ' + t.path + ' ' + t.model + ' ' + Object.keys(t.sig).join(' ')).toLowerCase().replace(/<[^>]+>/g,'').includes(w)));
   if (qsort.value === 'new') hits = hits.slice().reverse();
   if (qsort.value === 'bounty') hits = hits.slice().sort((a, b) => onBounty(b) - onBounty(a));
-  paint(hits, hits.length);
+  T_LOCAL = hits; paint(hits, hits.length);
 }
-async function remoteSearch(){
+let T_LOCAL = [];
+async function remoteSearch(append){
   const my = ++seq;
   resEl.setAttribute('aria-busy', 'true');
   try {
-    const r = await remote({q: q.value.trim(), path: fPath, mode: fMode, sort: qsort.value});
+    const r = await remote({q: q.value.trim(), path: fPath, mode: fMode, sort: qsort.value, offset: append ? T.length : 0});
     if (my !== seq) return;                          // a newer search already went out
-    T = r.rows; FACETS = r.facets; BOUNTIES = r.bounties; TOTAL = r.total;
+    T = append ? T.concat(r.rows) : r.rows; FACETS = r.facets; BOUNTIES = r.bounties; TOTAL = r.total;
     buildTree(); buildModes(); paint(T, r.total);
   } catch (e) { if (my === seq) resEl.innerHTML = '<p class="empty">Search is unavailable right now (' + h(e.message || e.code || 'error') + ').</p>'; }
   resEl.removeAttribute('aria-busy');
@@ -745,10 +750,14 @@ function paint(hits, total){
   let html = '';
   BOUNTIES.filter(b => !fPath || b.path === fPath || b.path.startsWith(fPath + '/') || fPath.startsWith(b.path + '/')).slice(0, 3).forEach(b => {
     html += '<div class="res bounty"><div class="top"><span class="p">open bounty on ' + h(b.path) + '</span><a href="#board">back it ↓</a></div><div class="sn" style="color:var(--brand)">' + b.text + '</div></div>'; });
-  hits.slice(0, 40).forEach(t => { html += '<div class="res"><div class="top"><span class="p">' + h(t.path) + '</span><span>' + t.model + ' · ' + t.who + '</span></div><div class="sn">' + t.sn + '</div><div class="sig">' +
+  hits.slice(0, shown).forEach(t => { html += '<div class="res"><div class="top"><span class="p">' + h(t.path) + '</span><span>' + t.model + ' · ' + t.who + '</span></div><div class="sn">' + t.sn + '</div><div class="sig">' +
     Object.entries(t.sig).map(([k, v]) => '<span>' + k + ':' + v + '</span>').join('') + '</div></div>'; });
-  if (total > 40) html += '<p class="empty">and ' + (total - 40).toLocaleString() + ' more. Narrow it with a branch, a failure mode or a word.</p>';
+  const rest = total - Math.min(shown, hits.length);
+  if (rest > 0) html += '<button type="button" class="btn ghost sm more" id="more">Show ' + Math.min(STEP, rest) + ' more of ' + rest.toLocaleString() + '</button>';
   resEl.innerHTML = html || '<p class="empty">No traces match yet. That gap is exactly what a bounty is for.</p>';
+  const more = document.getElementById('more');
+  if (more) more.onclick = () => { shown += STEP;
+    if (remote && shown > T.length && T.length < total) remoteSearch(true); else paint(remote ? T : T_LOCAL, total); };
 }
 q.addEventListener('input', () => render()); qsort.addEventListener('change', () => render(true)); render();
 
@@ -973,7 +982,8 @@ const live = {mode: 'sample', db: null, user: null, uid: null, canWrite: null, t
 const chip = $('#live-status');
 function setChip(text, cls) { if (chip) { chip.lastChild.textContent = text; chip.className = 'livechip ' + (cls || ''); } }
 const firstLines = s => String(s || '').split('\n').filter(l => l.trim()).slice(0, 2).join('  ').slice(0, 160);
-const snip = s => esc(firstLines(s)).replace(/\{[A-Z]+_\d+\}/g, m => '<i>' + m + '</i>') + (String(s || '').length > 160 ? '…' : '');
+const PREAMBLE = /^.{0,160}?\bhere is your task:\s*/i;          // the prompt template every MBPP trace repeats
+const snip = s => esc(firstLines(String(s || '').replace(PREAMBLE, ''))).replace(/\{[A-Z]+_\d+\}/g, m => '<i>' + m + '</i>') + (String(s || '').length > 160 ? '…' : '');
 
 function rowsFromTraces() {
   return live.traces.map(t => {
@@ -1091,8 +1101,9 @@ function rowFromHit(t) {
   return {path: t.path || 'uncategorised', model: esc(t.model), sig, sn: snip(t.snippet),
           who: esc(t.producer === live.uid ? 'you' : short(t.producer))};
 }
-async function nodeSearch({q, path, mode, sort}) {
+async function nodeSearch({q, path, mode, sort, offset}) {
   const p = new URLSearchParams({limit: '40', facets: '1'});
+  if (offset) p.set('offset', String(offset));
   if (q) p.set('q', q); if (path) p.set('path', path); if (mode) p.set('failure', mode); if (sort) p.set('sort', sort);
   const s = await api.get('/v0/search?' + p);
   return {rows: s.results.map(rowFromHit), total: s.total, facets: s.facets,

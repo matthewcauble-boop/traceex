@@ -66,6 +66,17 @@ MODE = re.compile(r"[a-z0-9_:.,-]{1,80}")         # a failure mode label: wrong_
 UNSAFE = re.compile(r"[<>\"\x00-\x1f]")
 
 
+PREAMBLE = re.compile(r"^.{0,160}?\bhere is your task:\s*", re.I)    # prompt templates shared by every trace
+
+
+def snippet(text, n=160):
+    """The line a person scans a result by: the first non-empty line, minus a prompt preamble every trace in the lot
+    repeats (MBPP's "You are an expert Python programmer, and here is your task: ...")."""
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    line = PREAMBLE.sub("", line) or line
+    return line if len(line) <= n else line[:n - 1].rstrip() + "…"
+
+
 class Full(Exception):
     """The node's disk budget is used up: reads keep working, new writes wait for the operator."""
 
@@ -350,9 +361,8 @@ class Exchange:
             tid, p, m, sig, _, rank, task = r
             lot, body = stored[tid]
             b = json.loads(body)
-            lines = [ln for ln in b["input"].splitlines() if ln.strip()]
             hit = {"id": tid, "path": p, "signature": sig, "model": m, "task": task, "lot": lot,
-                   "fixed_fields": b["fixed_fields"], "snippet": (lines[0] if lines else "")[:140],
+                   "fixed_fields": b["fixed_fields"], "snippet": snippet(b["input"]),
                    "producer": b["producer"], "privacy": b["privacy"], "created": b.get("created")}
             if q and self.fts:
                 hit["score"] = round(-rank, 3)
