@@ -1019,7 +1019,7 @@ function closes(b) {
 }
 function renderBoard() {
   const el = $('#blist'); if (!el) return;
-  const list = live.bounties.slice().sort((a, b) => (b.pool || 0) - (a.pool || 0));
+  const list = live.bounties.slice().sort((a, b) => ((b.status === 'open') - (a.status === 'open')) || (b.pool || 0) - (a.pool || 0));   // open ones lead
   if (!list.length) { el.innerHTML = '<p class="empty">No bounties yet. Post the first one, free.</p>'; return; }
   el.innerHTML = list.map(b => {
     const mine = myCoins(b.id), price = BASE + SLOPE * (b.supply || 0), open = b.status === 'open';
