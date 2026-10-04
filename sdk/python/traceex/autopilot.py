@@ -101,6 +101,15 @@ class Autopilot:
         fresh = [L for L in found["learnings"] if L["id"] not in self.tried]
         return fresh[0] if fresh else None
 
+    def _title(self, path, failure, n):
+        """A title a person can read on the board: what keeps failing, on which model, where it is filed."""
+        where = f"({path}, {n} unresolved case{'s' if n != 1 else ''})"
+        if failure.startswith("unresolved:"):
+            fields = [f.replace("_", " ") for f in failure.split(":", 1)[1].split(",") if f]
+            what = fields[0] if len(fields) == 1 else ", ".join(fields[:-1]) + " and " + fields[-1]
+            return f"Get {what} right on {self._model_name()} {where}"[:200]
+        return f"Fix {failure.replace('_', ' ')} failures on {self._model_name()} {where}"[:200]
+
     def _model_name(self):
         return self.base_model["name"] if isinstance(self.base_model, dict) else str(self.base_model)
 
@@ -123,7 +132,7 @@ class Autopilot:
                 return {"action": "already_backed", "bounty": bid, "path": path, "failure": failure}
             act = {"action": "backed_existing_bounty"}
         else:
-            r = self.c.post_bounty(title=f"{path}: {failure} on {self._model_name()} ({len(cases)} unresolved cases)"[:200],
+            r = self.c.post_bounty(title=self._title(path, failure, len(cases)),
                                    path=path, eval_set=eval_set, target=self.policy.bounty_target, failure=failure,
                                    base_model=self._model_name(), epochs=self.policy.bounty_epochs)
             bid, act = r["id"], {"action": "posted_bounty", "eval_set": eval_set, "target": self.policy.bounty_target}
