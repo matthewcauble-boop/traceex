@@ -10,10 +10,16 @@ operator-only calls work); nothing is made up. The demo accounts are the example
 Epoch 1 is then settled, so the node opens on epoch 2 with a published payout root. A database that already holds
 traces is left alone.
 
+On a coin-economy node (node/coin.py) the seed also stakes three validators and runs the federation for real: each
+validator holds its own slice of the held-out data (one airline's email each; a third of the 500 MBPP problems each),
+commits, then reveals its paired measurement. Learnings are validated in epoch 2, so that node opens on epoch 3.
+
     python node/seed.py exchange.db        # seed a database file directly
 """
 import datetime as dt
+import hashlib
 import json
+import math
 import os
 import sys
 import threading
@@ -38,6 +44,7 @@ CODE_PRODUCERS = [A("a"), A("b"), A("e")]
 QWEN = "Qwen/Qwen2.5-0.5B-Instruct"
 EPOCHS = 14                                     # seeded bounties stay open two weeks at one epoch a day
 REPO = "https://github.com/matthewcauble-boop/traceex/tree/main/examples"
+SEED_VALIDATORS = [VALIDATOR, "0x" + "51" * 20, "0x" + "52" * 20]
 
 
 def _load(*parts):
@@ -89,8 +96,15 @@ def seed(ex, url):
     from model import Model
     import tasks
 
+    coin_mode = getattr(ex, "economy", "") == "coin"
     _grant(ex, [KIM, RAJ, LEE, CONSUMER, AUTO, HOST, TRAINER, MAINTAINER, BIDDER2, BIDDER3, BIDDER4, BIDDER5,
-                *CODE_PRODUCERS])
+                *CODE_PRODUCERS, *SEED_VALIDATORS])
+    if coin_mode:                                # three validators stake; the trainer buys TXC for two bonds
+        from coin import UNIT
+        for v in SEED_VALIDATORS:
+            ex.swap(v, "buy", 16_000_000)
+            ex.register_validator(v, 1_500 * UNIT)
+        ex.swap(TRAINER, "buy", 12_000_000)
     node = Client(url)
     node._call("POST", "/v0/checkers", {"id": "flight-rules", "author": CHECKER_AUTHOR})
     node._call("POST", "/v0/checkers", {"id": "mbpp-tests", "author": CHECKER_AUTHOR})
@@ -132,12 +146,14 @@ def seed(ex, url):
     L = Learning.build(kind="routing", task=flight.TASK, base_model=Model.name, artifact=artifact, parents=parents,
                        trainer=TRAINER, attestation=att, per_call_micros=200)
     lid = Client(url, TRAINER).register_learning(L)["id"]
-    won = Client(url, TRAINER).claim_bounty(fb["id"], lid)
-    Client(url, CONSUMER).report_usage(lid, 5_000)
     story += [f"{len(traces)} skeleton traces filed under extract/travel/flight by 2 agents: no names, codes, dates "
-              "or prices left their devices",
-              f"bounty #{fb['id']} solved by a routing learning: first-pass {before:.1%} → {after:.1%} on unseen "
-              f"airlines; pool ${won['pool_micros'] / 1e6:,.2f} paid, coin holders now earn 20% of every use"]
+              "or prices left their devices"]
+    if not coin_mode:
+        won = Client(url, TRAINER).claim_bounty(fb["id"], lid)
+        Client(url, CONSUMER).report_usage(lid, 5_000)
+        story += [f"bounty #{fb['id']} solved by a routing learning: first-pass {before:.1%} → {after:.1%} on unseen "
+                  f"airlines; pool ${won['pool_micros'] / 1e6:,.2f} paid, coin holders now earn 20% of every use"]
+    routed = apply_routing(model, artifact, flight.context_for)
 
     # --- open weights: the maintainer's bounty, 244 verified Python fixes, the LoRA built from them ------------------
     base, rule, rep = _load("eval-base.json"), _load("bounty.json"), _load("eval-repair.json")
@@ -176,19 +192,22 @@ def seed(ex, url):
                        parents=[(json_id(t), 1) for t in lot1 + lot2], trainer=TRAINER, attestation=att,
                        per_call_micros=50, release="open")
     lid2 = Client(url, TRAINER).register_learning(L)["id"]
-    Client(url, HOST).report_usage(lid2, 400_000)
+    if not coin_mode:
+        Client(url, HOST).report_usage(lid2, 400_000)
 
     # --- an agent on autopilot meets a failure nobody has fixed, and posts a bounty for it ---------------------------
     pilot = Autopilot(Client(url, AUTO), task=flight.TASK, base_model=Model.name, checker=flight.CHECKER,
                       engine=RulesEngine(), policy=Policy(bounty_after=2, back_micros=1_000_000, budget_micros=1_000_000, bounty_epochs=EPOCHS))
     auto = agent(AUTO)
     auto.autopilot = pilot
-    posted = []
+    posted, joined = [], []
     for email in flight.LIVE.values():
         for a in auto.run(email).get("autopilot", []):
             acts[a["action"]] += 1
             if a["action"] == "posted_bounty":
                 posted.append(a["bounty"])
+            elif a["action"] == "backed_existing_bounty":
+                joined.append(a["bounty"])
 
     backed = acts.get("backed_existing_bounty", 0)
     story += [f"bounty #{cb['id']} posted free: +3 points first-try pass@1 for {QWEN}; kim, raj and lee back it with $10",
@@ -197,11 +216,74 @@ def seed(ex, url):
               f"{len(lot2)} more traces from the adapted model's own failures (round 2)",
               f"LoRA v2 attested: {rep['base']['rate']:.1%} → {r['rate']:.1%} with one round of checker feedback "
               f"(p = {r['vs_base']['p_value']:.1g}), released as open weights",
-              f"LoRA v2 first try: {base['rate']:.1%} → {ev['rate']:.1%}, not significant; bounty #{cb['id']} stays open",
-              "a host serves the open weights: 400,000 calls metered at $0.00005"]
+              f"LoRA v2 first try: {base['rate']:.1%} → {ev['rate']:.1%}, not significant; bounty #{cb['id']} stays open"]
+    if not coin_mode:
+        story.append("a host serves the open weights: 400,000 calls metered at $0.00005")
     if posted:
         story.append(f"an agent on autopilot hit the same flight failure twice and posted bounty #{posted[0]} free, "
                      "backed with $1 of its budget")
+    elif joined:
+        story.append(f"an agent on autopilot hit the same flight failure twice; bounty #{joined[0]} already covers it, "
+                     "so it backed that one with $1 of its budget")
+    if coin_mode:
+        story += federate(ex, url, flight, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
+    return story
+
+
+def _paired_se(diffs):
+    n = len(diffs)
+    if n < 2:
+        return 0.0
+    m = sum(diffs) / n
+    return math.sqrt(sum((d - m) ** 2 for d in diffs) / (n - 1) / n)
+
+
+def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents, code_parents):
+    """Coin economy: settle epoch 1 (the beacon draws the validators), then each validator measures its own slice of
+    the held-out data, commits, and reveals. Accepted learnings earn at the next settlement."""
+    from traceex import Client, first_pass_score
+    from coin import attestation_digest
+    ex.settle()
+    story = [f"3 validators staked {1_500:,} TXC each; each holds its own slice of the held-out data"]
+    fields = list(flight.FIELDS)
+    shards = {}
+    for v, name in zip(SEED_VALIDATORS, sorted(flight.EVAL)):          # one unseen airline's email each
+        doc = {name: flight.EVAL[name]}
+        b, bad_b = first_pass_score(doc, model, flight.check, fields=flight.FIELDS, clean=flight.clean)
+        a, bad_a = first_pass_score(doc, routed, flight.check, fields=flight.FIELDS, clean=flight.clean)
+        diffs = [(f in bad_b[name]) - (f in bad_a[name]) for f in fields]
+        shards[v] = {"validator": v, "eval_set": "sha256:" + hashlib.sha256(flight.EVAL[name].encode()).hexdigest(),
+                     "metric": "first-pass field accuracy", "before": b, "after": a, "n": len(fields),
+                     "se": round(_paired_se(diffs), 4), "audit": {"checked": min(10, len(flight_parents)), "bad": 0}}
+    verdicts = {lid: shards}
+    base, v2 = rep["base"]["per_task"], rep["lora-v2"]["per_task"]
+    shards = {}
+    for i, v in enumerate(SEED_VALIDATORS):                            # a third of the 500 problems each
+        ids = sorted((t for t in base if int(t) % 3 == i), key=int)
+        diffs = [int(v2[t]["passed"]) - int(base[t]["passed"]) for t in ids]
+        shards[v] = {"validator": v, "eval_set": "sha256:" + hashlib.sha256(",".join(ids).encode()).hexdigest(),
+                     "metric": "pass@1 with one round of checker feedback", "n": len(ids),
+                     "before": round(sum(base[t]["passed"] for t in ids) / len(ids), 4),
+                     "after": round(sum(v2[t]["passed"] for t in ids) / len(ids), 4),
+                     "se": round(_paired_se(diffs), 4), "audit": {"checked": 10, "bad": 0}}
+    verdicts[lid2] = shards
+    for learning_id, atts in verdicts.items():
+        for v, att in atts.items():
+            ex.commit(learning_id, v, attestation_digest(att, "seed:" + v))
+        for v, att in atts.items():
+            ex.reveal(learning_id, v, att, "seed:" + v)
+    vr, vc = ex.verdict(lid), ex.verdict(lid2)
+    gains = lambda vd: ", ".join(f"{g['gain'] * 100:+.0f}" for g in vd["reveals"])
+    story.append(f"flight routing: validators measured {gains(vr)} points on one airline each (10 fields apiece); "
+                 f"median {vr['median_gain'] * 100:+.0f}, {vr['status']}: three emails can't prove it, so bounty "
+                 f"#{fb['id']} stays open for whoever can")
+    if vr["status"] == "accepted":
+        Client(url, TRAINER).claim_bounty(fb["id"], lid)
+    story.append(f"LoRA v2: three validators on a third of the 500 held-out problems each measured {gains(vc)} points; "
+                 f"median {vc['median_gain'] * 100:+.1f}, {vc['status']}; its TXC vests over 4 epochs")
+    if vc["status"] == "accepted":
+        Client(url, HOST).report_usage(lid2, 400_000)
+        story.append("a host serves the open weights: 400,000 calls ($20) bought TXC from the pool; half was burned")
     return story
 
 

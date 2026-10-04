@@ -112,6 +112,37 @@ class Client:
     def balance(self, address=None):
         return self._call("GET", f"/v0/balances/{address or self.address}")
 
+    # --- coin economy (nodes run with --economy coin) -----------------------------------------------------------------
+    def coin(self):
+        return self._call("GET", "/v0/coin")
+
+    def swap(self, side, amount):
+        """side "buy": spend `amount` dollar micros on TXC; side "sell": sell `amount` TXC units for dollars."""
+        return self._call("POST", "/v0/swap", {"account": self.address, "side": side, "amount": int(amount)})
+
+    def back_with_coins(self, bounty_id, coins):
+        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", {"buyer": self.address, "coins": coins})
+
+    def validators(self):
+        return self._call("GET", "/v0/validators")
+
+    def stake(self, units):
+        return self._call("POST", "/v0/validators", {"address": self.address, "stake_units": int(units)})
+
+    def verdict(self, learning_id):
+        return self._call("GET", f"/v0/learnings/{learning_id}/verdict")
+
+    def commit(self, learning_id, digest, round=None):
+        return self._call("POST", f"/v0/learnings/{learning_id}/commits",
+                          {"validator": self.address, "digest": digest, "round": round})
+
+    def reveal(self, learning_id, attestation, salt, round=None):
+        return self._call("POST", f"/v0/learnings/{learning_id}/reveals",
+                          {"validator": self.address, "attestation": attestation, "salt": salt, "round": round})
+
+    def challenge(self, learning_id):
+        return self._call("POST", f"/v0/learnings/{learning_id}/challenges", {"challenger": self.address})
+
     def faucet(self, address=None):
         """On a testnet node: open a wallet with test credits (no real money)."""
         return self._call("POST", "/v0/faucet", {"address": address or self.address})

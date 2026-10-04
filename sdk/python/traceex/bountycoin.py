@@ -3,7 +3,8 @@ the price rises with supply, so early backers pay less. While the bounty is open
 Coins transfer freely. When a learning claims the bounty, the pool pays the solver and the coin becomes a share of
 the solution: HOLDER_CUT of every metered use of that learning is paid to whoever holds coins at settlement.
 
-Price of the next coin at supply s:  p(s) = BASE + SLOPE * s     (micros of USDC per coin)
+Price of the next coin at supply s:  p(s) = BASE + SLOPE * s     (micros of USDC per coin; a coin-economy node
+                                                               prices the curve in its network coin instead)
 Cost of n coins from supply s:       BASE*n + SLOPE*(s*n + n*n/2)
 The pool always equals the area under the curve up to the current supply, so selling everything back empties it
 exactly. Same maths as contracts/BountyMarket.sol.
@@ -15,24 +16,24 @@ SLOPE = 100            # each coin sold raises the price by $0.0001
 HOLDER_CUT = 0.20      # share of a winning learning's metered revenue paid to coin holders, forever
 
 
-def price(s):
-    return BASE + SLOPE * s
+def price(s, base=BASE, slope=SLOPE):
+    return base + slope * s
 
 
-def cost(s, n):
-    """Micros to buy n coins starting at supply s."""
-    return BASE * n + SLOPE * (s * n + n * n / 2)
+def cost(s, n, base=BASE, slope=SLOPE):
+    """Amount to buy n coins starting at supply s (micros of USDC, or coin units on a coin-economy node)."""
+    return base * n + slope * (s * n + n * n / 2)
 
 
-def coins_for(s, micros):
-    """Coins that `micros` buys starting at supply s (inverse of cost)."""
-    b = BASE + SLOPE * s
-    return (-b + math.sqrt(b * b + 2 * SLOPE * micros)) / SLOPE
+def coins_for(s, amount, base=BASE, slope=SLOPE):
+    """Coins that `amount` buys starting at supply s (inverse of cost)."""
+    b = base + slope * s
+    return (-b + math.sqrt(b * b + 2 * slope * amount)) / slope
 
 
-def sell_value(s, n):
-    """Micros returned for selling n coins back when supply is s."""
-    return cost(s - n, n)
+def sell_value(s, n, base=BASE, slope=SLOPE):
+    """Amount returned for selling n coins back when supply is s."""
+    return cost(s - n, n, base, slope)
 
 
 def pro_rata(amount, holdings):

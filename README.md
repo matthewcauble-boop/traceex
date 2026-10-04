@@ -25,6 +25,22 @@ persistent disk (Render's 0.5 CPU / 512 MB instance + 1 GB disk, about $7.25 a m
 a testnet: every wallet takes $25 of test credits, no real money moves. Steps, limits and operator calls:
 [DEPLOY.md](DEPLOY.md).
 
+## The coin
+
+On a coin-economy node (`--economy coin`, what the hosted testnet runs) contributors earn **TXC** instead of dollars.
+Users still pay dollars; every payment buys TXC from an open pool and burns half of what it buys, and new TXC is
+minted only for learnings a federation of staked validators proves better on data they each hold privately. The pool
+sets the price. Farming is designed to lose: validators are drawn at random after you submit, commit before anyone
+reveals, and the median of their paired measurements decides; trainers bond, validators stake, rewards vest and can
+be clawed back by a challenge; usage can mint at most half of what it burned; copies and padded parents earn nothing.
+
+```
+python examples/farming/attacks.py        # every farming strategy against a real node, with its profit or loss
+```
+
+Every strategy loses against honest work except owning most of the validator stake, the limit of any proof-of-stake
+network. Rules and numbers: SPEC sections 4e and 4f.
+
 ## Join the network: share your traces
 
 ```python
@@ -146,7 +162,9 @@ Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it 
 | [`SPEC.md`](SPEC.md) | the protocol: roles, Trace and Learning objects, the auctions, classifier and bounties, settlement, threats, what v0.1 leaves out |
 | `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, bounty coins, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
 | `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --test-credits 25000000` for a hosted testnet |
-| `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange) |
+| `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a coin node it also stakes three validators and runs the federation on real held-out slices |
+| `node/coin.py`, `node/validator.py` | the coin economy (pool, burn and mint, federated validation, vesting, challenges) and a validator's commit/reveal tool |
+| `examples/farming/` | `attacks.py`: farming strategies run against a real coin node, with profit or loss |
 | `render.yaml`, `DEPLOY.md` | one-click hosting on Render, costs, limits and operator calls |
 | `contracts/` | `Registry.sol` (ownership + family tree), `PayoutDistributor.sol` (per-epoch Merkle root, claim with proof), `BountyMarket.sol` (free bounties, bonding-curve coins, holder revenue share) |
 | `examples/flight_emails/` | the first producer: flight-booking extraction, a rules checker, train and held-out emails, `demo.py` |

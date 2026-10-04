@@ -36,11 +36,36 @@ plan that works for a public exchange.
 
 Every push to `main` redeploys; the disk keeps the data. The seed never runs again on a database that has traces.
 
+## The coin economy
+
+The blueprint runs the node with `TRACEX_ECONOMY=coin`: contributors earn TXC, users pay test dollars that buy TXC
+from the pool and burn half of it, and learnings are accepted by a federation of staked validators (SPEC 4e, 4f).
+On first boot the seed stakes three validators (1,500 TXC each, operator-run) and validates the seeded learnings with
+them: LoRA v2 is accepted on three slices of the 500 held-out problems; the flight routing learning is inconclusive
+(three emails can't prove a gain), so its bounty stays open. The node opens on epoch 3 with that learning's TXC
+vesting.
+
+New learnings are validated by the validators the beacon draws for them. On the testnet those are operator-run, and
+their commits and reveals are relayed with the admin token until validator keys sign them:
+
+```bash
+python node/validator.py --url $URL --token $TOKEN --address 0xVALIDATOR --learning sha256:... \
+    --eval-set sha256:... --metric "pass@1" --before 0.29 --after 0.37 --n 167 --se 0.028 --audit-checked 10
+# run once to commit, again to reveal; GET /v0/learnings/<id>/verdict shows who was drawn and the result
+```
+
+Add a validator: `POST /v0/validators {"address": ..., "stake_units": 1500000000}` with the admin token (the address
+needs the TXC: `POST /v0/swap`). Anyone can challenge an accepted learning while it vests:
+`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes 200 TXC). `GET /v0/coin` shows the price, supply,
+burns, vesting and stake.
+
 ## What it is, and what it isn't yet
 
 It is a **testnet**. Each new wallet can take $25 of test credits once, every spend has to be covered by them, and no
-real money moves. Payouts are still computed exactly and every epoch publishes its Merkle payout root, so the numbers
-are the protocol's numbers.
+real money moves; TXC exists only on this node. Payouts are still computed exactly and every epoch publishes its Merkle
+payout root, so the numbers are the protocol's numbers. Before a real coin: signed wallets and validator keys, a
+validator set large and independent enough that a majority of stake costs far more than the emissions it could take,
+an audited token and payout contract, and a lawyer's read on the coin.
 
 Wallet addresses aren't signed yet: the website makes a random address and keeps it in the browser, and the API trusts
 the address it's given. Before real money: signed requests (EIP-712), validator signatures on attestations, x402 or

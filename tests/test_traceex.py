@@ -250,8 +250,13 @@ class FakeJev:
 
     def classify(self, text):
         self.calls += 1
-        if self.ex is not None:
-            assert not self.ex.lock.locked(), "classified while holding the write lock"
+        if self.ex is not None:                       # another thread can take the lock: nobody holds it now
+            import threading
+            got = []
+            t = threading.Thread(target=lambda: got.append(self.ex.lock.acquire(blocking=False) and (self.ex.lock.release() or True)))
+            t.start()
+            t.join()
+            assert got[0], "classified while holding the write lock"
         return {"path": self.path.split("/"), "confidence": .9, "engine": self.name}
 
 

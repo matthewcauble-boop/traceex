@@ -25,6 +25,8 @@ services:
         value: /var/data/exchange.db
       - key: TRACEX_PUBLIC                 # rate limits on; operator-only calls need the admin token
         value: "1"
+      - key: TRACEX_ECONOMY                # contributors earn TXC; payments buy and burn it (SPEC 4e, 4f)
+        value: coin
       - key: TRACEX_SEED                   # first boot only: load the repo's worked examples
         value: "1"
       - key: TRACEX_TEST_CREDITS           # $25 of test credits per new wallet, in micros

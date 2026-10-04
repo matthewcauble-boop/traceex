@@ -223,6 +223,77 @@ an agent a participant by default.
   fields keep failing, it posts bounty #2 for them, free, with its two failing emails kept on the device as the hidden
   eval, and backs it with $1.00 of its $1.00 budget. On the third email it sees the bounty already stands.
 
+## 4e. The coin economy (testnet v0.2)
+
+Contributors earn a network coin, TXC; users keep paying dollars; the market prices the coin. Run a node with
+`--economy coin` (`node/coin.py`); the v0.1 dollar economy stays the default for the library and its tests.
+
+- **Burn and mint.** Every payment (metered usage, a lot licence, a trace fee) arrives in dollars (test dollars here,
+  USDC on mainnet), buys TXC from the pool, and half of what it buys is burned; the other half goes to the contributors
+  whose work was used, down the family tree. New TXC is minted only for proven value (below) and vests over four
+  epochs. Usage burns are what tie the coin's value to real use; the same pattern runs Helium and Render.
+- **The pool sets the price.** A constant-product pool (Uniswap v2 maths) holds protocol-owned liquidity from
+  genesis: 1,000,000 TXC beside $10,000, so TXC opens at $0.01. Swaps pay 0.3% to the pool; 0.1% of the TXC side of
+  every swap, bounty backing and payout is burned.
+- **Emissions.** 50,000 TXC an epoch at most, halving every 180 epochs, split 70% to newly accepted learnings by their
+  median gain (no single learning takes more than a quarter), 20% to validators per verdict they agreed with (by
+  stake), 10% to learnings by the usage they burned (capped at half of that burn). Whatever isn't earned is simply
+  not minted. Emissions use the protocol's split (traces 60, trainer 25, checkers 10, validators 5) and equal weight
+  per distinct parent, not the trainer's chosen split.
+- **Bounties** stay free to post and are backed in TXC on their bonding curve (the first coin costs 1 TXC, each one
+  sold adds 0.01 TXC); backing with dollars buys TXC on the way in. A solved bounty's pool vests to the solver.
+
+## 4f. Validation by federation, and why farming loses
+
+A learning is accepted by a federation of staked validators, never by its trainer's own attestation.
+
+1. **Pay for proof, not volume.** Only accepted learnings mint; a trace earns only through a learning that passed.
+2. **Validators you can't pick.** Each learning gets `quorum` validators (3 on the testnet), drawn by stake-weighted
+   rendezvous hashing over a beacon published at the settlement *after* it was submitted, so nobody can grind a
+   learning's content for friendly validators.
+3. **Commit, then reveal.** Every assigned validator commits `sha256(attestation + salt)` before any reveal opens, so
+   nobody can copy another's score (Bittensor's weight-copying problem).
+4. **Robust aggregation, as in federated learning.** Each validator measures on its own private held-out data and
+   reports the paired standard error of its gain. The gain that counts is the median. The learning is *accepted* only
+   if `median - 2 x SE(median) >= 1 point`, *inconclusive* if the median clears 1 point but not that bound (bond back
+   minus 10%, no rewards), and *rejected* below it (bond forfeit, half burned, half to the validators who measured it).
+   A validator further from the median than 2.5 of its own standard errors loses 10% of stake, once the challenge
+   window closes, so validators outvoted by a bribed majority keep their stake when a challenge proves them right.
+5. **Skin in the game.** Trainers bond 500 TXC (locked through vesting), validators stake 1,000+ TXC, challengers stake
+   200 TXC. While rewards vest anyone can challenge: a fresh draw of validators re-measures on new eval sets. Upheld:
+   unvested rewards are clawed back (bounty pools return to their backers), the bond goes half to the challenger and
+   half to the burn, and the validators who accepted it lose 25%. Rejected: half the challenger's stake is burned and
+   half compensates the trainer. Validators who sit on an assignment are replaced and lose 5%.
+6. **Paying yourself loses.** Usage minting is capped at half of what that usage burned, so buying your own learning's
+   usage returns less than it costs (Ocean Protocol's wash-consume lesson: fees must exceed rewards).
+7. **Copies and padding earn nothing.** Traces that differ only in placeholder numbering, spacing or case share one
+   attribution slot (the first producer). Every reveal must audit at least 10 of the learning's parents; if the
+   median audit finds more than 10% junk, the parents' share is withheld, and an audit challenge can claw back just
+   that share later.
+8. **A minuscule fee on everything**: $0.0005 per trace, 0.1% of every swap, backing and payout, all burned.
+
+`examples/farming/attacks.py` runs each farming strategy against a real coin node (7 validators, quorum 3, an honest
+watchdog that challenges what it can show is fake) and prints the profit or loss; `tests/test_coin.py` fails the build
+if any of them stops losing:
+
+| attack | vs honest work |
+|---|---|
+| trace spam (1,000 junk traces) | -$0.50 |
+| near-copies of honest traces | -$0.01 |
+| fake learning (+30 points claimed, true gain 0) | -$5.14 (rejected) |
+| fake learning, 1 bribed validator | -$0.51 (inconclusive) |
+| 12 fake learnings, 2 of 7 validators bribed | -$41.29 |
+| wash usage ($100 of one's own usage) | -$80.56 |
+| self-funded bounty solved with one's own learning | -$14.74 |
+| real learning padded with 200 junk parents, honest audits | -$0.10 |
+| the same, lazy audits (caught by an audit challenge) | -$5.20 |
+| a majority of validator stake (4 of 7 seats) | +$526 |
+
+The one strategy that pays is owning most of the validator stake, the standing assumption of every proof-of-stake
+network. On the testnet that takes 4 seats of 1,500 TXC (about $62) against at most $90 of emissions per fake learning
+per epoch. Mainnet has to keep honest stake worth many epochs of emissions and spread across independent validators,
+and size `emission` to the stake that secures it.
+
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
   `PayoutDistributor` (one Merkle root of `(address, amount)` per epoch). One transaction per epoch, no matter how many

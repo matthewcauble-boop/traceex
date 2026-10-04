@@ -210,6 +210,19 @@ input[type=range]{width:100%;accent-color:var(--brand)}
 .pay .coin td:first-child{color:var(--brand)}
 .pay tfoot td{color:var(--brand)}
 .root{font:400 13px/1.55 var(--font);color:var(--text-3);margin-top:14px}
+.coinbox{margin-top:clamp(56px,7vw,96px);border-top:1px solid var(--line);padding-top:clamp(32px,4vw,56px)}
+.coinbox h3{font:600 clamp(24px,2.4vw,32px)/1.15 var(--font);letter-spacing:-.025em}
+.coinbox .sub{margin-top:10px;color:var(--text-2);max-width:62ch}
+.coin-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:20px;margin-top:28px}
+.coin-stats div{font:500 13px/1.4 var(--font);color:var(--text-2)}
+.coin-stats b{display:block;font:600 clamp(24px,2.6vw,34px)/1.1 var(--font);letter-spacing:-.03em;color:var(--text);font-variant-numeric:tabular-nums;margin-bottom:6px}
+@media (max-width:860px){.coin-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.farm{list-style:none;margin:36px 0 0;padding:0;display:grid;gap:14px;max-width:76ch;counter-reset:f}
+.farm li{counter-increment:f;display:grid;grid-template-columns:30px 1fr;gap:8px;color:var(--text-2);font-size:16px;line-height:1.55}
+.farm li::before{content:counter(f, decimal-leading-zero);font:600 13px/26px var(--mono);color:var(--brand)}
+.farm b{color:var(--text);font-weight:600}
+.farm-note{margin-top:22px;font-size:15px;color:var(--text-2);max-width:76ch}
+.farm-note a{color:var(--brand)}
 
 /* open weights */
 .ow{padding-block:clamp(80px,10vw,140px)}
@@ -358,7 +371,7 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
     </div>
     <div class="stats" aria-live="off">
       <div><b id="s-fix">244</b>verified fixes shared</div>
-      <div><b id="s-paid">$11.00</b>in bounty pools</div>
+      <div><b id="s-paid">$11.00</b><span id="s-paid-l">in bounty pools</span></div>
       <div><b id="s-bounty">2</b>open bounties</div>
     </div>
   </div>
@@ -524,6 +537,25 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
         <p class="root">One Merkle root per epoch goes on-chain. Every payee claims with a proof, so a payment of a fraction of a cent is still worth sending.</p>
       </div>
     </div>
+    <div class="coinbox" id="coinbox" hidden>
+      <h3>The coin, live</h3>
+      <p class="sub">Contributors earn TXC. Users pay dollars, which buy TXC from the pool, and half of what they buy is burned. Nobody sets the price; the pool does.</p>
+      <div class="coin-stats" aria-live="off">
+        <div><b id="c-price">$0.0100</b>per TXC</div>
+        <div><b id="c-supply">1,000,000</b>TXC in existence</div>
+        <div><b id="c-burned">0</b>burned by usage and fees</div>
+        <div><b id="c-vesting">0</b>vesting to contributors</div>
+        <div><b id="c-validators">0</b><span id="c-staked">validators</span></div>
+      </div>
+      <ol class="farm">
+        <li><span><b>Paid for proof, not volume.</b> TXC is minted only when validators find a learning better on data they each hold privately. A trace earns only through a learning that passed.</span></li>
+        <li><span><b>Validators you can't pick.</b> They are drawn at random after you submit, commit their scores before anyone reveals, and the median decides, so one bought validator can't move it.</span></li>
+        <li><span><b>Skin in the game.</b> Trainers bond, validators stake, rewards vest for four epochs, and anyone can challenge. Fresh validators re-measure, and a fake is clawed back.</span></li>
+        <li><span><b>Paying yourself loses.</b> Every payment burns half of what it buys, and usage can mint at most half of what it burned.</span></li>
+        <li><span><b>Copies and padding earn nothing.</b> Near-duplicates pay the original producer. Validators audit parents, and padded ones lose their share.</span></li>
+      </ol>
+      <p class="farm-note">Every strategy in <a href="https://github.com/matthewcauble-boop/traceex/blob/main/examples/farming/attacks.py">the attack simulation</a> loses money against honest work, except owning most of the validator stake, which is the limit of any proof-of-stake network.</p>
+    </div>
   </div>
 </section>
 
@@ -606,8 +638,8 @@ agent = AdaptiveAgent(..., autopilot=Autopilot(client, task=..., base_model=...)
     <div class="status">
       <h3>v0.1, live as a testnet</h3>
       <ul>
-        <li><b>Built:</b> spec, Python SDK, the exchange node (website, API and MCP endpoint in one process), classifier engine (TypeSafe Jev, keyword fallback) with ranked search, bounty coins, MCP server and autopilot, open-weights pipeline (LoRA on Qwen2.5), three contracts tested on a local EVM, two demos, 71 tests.</li>
-        <li><b>Settles in</b> test credits on the public testnet, $25 per wallet, with a Merkle payout root every epoch. USDC on an L2 after the contract audit.</li>
+        <li><b>Built:</b> spec, Python SDK, the exchange node (website, API and MCP endpoint in one process), classifier engine (TypeSafe Jev, keyword fallback) with ranked search, the TXC coin economy with federated validation and an attack simulation, bounty coins, MCP server and autopilot, open-weights pipeline (LoRA on Qwen2.5), three contracts tested on a local EVM, two demos, 89 tests.</li>
+        <li><b>Settles in</b> TXC on the public testnet: contributors earn it, test dollars buy and burn it ($25 per wallet), with a Merkle payout root every epoch. Real money after signed wallets and a contract audit.</li>
         <li><b>Not live yet:</b> real-money settlement, signed wallets and validator signatures, staking, x402 payments, contract audit.</li>
       </ul>
     </div>
@@ -982,7 +1014,10 @@ function classify(text) {
 function allPaths(tree = TAXO, pre = '') { let out = []; for (const [k, n] of Object.entries(tree)) { const p = pre ? pre + '/' + k : k; out.push(p); out = out.concat(allPaths(n.c || {}, p)); } return out; }
 
 /* ---- state ---- */
-const live = {mode: 'sample', db: null, user: null, uid: null, canWrite: null, traces: [], bounties: [], learnings: [], feed: [], account: null, counts: null};
+const live = {mode: 'sample', db: null, user: null, uid: null, canWrite: null, traces: [], bounties: [], learnings: [], feed: [], account: null, counts: null,
+              coinMode: false, symbol: 'TXC'};
+const txc = u => (u / 1e6).toLocaleString(undefined, {maximumFractionDigits: Math.abs(u) < 1e8 ? 1 : 0}) + ' ' + live.symbol;
+const coinUsd = u => live.counts && live.counts.coin ? usd(u * live.counts.coin.price_micros / 1e6) : '';
 const chip = $('#live-status');
 function setChip(text, cls) { if (chip) { chip.lastChild.textContent = text; chip.className = 'livechip ' + (cls || ''); } }
 const firstLines = s => String(s || '').split('\n').filter(l => l.trim()).slice(0, 2).join('  ').slice(0, 160);
@@ -1007,7 +1042,16 @@ function stats() {
   const open = live.bounties.filter(b => b.status === 'open').length;
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   const c = live.counts;
-  set('s-fix', (c ? c.traces : live.traces.length).toLocaleString()); set('s-paid', usd(c ? c.pools_open_micros : pools)); set('s-bounty', c ? c.bounties_open : open);
+  set('s-fix', (c ? c.traces : live.traces.length).toLocaleString()); set('s-bounty', c ? c.bounties_open : open);
+  if (live.coinMode && c && c.coin) { set('s-paid', '$' + (c.coin.price_micros / 1e6).toFixed(4)); set('s-paid-l', 'per ' + live.symbol + ', priced by the pool'); renderCoin(); }
+  else set('s-paid', usd(c ? c.pools_open_micros : pools));
+}
+function renderCoin() {
+  const k = live.counts && live.counts.coin; if (!k) return;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('c-price', '$' + (k.price_micros / 1e6).toFixed(4)); set('c-supply', Math.round(k.supply_units / 1e6).toLocaleString());
+  set('c-burned', Math.round(k.burned_units / 1e6).toLocaleString()); set('c-vesting', Math.round(k.vesting_units / 1e6).toLocaleString());
+  set('c-validators', k.validators); set('c-staked', 'validators, ' + Math.round(k.staked_units / 1e6).toLocaleString() + ' ' + live.symbol + ' staked');
 }
 
 /* ---- bounty board ---- */
@@ -1023,9 +1067,11 @@ function renderBoard() {
   if (!list.length) { el.innerHTML = '<p class="empty">No bounties yet. Post the first one, free.</p>'; return; }
   el.innerHTML = list.map(b => {
     const mine = myCoins(b.id), price = BASE + SLOPE * (b.supply || 0), open = b.status === 'open';
+    const poolText = live.coinMode ? txc(b.pool || 0) + ' <span style="color:var(--text-3);font-weight:500">≈ ' + coinUsd(b.pool || 0) + '</span>' : usd(b.pool || 0);
+    const nextText = live.coinMode ? ((b.priceUnits || 0) / 1e6).toFixed(4) + ' ' + live.symbol : '$' + price.toFixed(4);
     return '<div class="bcard"><div class="btop"><span class="pill ' + (open ? 'on' : '') + '">' + esc(b.status || 'open') + '</span><span class="bpath" title="' + esc(b.path + (b.failure ? ' · ' + b.failure : '')) + '">' + esc(b.path) + (b.failure ? ' · ' + esc(b.failure) : '') + '</span></div>' +
       '<h4>' + (b.num ? '<span style="color:var(--text-3)">#' + b.num + '</span> ' : '') + esc(b.title) + '</h4><div class="bmeta"><span>model <b>' + esc(b.model || 'any') + '</b></span><span>target <b>' + Math.round((b.target || 0) * 100) + '%</b></span>' +
-      '<span>pool <b>' + usd(b.pool || 0) + '</b></span><span>coins <b>' + Math.round(b.supply || 0).toLocaleString() + '</b></span><span>next coin <b>$' + price.toFixed(4) + '</b></span>' + closes(b) + '</div>' +
+      '<span>pool <b>' + poolText + '</b></span><span>coins <b>' + Math.round(b.supply || 0).toLocaleString() + '</b></span><span>next coin <b>' + nextText + '</b></span>' + closes(b) + '</div>' +
       (open ? '<div class="bact"><button class="btn gold sm" data-back="' + esc(b.id) + '" data-amt="1000000">Back $1</button><button class="btn gold sm" data-back="' + esc(b.id) + '" data-amt="5000000">Back $5</button>' +
         (mine > 0 ? '<button class="btn ghost sm" data-sell="' + esc(b.id) + '">Sell my ' + mine.toFixed(1) + ' coins</button>' : '') + '</div>' : '') +
       (mine > 0 ? '<p class="mine">You hold ' + mine.toFixed(1) + ' coins: ' + (100 * mine / (b.supply || 1)).toFixed(1) + '% of the holders’ 20% if it’s solved.</p>' : '') + '</div>';
@@ -1038,7 +1084,11 @@ function renderWallet() {
   if (live.mode === 'node') {
     if (!live.account) { w.innerHTML = '<span>Testnet: no real money</span><button class="btn ghost sm" id="open-wallet">Get $25 test credits</button>'; $('#open-wallet').onclick = openWallet; return; }
     const held = Object.values(live.account.coins || {}).filter(c => c > 0).length;
-    w.innerHTML = '<span>Test wallet <b>' + usd(live.account.balance) + '</b> · coins in ' + held + ' bount' + (held === 1 ? 'y' : 'ies') + '</span><code title="your testnet address, kept in this browser">' + esc(short(live.uid)) + '</code>';
+    const coinPart = live.coinMode ? ' · <b>' + txc(live.account.coinUnits || 0) + '</b>' + (live.account.vesting ? ' (+' + txc(live.account.vesting) + ' vesting)' : '') : '';
+    w.innerHTML = '<span>Test wallet <b>' + usd(live.account.balance) + '</b>' + coinPart + ' · coins in ' + held + ' bount' + (held === 1 ? 'y' : 'ies') + '</span>' +
+      (live.coinMode ? '<button class="btn ghost sm" id="buy-txc">Buy ' + live.symbol + ' with $1</button>' : '') +
+      '<code title="your testnet address, kept in this browser">' + esc(short(live.uid)) + '</code>';
+    const bt = $('#buy-txc'); if (bt) bt.onclick = () => buyCoin(bt);
     return;
   }
   if (!live.db) { w.innerHTML = '<span>Open this page in claude.ai to use the live exchange.</span>'; return; }
@@ -1053,7 +1103,7 @@ function renderLearnings() {
   tb.innerHTML = rows.length ? rows.map(L => '<tr><td>' + esc(L.name) + '<span class="w">' + esc(L.kind) + ' · ' + esc(L.model) + ' · ' + esc(L.path) + '</span></td>' +
     '<td>' + (L.before * 100).toFixed(1) + '% → ' + (L.after * 100).toFixed(1) + '%<span class="w">' + esc(L.metric) + (L.p != null ? ' · p = ' + L.p : '') + '</span>' +
     (L.firstTry ? '<span class="w">first try ' + (L.firstTry.before * 100).toFixed(1) + '% → ' + (L.firstTry.after * 100).toFixed(1) + '%' + (L.firstTry.p_value != null ? ' · p = ' + fmtP(L.firstTry.p_value) + (L.firstTry.p_value >= .05 ? ', not significant' : '') : '') + '</span>' : '') + '</td>' +
-    '<td><span class="pill ' + (/^(attested|solved)/.test(L.status) ? 'on' : '') + '">' + esc(L.status) + '</span></td></tr>').join('')
+    '<td><span class="pill ' + (/^(attested|solved|accepted)/.test(L.status) ? 'on' : '') + '">' + esc(L.status) + '</span></td></tr>').join('')
     : '<tr><td colspan="3" class="empty">No learnings registered yet.</td></tr>';
 }
 function renderFeed() {
@@ -1087,16 +1137,17 @@ function myAddress() {
   return a;
 }
 async function nodeLoad(full) {
-  const [st, bs, ls, ev, w] = await Promise.all([api.get('/v0/stats'), api.get('/v0/bounties'), api.get('/v0/learnings?limit=200'),
+  const [st, bs, ls, ev, w] = await Promise.all([api.get('/v0/stats'), api.get('/v0/bounties'), api.get('/v0/learnings?limit=200' + (live.coinMode ? '&all=1' : '')),
     api.get('/v0/events?limit=30'), api.get('/v0/wallets/' + live.uid)]);
   live.counts = st;
   live.bounties = bs.bounties.map(b => ({id: String(b.id), num: b.id, title: b.title, path: b.path, model: b.base_model || 'any', failure: b.failure,
-    target: b.target, pool: b.pool_micros, supply: b.supply, status: b.status, deadline: b.deadline_epoch}));
+    target: b.target, pool: live.coinMode ? b.pool_units : b.pool_micros, priceUnits: b.price_units, supply: b.supply, status: b.status, deadline: b.deadline_epoch}));
   live.learnings = ls.learnings.map(L => ({id: L.id, name: L.name || (L.kind + ' for ' + L.base_model), kind: L.kind, model: L.base_model, path: L.path,
     metric: L.metric, before: L.before, after: L.after, gain: L.gain, p: fmtP(L.p_value), firstTry: L.first_try,
-    status: L.solved_bounty ? 'solved bounty #' + L.solved_bounty : 'attested'}));
+    status: L.solved_bounty ? 'solved bounty #' + L.solved_bounty
+      : live.coinMode ? (L.status === 'accepted' ? 'accepted by ' + L.validators + ' validators' : L.status) : 'attested'}));
   live.feed = ev.events;
-  live.account = w.opened ? {balance: w.balance_micros, coins: w.coins} : null;
+  live.account = w.opened ? {balance: w.balance_micros, coins: w.coins, coinUnits: w.coin_units, vesting: w.vesting_units} : null;
   if (full && window.__tx) window.__tx.refresh();      // re-run the visible search so new traces show up
   stats(); renderBoard(); renderLearnings(); renderFeed(); renderWallet();
 }
@@ -1111,7 +1162,16 @@ async function nodeSearch({q, path, mode, sort, offset}) {
   if (q) p.set('q', q); if (path) p.set('path', path); if (mode) p.set('failure', mode); if (sort) p.set('sort', sort);
   const s = await api.get('/v0/search?' + p);
   return {rows: s.results.map(rowFromHit), total: s.total, facets: s.facets,
-          bounties: s.bounties.map(b => ({path: b.path, text: esc('Bounty #' + b.id + ' · ' + b.title + ' · pool ' + usd(b.pool_micros) + ' · next coin $' + (b.price_micros / 1e6).toFixed(4))}))};
+          bounties: s.bounties.map(b => ({path: b.path, text: esc('Bounty #' + b.id + ' · ' + b.title + ' · pool ' +
+            (live.coinMode ? txc(b.pool_units) + ' · next coin ' + (b.price_units / 1e6).toFixed(4) + ' ' + live.symbol
+                           : usd(b.pool_micros) + ' · next coin $' + (b.price_micros / 1e6).toFixed(4)))}))};
+}
+async function buyCoin(btn) {
+  btn.disabled = true;
+  try { const r = await api.post('/v0/swap', {account: live.uid, side: 'buy', amount: 1000000});
+    toast('Bought ' + txc(r.bought_units) + ' for $1.00. The price is now $' + (r.price_micros / 1e6).toFixed(4) + '.', true); await nodeLoad(false); }
+  catch (e) { toast('Could not buy: ' + e.message); }
+  btn.disabled = false;
 }
 async function openWallet() {
   try { await api.post('/v0/faucet', {address: live.uid}); toast('Wallet opened: $25 of test credits. Back a bounty, post one, or share a fix.', true); await nodeLoad(false); }
@@ -1147,7 +1207,8 @@ async function back(bid, micros, btn) {
     if (!live.account) { toast('Get your $25 of test credits first (button above).'); return; }
     btn.disabled = true;
     try { const r = await api.post('/v0/bounties/' + bid + '/buy', {buyer: live.uid, micros});
-      toast('Backed with ' + usd(micros) + ': ' + r.coins.toFixed(1) + ' coins at $' + (r.avg_price_micros / 1e6).toFixed(4) + ' each.', true); await nodeLoad(false); }
+      const each = live.coinMode ? (r.spent_units / 1e6 / r.coins).toFixed(2) + ' ' + live.symbol : '$' + (r.avg_price_micros / 1e6).toFixed(4);
+      toast('Backed with ' + usd(micros) + (live.coinMode ? ' (' + txc(r.spent_units) + ')' : '') + ': ' + r.coins.toFixed(1) + ' coins at ' + each + ' each.', true); await nodeLoad(false); }
     catch (e) { toast('Could not back it: ' + e.message); }
     btn.disabled = false; return;
   }
@@ -1174,7 +1235,7 @@ async function sell(bid, btn) {
   if (live.mode === 'node') {
     btn.disabled = true;
     try { const r = await api.post('/v0/bounties/' + bid + '/sell', {seller: live.uid, coins: myCoins(bid)});
-      toast('Sold ' + r.sold.toFixed(1) + ' coins back to the curve for ' + usd(r.paid_micros) + '.', true); await nodeLoad(false); }
+      toast('Sold ' + r.sold.toFixed(1) + ' coins back to the curve for ' + (live.coinMode ? txc(r.paid_units) : usd(r.paid_micros)) + '.', true); await nodeLoad(false); }
     catch (e) { toast('Could not sell: ' + e.message); }
     btn.disabled = false; return;
   }
@@ -1273,6 +1334,9 @@ async function start() {
   const node = await detectNode();
   if (node) {
     live.mode = 'node'; live.uid = myAddress();
+    const asset = node.settlement && node.settlement.asset;
+    live.coinMode = !!asset && asset !== 'USDC' && asset !== 'test credits';
+    if (live.coinMode) { live.symbol = asset; const cb = $('#coinbox'); if (cb) cb.hidden = false; }
     if (window.__tx && window.__tx.setOrigin) window.__tx.setOrigin(location.origin);
     if (window.__tx && window.__tx.setRemote) window.__tx.setRemote(nodeSearch);
     const ok = () => setChip('Live exchange · testnet: test credits, no real money', 'on');

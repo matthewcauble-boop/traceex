@@ -90,6 +90,51 @@ def need_address(a, what):
 FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS trace_fts USING fts5(id UNINDEXED, path, signature, model, task, body)"
 
 
+class _Rows:
+    """A statement's result, fetched: what a sqlite3 cursor offers, without holding the connection."""
+
+    def __init__(self, cur):
+        self.rows = cur.fetchall() if cur.description else []
+        self.rowcount, self.lastrowid, self.description = cur.rowcount, cur.lastrowid, cur.description
+        self._i = 0
+
+    def fetchone(self):
+        if self._i >= len(self.rows):
+            return None
+        self._i += 1
+        return self.rows[self._i - 1]
+
+    def fetchall(self):
+        rest, self._i = self.rows[self._i:], len(self.rows)
+        return rest
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class SafeDB:
+    """One SQLite connection shared by the server's threads. Every statement runs under one re-entrant lock (the
+    exchange's own) and comes back fetched, so no cursor outlives the lock and concurrent requests can't collide."""
+
+    def __init__(self, conn, lock):
+        self.conn, self.lock = conn, lock
+
+    def execute(self, sql, args=()):
+        with self.lock:
+            return _Rows(self.conn.execute(sql, args))
+
+    def executescript(self, sql):
+        with self.lock:
+            return self.conn.executescript(sql)
+
+    def commit(self):
+        with self.lock:
+            self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+
 class Exchange:
     def __init__(self, path=":memory:", *, k=10, reserve_micros=1_000, validators=("0x" + "5" * 40,),
                  fee_micros=0, engine=None, test_credits=0, max_db_bytes=0):
@@ -97,7 +142,8 @@ class Exchange:
         spend (coins, bids, metered usage) must be covered by the wallet's balance. 0 = settlement is external
         (x402 / USDC), the reference behaviour."""
         self.path, self.max_db_bytes = path, int(max_db_bytes)
-        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.lock = threading.RLock()
+        self.db = SafeDB(sqlite3.connect(path, check_same_thread=False), self.lock)
         self.db.executescript(SCHEMA)
         self.test_credits = int(test_credits)
         self.quiet = False                        # bulk loads (the seed) write one summary event instead of one per row
@@ -108,7 +154,6 @@ class Exchange:
         except sqlite3.OperationalError:          # SQLite built without FTS5: search falls back to LIKE
             self.fts = False
         self.engine = engine or default_engine()
-        self.lock = threading.Lock()
         self.k, self.reserve, self.validators = k, reserve_micros, list(validators)
         if self._meta("epoch") is None:
             self._set_meta("epoch", "1")
@@ -345,7 +390,8 @@ class Exchange:
         if failure:
             rows = [r for r in rows if failure in modes_of(r[3])]
         open_all = self.bounties(status="open")["bounties"]
-        pool = lambda r: max([b["pool_micros"] for b in open_all if self._feeds(b, r[1], r[2], modes_of(r[3]))] or [0])
+        pool = lambda r: max([b.get("pool_micros", b.get("pool_units", 0)) for b in open_all
+                              if self._feeds(b, r[1], r[2], modes_of(r[3]))] or [0])
         if sort == "relevant":
             rows.sort(key=lambda r: (r[5], -r[4]))
         elif sort == "new":
@@ -843,7 +889,8 @@ MAX_BODY = 64 * 1024
 # On a public node these stay with the operator: attestations and settlement are not signed yet, so whoever could call
 # them could mint payouts. Coin transfers wait for signed wallets for the same reason.
 ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove",
-                "/v0/admin/reclassify"}
+                "/v0/admin/reclassify", "/v0/validators"}
+ADMIN_LEARNING_ACTIONS = {"commits", "reveals"}   # validator messages: operator-relayed until they are signed
 ADMIN_ACTIONS = {"claims", "transfer"}
 
 
@@ -875,6 +922,7 @@ class RateLimit:
 
 def make_handler(ex, public=False, admin_token=None, limiter=None):
     limiter = limiter or (RateLimit() if public else None)
+    coin_mode = getattr(ex, "economy", "") == "coin"
 
     class H(BaseHTTPRequestHandler):
         server_version = "traceX/0.1"
@@ -977,11 +1025,22 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                                                       int(q.get("offset", 0)), q.get("facets") in ("1", "true")))
                 if u.path == "/v0/bounties":
                     return self._send(200, ex.bounties(q.get("path", ""), q.get("status", "")))
+                mv = re.fullmatch(r"/v0/learnings/([^/]+)/verdict", u.path)
+                if mv and coin_mode:
+                    return self._send(200, ex.verdict(mv[1]))
                 if u.path.startswith("/v0/learnings/"):
                     return self._send(200, ex.get_learning(u.path.split("/", 3)[3]))
+                if u.path == "/v0/coin" and coin_mode:
+                    return self._send(200, ex.coin_stats())
+                if u.path == "/v0/validators" and coin_mode:
+                    return self._send(200, ex.validators_list())
+                if u.path == "/v0/quote" and coin_mode:
+                    return self._send(200, ex.quote(q.get("side", "buy"), int(q.get("amount", 0))))
                 if u.path == "/v0/learnings":
+                    extra = {"include_pending": q.get("all") in ("1", "true")} if coin_mode else {}
                     return self._send(200, ex.find_learnings(q.get("path", ""), q.get("model", ""), q.get("kind", ""),
-                                                             float(q.get("min_gain", 0)), min(int(q.get("limit", 20)), 500)))
+                                                             float(q.get("min_gain", 0)), min(int(q.get("limit", 20)), 500),
+                                                             **extra))
                 if u.path == "/v0/stats":
                     return self._send(200, ex.stats())
                 if u.path == "/v0/events":
@@ -1034,13 +1093,28 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                           "/v0/admin/reclassify": lambda b: refile_in_background(ex, b.get("only", "rules"),
                                                                                   int(b.get("limit") or 0)),
                           "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
+                if coin_mode:
+                    routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"), b.get("amount", 0)),
+                                   "/v0/validators": lambda b: ex.register_validator(b.get("address"), b.get("stake_units", 0))})
+                ml = re.fullmatch(r"/v0/learnings/([^/]+)/(commits|reveals|challenges)", self.path)
+                if ml and coin_mode:
+                    lid, act = ml[1], ml[2]
+                    admin = act in ADMIN_LEARNING_ACTIONS
+                    fn = {"commits": lambda b: ex.commit(lid, b["validator"], b["digest"], b.get("round")),
+                          "reveals": lambda b: ex.reveal(lid, b["validator"], b["attestation"], b["salt"], b.get("round")),
+                          "challenges": lambda b: ex.challenge(lid, b["challenger"])}[act]
+                    if admin and not self._admin():
+                        return self._send(403, {"error": "validator messages are relayed by the operator until they are signed"})
+                    return self._send(200, fn(self._body()))
                 fn, admin = routes.get(self.path), self.path in ADMIN_ROUTES
                 m = re.fullmatch(r"/v0/bounties/(\d+)/(claims|buy|sell|transfer)", self.path)
                 if m:
                     i, act = int(m[1]), m[2]
                     admin = act in ADMIN_ACTIONS
                     fn = {"claims": lambda b: ex.claim_bounty(i, b["learning"]),
-                          "buy": lambda b: ex.buy_coins(i, b["buyer"], b["micros"]),
+                          "buy": (lambda b: ex.buy_coins(i, b["buyer"], b.get("micros", 0),
+                                                         units=int(float(b.get("coins", 0)) * 1_000_000))) if coin_mode
+                          else (lambda b: ex.buy_coins(i, b["buyer"], b["micros"])),
                           "sell": lambda b: ex.sell_coins(i, b["seller"], b["coins"]),
                           "transfer": lambda b: ex.transfer_coins(i, b["from"], b["to"], b["coins"])}[act]
                 if not fn:
@@ -1064,8 +1138,12 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
     return H
 
 
-def serve(port=8787, db="exchange.db", host="127.0.0.1", public=False, admin_token=None, **kw):
-    ex = Exchange(db, **kw)
+def serve(port=8787, db="exchange.db", host="127.0.0.1", public=False, admin_token=None, economy="usdc", **kw):
+    if economy == "coin":
+        from coin import CoinExchange                  # the coin economy: node/coin.py
+        ex = CoinExchange(db, **kw)
+    else:
+        ex = Exchange(db, **kw)
     srv = ThreadingHTTPServer((host, port), make_handler(ex, public=public, admin_token=admin_token))
     srv.daemon_threads = True
     return ex, srv
@@ -1115,6 +1193,8 @@ if __name__ == "__main__":
                     help="on an empty database, load the example traces, bounties and learnings")
     ap.add_argument("--test-credits", type=int, default=int(env("TRACEX_TEST_CREDITS", 0)),
                     help="testnet: micros of test credits each new wallet can take once (0 = off)")
+    ap.add_argument("--economy", choices=("usdc", "coin"), default=env("TRACEX_ECONOMY", "usdc"),
+                    help="usdc: contributors are paid in dollars (v0.1). coin: they earn TXC, payments buy and burn it")
     ap.add_argument("--max-db-mb", type=int, default=int(env("TRACEX_MAX_DB_MB", 0)),
                     help="stop taking new traces and bounties when the database file passes this size (0 = no limit)")
     ap.add_argument("--epoch-hours", type=float, default=float(env("TRACEX_EPOCH_HOURS", 0)),
@@ -1124,7 +1204,7 @@ if __name__ == "__main__":
     if a.public and not token:
         print("warning: --public without TRACEX_ADMIN_TOKEN: operator calls are switched off", flush=True)
     os.makedirs(os.path.dirname(os.path.abspath(a.db)), exist_ok=True)
-    ex, srv = serve(a.port, a.db, host=a.host, public=a.public, admin_token=token, k=a.k,
+    ex, srv = serve(a.port, a.db, host=a.host, public=a.public, admin_token=token, k=a.k, economy=a.economy,
                     reserve_micros=a.reserve_micros, test_credits=a.test_credits, max_db_bytes=a.max_db_mb * 1024 * 1024)
     if a.seed:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1135,6 +1215,6 @@ if __name__ == "__main__":
     if ex.engine.name != "rules" and ex.db.execute("SELECT 1 FROM labels WHERE engine = 'rules' LIMIT 1").fetchone():
         print("re-filing keyword-classified traces with", ex.engine.name, refile_in_background(ex), flush=True)
     mode = "public" if a.public else "local"
-    print(f"traceX node on http://{a.host}:{a.port}  (db {a.db}, {mode}, "
+    print(f"traceX node on http://{a.host}:{a.port}  (db {a.db}, {mode}, {a.economy} economy, "
           f"{'testnet' if a.test_credits else 'USDC settlement'}, epochs {a.epoch_hours or 'manual'}h)", flush=True)
     srv.serve_forever()
