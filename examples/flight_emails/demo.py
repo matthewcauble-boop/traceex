@@ -146,7 +146,8 @@ def main(port=8799, live=None):
             acts.append(a)
             if a["action"] == "adopt":
                 print(f"   {name:10} fails {len(out['failing'])} fields -> finds a learning on the exchange "
-                      f"(attested +{a['gain'] * 100:.0f} points on held-out data) and adopts it" + (" automatically" if a.get("adopted") else ""))
+                      f"(attested +{a['gain'] * 100:.0f} points on held-out data) and tries it on this email: "
+                      + ("better, so it adopts it" if a.get("adopted") else "no better here, so it doesn't adopt it"))
             elif a["action"] == "noted":
                 print(f"   {name:10} still fails {len(out['failing'])} fields; no learning fixes them yet (seen {a['seen']}x)")
             elif a["action"] in ("posted_bounty", "backed_existing_bounty"):

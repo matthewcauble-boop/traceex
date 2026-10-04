@@ -1,13 +1,15 @@
 """Bounty coins: posting a bounty is free and mints a coin on a linear bonding curve. Buying coins funds the bounty;
-the price rises with supply, so early backers pay less. While the bounty is open, holders can sell back to the curve.
-Coins transfer freely. When a learning claims the bounty, the pool pays the solver and the coin becomes a share of
-the solution: HOLDER_CUT of every metered use of that learning is paid to whoever holds coins at settlement.
+the price rises with supply, so early backers get more coins for their money. While the bounty is open, holders can
+sell coins back for what they paid (pro rata), never more: a profit there could only come out of later backers'
+money. If it expires unsolved, the pool goes back to the backers by what each put in. Coins transfer freely. When a
+learning claims the bounty, the pool pays the solver and the coin becomes a share of the solution: HOLDER_CUT of
+every metered use of that learning is paid to whoever holds coins at settlement. That share is the early backers'
+reward.
 
 Price of the next coin at supply s:  p(s) = BASE + SLOPE * s     (micros of USDC per coin; a coin-economy node
                                                                prices the curve in its network coin instead)
 Cost of n coins from supply s:       BASE*n + SLOPE*(s*n + n*n/2)
-The pool always equals the area under the curve up to the current supply, so selling everything back empties it
-exactly. Same maths as contracts/BountyMarket.sol.
+Same maths as contracts/BountyMarket.sol.
 """
 import math
 

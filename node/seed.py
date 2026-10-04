@@ -137,6 +137,8 @@ def seed(ex, url):
     for who, price in ((TRAINER, 900_000), (BIDDER2, 600_000), (HOST, 250_000)):
         Client(url, who).bid(lot, price)
     node.clear()
+    if coin_mode:                   # licence money waits for the traces each buyer used: these two name theirs, the
+        _direct(ex, lot, (BIDDER2, HOST))         # trainer's learnings do it for the trainer
     artifact, parents = routing_from_traces(traces)
     artifact["name"] = "Field routing for flight emails"
     before, _ = first_pass_score(flight.EVAL, model, flight.check, fields=flight.FIELDS, clean=flight.clean)
@@ -179,6 +181,8 @@ def seed(ex, url):
     for who, price in ((TRAINER, 2_000_000), (BIDDER4, 1_200_000), (BIDDER3, 900_000)):
         Client(url, who).bid(code_lot, price)
     node.clear()
+    if coin_mode:
+        _direct(ex, code_lot, (BIDDER4, BIDDER3))
     for t in lot2:
         Client(url, t["producer"]).submit(t)
     ev, r, info = _load("eval-lora-v2.json"), rep["lora-v2"], _load("lora-v2", "training.json")
@@ -228,6 +232,13 @@ def seed(ex, url):
     if coin_mode:
         story += federate(ex, url, flight, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
     return story
+
+
+def _direct(ex, lot, buyers):
+    """Buyers that build nothing on the exchange name the traces they used (here: all of them)."""
+    used = [tid for (tid,) in ex.db.execute("SELECT id FROM traces WHERE lot=?", (lot,)).fetchall()]
+    for who in buyers:
+        ex.direct_licence(lot, who, used)
 
 
 def _paired_se(diffs):
@@ -280,10 +291,13 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
     if vr["status"] == "accepted":
         Client(url, TRAINER).claim_bounty(fb["id"], lid)
     story.append(f"LoRA v2: three validators on a third of the 500 held-out problems each measured {gains(vc)} points; "
-                 f"median {vc['median_gain'] * 100:+.1f}, {vc['status']}; its TXC vests over 4 epochs")
+                 f"median {vc['median_gain'] * 100:+.1f}, {vc['status']}: it may now earn, as people use it")
     if vc["status"] == "accepted":
         Client(url, HOST).report_usage(lid2, 400_000)
-        story.append("a host serves the open weights: 400,000 calls ($20) bought TXC from the pool; half was burned")
+        story.append("a host serves the open weights: 400,000 calls ($20) buy TXC from the pool; half is burned, and the "
+                     "protocol mints half of that burn back to LoRA v2's traces, trainer and validators, vesting")
+    story.append("licence money waits for the traces each buyer used: the trainer's learnings name its traces, the "
+                 "other buyers named theirs")
     return story
 
 

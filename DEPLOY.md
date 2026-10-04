@@ -39,11 +39,12 @@ Every push to `main` redeploys; the disk keeps the data. The seed never runs aga
 ## The coin economy
 
 The blueprint runs the node with `TRACEX_ECONOMY=coin`: contributors earn TXC, users pay test dollars that buy TXC
-from the pool and burn half of it, and learnings are accepted by a federation of staked validators (SPEC 4e, 4f).
-On first boot the seed stakes three validators (1,500 TXC each, operator-run) and validates the seeded learnings with
-them: LoRA v2 is accepted on three slices of the 500 held-out problems; the flight routing learning is inconclusive
-(three emails can't prove a gain), so its bounty stays open. The node opens on epoch 3 with that learning's TXC
-vesting.
+from the pool and burn half of it, and the protocol mints at most half of that burn back to the same contributors.
+A federation of staked validators decides which learnings may earn; no verdict mints or moves money by itself
+(SPEC 4e, 4f). On first boot the seed stakes three validators (1,500 TXC each, operator-run) and validates the seeded
+learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's $20 of usage is
+matched; the flight routing learning is inconclusive (three emails can't prove a gain), so its bounty stays open. The
+node opens on epoch 3.
 
 New learnings are validated by the validators the beacon draws for them. On the testnet those are operator-run, and
 their commits and reveals are relayed with the admin token until validator keys sign them:
@@ -55,17 +56,30 @@ python node/validator.py --url $URL --token $TOKEN --address 0xVALIDATOR --learn
 ```
 
 Add a validator: `POST /v0/validators {"address": ..., "stake_units": 1500000000}` with the admin token (the address
-needs the TXC: `POST /v0/swap`). Anyone can challenge an accepted learning while it vests:
+needs the TXC: `POST /v0/swap`). Anyone can challenge an accepted learning, any time:
 `POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes 200 TXC). `GET /v0/coin` shows the price, supply,
-burns, vesting and stake.
+burns, vesting, licence money waiting and stake.
+
+Operator-only, with the admin token:
+
+- **Decoys.** These check that validators measure. Seal a learning's true gain with `coin.decoy_digest(gain, salt)`,
+  fund its bond from any account, and register it with `POST /v0/decoys {"learning": {...}, "digest": ..., "funder": ...}`.
+  It looks like any other learning. Once its validators have revealed, `POST /v0/decoys/unseal
+  {"learning": ..., "gain": ..., "salt": ...}` slashes whoever reported a gain it doesn't have, returns the bond and
+  hides it.
+- **Licence money.** It waits until each buyer shows which traces it used. A buyer's learnings do that automatically.
+  A buyer that builds nothing names the traces: `POST /v0/licences/direct {"lot": ..., "buyer": ..., "traces": [...]}`.
+- **Bounty claims** carry the poster's own measurement on its hidden eval:
+  `POST /v0/bounties/<id>/claims {"learning": ..., "attestation": {"validator": <poster>, "eval_set": ..., "after": ...}}`.
 
 ## What it is, and what it isn't yet
 
 It is a **testnet**. Each new wallet can take $25 of test credits once, every spend has to be covered by them, and no
 real money moves; TXC exists only on this node. Payouts are still computed exactly and every epoch publishes its Merkle
-payout root, so the numbers are the protocol's numbers. Before a real coin: signed wallets and validator keys, a
-validator set large and independent enough that a majority of stake costs far more than the emissions it could take,
-an audited token and payout contract, and a lawyer's read on the coin.
+payout root, so the numbers are the protocol's numbers. Before a real coin: signed wallets, validator and poster
+keys, a public randomness beacon (drand), decoys run by more than the operator, a validator set large and independent
+enough that blocking honest work is out of any one party's reach, an audited token and payout contract, and a lawyer's
+read on the coin.
 
 Wallet addresses aren't signed yet: the website makes a random address and keeps it in the browser, and the API trusts
 the address it's given. Before real money: signed requests (EIP-712), validator signatures on attestations, x402 or

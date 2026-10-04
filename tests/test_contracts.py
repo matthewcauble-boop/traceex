@@ -233,35 +233,34 @@ class BountyMarketTest(EVMCase):
         self.reverts(self.bm.functions.buy(bid, 10 * ONE, c - 1), self.A, "slippage")
         self.tx(self.bm.functions.buy(bid, 10 * ONE, c), self.A)
         self.assertEqual(self.bm.functions.priceNow(bid).call(), bountycoin.BASE + bountycoin.SLOPE * 10)
-        self.buy(bid, self.B, 3 * ONE + 333_333)
-        self.buy(bid, self.C, 7)
+        cb = self.buy(bid, self.B, 3 * ONE + 333_333)
+        cc = self.buy(bid, self.C, 7)
         pool = self.b(bid)["pool"]
         self.assertEqual(self.bal(self.bm.address), pool)
 
-        # A sells in odd slices; nobody can take more than the curve owes them
-        start_a = self.bal(self.A)
+        # A sells in odd slices after B and C bought dearer coins: it gets back what it paid, never more
+        s = self.b(bid)["supply"]
+        self.assertGreater(self.bm.functions.sellValue(s - 10 * ONE, 10 * ONE).call(), c)  # the curve alone would pay
+        start_a = self.bal(self.A)                                             # A more, out of B's and C's money
         self.reverts(self.bm.functions.sell(bid, ONE, 10**12), self.A, "slippage")
         self.reverts(self.bm.functions.sell(bid, 11 * ONE, 0), self.A, "balance")
+        self.reverts(self.bm.functions.sell(bid, 0, 0), self.A, "balance")
         pieces = [1, 333_333, 2_500_001, 7, 999_999, 1, 3, 5, 11]
         pieces.append(10 * ONE - sum(pieces))                                  # rest of A's 10 coins
         for piece in pieces:
             self.tx(self.bm.functions.sell(bid, piece, 0), self.A)
         self.assertEqual(self.bm.functions.balanceOf(bid, self.A).call(), 0)
+        self.assertEqual(self.bal(self.A) - start_a, c)                        # the early backer can't sell into later buys
 
-        # B and C exit; each gets at least the exact area of their slice rounded down
-        for who, coins in [(self.B, 3 * ONE + 333_333), (self.C, 7)]:
-            s = self.b(bid)["supply"]
-            exact = Fraction(bountycoin.BASE * coins, ONE) + Fraction(
-                bountycoin.SLOPE * (2 * (s - coins) * coins + coins * coins), 2 * ONE * ONE)
+        # B and C exit with exactly what they paid
+        for who, coins, paid in [(self.B, 3 * ONE + 333_333, cb), (self.C, 7, cc)]:
             before = self.bal(who)
             self.tx(self.bm.functions.sell(bid, coins, 0), who)
-            self.assertGreaterEqual(self.bal(who) - before, math.floor(exact))
+            self.assertEqual(self.bal(who) - before, paid)
 
         b = self.b(bid)
-        self.assertEqual(b["supply"], 0)
-        self.assertLessEqual(b["pool"], 10)                                     # rounding dust only
-        self.assertEqual(self.bal(self.bm.address), b["pool"])                  # never paid out more than the pool
-        self.assertGreater(self.bal(self.A) - start_a, c)                      # early backer sold into later buys
+        self.assertEqual((b["supply"], b["pool"]), (0, 0))                      # every backer whole, nothing left over
+        self.assertEqual(self.bal(self.bm.address), 0)
 
         # a lone round trip never profits, however it is sliced
         bid2 = self.post()
@@ -315,12 +314,12 @@ class BountyMarketTest(EVMCase):
         self.buy(bid, self.A, ONE)
         self.reverts(self.bm.functions.transfer(bid, "0x" + "00" * 20, ONE), self.A, "zero address")
 
-    def test_expire_after_deadline_and_redeem_pro_rata(self):
+    def test_expire_after_deadline_and_redeem_by_what_each_put_in(self):
         A, B, C = self.A, self.B, self.C
         other = self.post()
         self.buy(other, C, 2 * ONE)                                   # a second bounty's pool must stay untouched
         bid = self.post(epochs_open=1)
-        self.buy(bid, A, 2 * ONE)
+        ca = self.buy(bid, A, 2 * ONE)                                # A's coins are cheaper than B's
         self.buy(bid, B, 5 * ONE + 1)
         pool = self.b(bid)["pool"]
         self.reverts(self.bm.functions.expire(bid), A, "not expirable")
@@ -332,7 +331,7 @@ class BountyMarketTest(EVMCase):
         self.reverts(self.bm.functions.solve(bid, b"\x09" * 32), self.settler, "cannot solve")
         a0, b0 = self.bal(A), self.bal(B)
         self.tx(self.bm.functions.redeem(bid), A)
-        self.assertEqual(self.bal(A) - a0, pool * 2 * ONE // (7 * ONE + 1))
+        self.assertEqual(self.bal(A) - a0, ca)                        # what it put in, not a share by coin count
         self.reverts(self.bm.functions.redeem(bid), A, "nothing to redeem")
         self.tx(self.bm.functions.redeem(bid), B)
         self.assertEqual((self.bal(A) - a0) + (self.bal(B) - b0), pool)  # last redeemer takes the remainder

@@ -1,31 +1,41 @@
-"""The coin economy (testnet v0.2): contributors earn a network coin, users pay in dollars, the market prices the coin.
+"""The coin economy (testnet v0.3): contributors earn a network coin, users pay in dollars, the market prices the coin.
 
     python node/exchange.py --economy coin ...        # or TRACEX_ECONOMY=coin
 
 How value moves
-  * TXC is minted only for proven value: a learning that a federation of validators finds better on eval sets they
-    each hold privately. New coins vest over `vest_epochs` and can be clawed back if a challenge shows the gain was fake.
-  * Users still pay dollars (test dollars here, USDC on mainnet). Every payment buys TXC from the open pool; half of
-    what it buys is burned, half goes to the contributors whose work was used. Usage burns are what give TXC value.
-  * Bounties are free to post and backed in TXC on their bonding curve. A solved bounty's pool vests to the solver.
+  * Users pay dollars (test dollars here, USDC on mainnet). Every payment buys TXC from the open pool; half of what it
+    buys is burned, half goes to the contributors whose work was used. That burn is what gives TXC its value.
+  * New TXC is minted only to match payments: at most half of what a learning's usage burned, to the same contributors,
+    vesting over `vest_epochs` and clawed back if a challenge shows the gain was fake. Nothing is minted for a verdict.
+  * Bounties are free to post and backed in TXC on their bonding curve: early backers get more coins, so a bigger share
+    of the solution's revenue, but selling back returns only what the coins cost and an unsolved bounty refunds by what
+    each backer put in. A bounty pays when its poster, who holds its hidden eval set, measures a validated learning at
+    the target there; the pool vests to the solver.
+  * Licence money waits until its buyer shows which traces it used (the parents its own learnings cite, or a list it
+    sends); those traces share it.
   * The pool (constant product, like Uniswap v2) is the "natural exchange": the protocol never sets a price.
 
 Why farming loses (each rule is a test in tests/test_coin.py and an attack in examples/farming/attacks.py)
-  1. Pay for proof, not volume: only accepted learnings mint; a trace earns only through a learning that passed.
-  2. Validators are assigned at random from a beacon published after the learning was submitted, so a trainer can't
-     pick (or grind for) friendly validators. Assignment is stake-weighted (rendezvous hashing).
-  3. Commit, then reveal: every assigned validator commits a hash of its score before anyone reveals, so nobody can
-     copy another validator's number (Bittensor's weight-copying problem).
-  4. The gain that counts is the median across validators (robust aggregation, as federated learning aggregates
-     updates): one bought validator can't move it. A validator further from the median than its own sample size
-     explains (z-scored) loses stake; honest noise on a small eval set does not.
-  5. Skin in the game: trainers post a bond, validators stake, challengers stake. Bonds stay locked through vesting.
-     A successful challenge on fresh eval sets claws back unvested coins, burns half the bond and pays the challenger.
-  6. Usage minting is capped below the burn it came from, so paying for your own learning always loses (Ocean
-     Protocol's wash-consume lesson: fees must exceed rewards).
-  7. Near-duplicate traces share one attribution slot; emission weights are set by the protocol (equal per distinct
-     parent), not by the trainer; validators can audit parents, and a failed audit withholds the traces' share.
-  8. A minuscule fee on every trace, swap, backing and payout is burned.
+  1. Only payments pay, and whoever pays judges: users pay for a learning after measuring it on their own data, a
+     bounty's poster measures solutions on its own hidden eval, a licence buyer's own learnings decide which traces get
+     its money. Validators' verdicts decide who may earn; they never move money. So a federation captured by a stake
+     majority can block honest work, but it has nothing to print and nothing to take.
+  2. Paying yourself loses: of what a payment buys, its contributors get back at most three quarters (half kept, plus a
+     match of at most half the burn), so wash usage, self-funded bounties and buying your own traces all lose money.
+  3. Validators are drawn at random from a beacon published after a learning is submitted (stake-weighted rendezvous
+     hashing), commit before anyone reveals (Bittensor's weight-copying problem), and measure on data they each hold
+     privately; the median decides (robust aggregation, as federated learning does). A claim more than twice what they
+     measured, beyond the noise, forfeits the bond.
+  4. Forfeits burn: a lost bond, stake or challenge stake goes to nobody, so no verdict is worth buying for the money it
+     moves.
+  5. Validators earn only their share of what the learnings they vouched for go on to earn. Disagreeing isn't a fault:
+     stake is slashed for not showing up, for vouching for a gain a fresh round refuted, or for scoring a decoy (a
+     learning whose true gain only the operator knows) without measuring it.
+  6. Copies and padding earn nothing: a trace with the same fix as an earlier one and a reworded input shares the
+     original's slot; junk that no buyer uses never receives licence money; royalties and matches follow the protocol's
+     split, equal per distinct parent; a learning cited by another passes its slice through to its own traces, so a
+     wrapper around someone's traces takes nothing; padded parents lose their share and half the bond.
+  7. A minuscule fee on every trace, swap, backing and payout is burned.
 
 Units: dollars in micros (1e-6 $), TXC in units (1e-6 TXC).
 """
@@ -36,8 +46,8 @@ import re
 import statistics
 from dataclasses import dataclass
 
-from exchange import (ADDRESS, BOUNTY_SPLIT, Exchange, coin, need_address, split_trace_sale, split_usage, leaf,
-                      build_tree, proof, canonical, object_id, clear_shared, Bid)
+from exchange import (ADDRESS, BOUNTY_SPLIT, MAX_DEPTH, Exchange, coin, need_address, split_trace_sale, split_usage,
+                      leaf, build_tree, proof, canonical, object_id, clear_shared, Bid)
 from traceex.trace import Learning
 
 UNIT = 1_000_000
@@ -52,28 +62,27 @@ class Params:
     protocol_fee_bps: int = 10                 # 0.1% of every swap, backing and payout, burned
     trace_fee_micros: int = 500                # $0.0005 per trace, bought and burned
     burn_share: float = 0.5                    # of the coins a payment buys: half burned, half to contributors
-    emission: int = 50_000 * UNIT              # minted per epoch at most, halving every `halving_epochs`
+    match: float = 0.5                         # then at most half of what a learning's usage burned is minted back
+    emission: int = 50_000 * UNIT              # the most an epoch can mint, halving every `halving_epochs`
     halving_epochs: int = 180
-    pool_improve: float = 0.70                 # newly accepted learnings, by their median gain
-    pool_validators: float = 0.20              # validators who agreed with the median, by stake
-    pool_usage: float = 0.10                   # learnings by usage burned this epoch
-    max_share_per_learning: float = 0.25       # of the improvement pool; the rest is simply not minted
-    usage_cap: float = 0.5                     # usage minting for a learning <= half of what its usage burned
     vest_epochs: int = 4
     quorum: int = 3
     min_gain: float = 0.01
     accept_z: float = 2.0                      # accept only if median gain - 2 standard errors >= min_gain
-    z: float = 2.5                             # consensus tolerance in standard errors of each validator's own sample
+    overclaim: float = 2.0                     # claiming more than twice the measured gain, beyond the noise: bond forfeit
+    z: float = 2.5                             # within 2.5 of its own standard errors of the median: the validator agreed
     min_tol: float = 0.02
+    decoy_z: float = 4.0                       # further than this from a decoy's sealed truth: it wasn't measured
     inconclusive_burn: float = 0.10            # a real-looking but unproven gain: bond back minus 10%, no rewards
     audit_min: int = 10                        # every reveal audits at least this many parents (or all of them)
+    audit_max_bad: float = 0.10
+    pad_burn: float = 0.50                     # parents found padded: their share is withheld and half the bond burns
     learning_bond: int = 500 * UNIT
     validator_min_stake: int = 1_000 * UNIT
     challenge_stake: int = 200 * UNIT
-    outlier_slash: float = 0.10
     noshow_slash: float = 0.05
-    fake_slash: float = 0.25                   # validators who accepted a gain a challenge round couldn't reproduce
-    audit_max_bad: float = 0.10
+    fake_slash: float = 0.25                   # vouched for a gain a fresh round refuted, or scored a decoy unmeasured
+    near_dup: float = 0.3                      # the same distinctive fix, inputs sharing 30% of their words: one trace
     bounty_base: int = UNIT                    # bounty coins: the first costs 1 TXC...
     bounty_slope: int = UNIT // 100            # ...and each one sold adds 0.01 TXC
 
@@ -94,23 +103,58 @@ CREATE TABLE IF NOT EXISTS commits   (learning TEXT, round INT, validator TEXT, 
 CREATE TABLE IF NOT EXISTS reveals   (learning TEXT, round INT, validator TEXT, body TEXT, gain REAL, epoch INT,
                                       agreed INT, PRIMARY KEY (learning, round, validator));
 CREATE TABLE IF NOT EXISTS dups      (trace TEXT PRIMARY KEY, canonical TEXT, key TEXT);
-CREATE TABLE IF NOT EXISTS pending_slash(learning TEXT, validator TEXT, fraction REAL, why TEXT);
-CREATE TABLE IF NOT EXISTS usage_burns(epoch INT, learning TEXT, units INT);
+CREATE TABLE IF NOT EXISTS burns     (epoch INT, kind TEXT, ref TEXT, units INT);
+CREATE TABLE IF NOT EXISTS licence_escrow(id INTEGER PRIMARY KEY, lot TEXT, buyer TEXT, units INT, epoch INT,
+                                          traces TEXT, paid INT DEFAULT 0);
+CREATE TABLE IF NOT EXISTS decoys    (learning TEXT PRIMARY KEY, digest TEXT, funder TEXT, gain REAL,
+                                      unsealed INT DEFAULT 0);
+CREATE TABLE IF NOT EXISTS artifacts (hash TEXT PRIMARY KEY, learning TEXT);
 """
 SLOT = re.compile(r"\{([A-Z]+)_\d+\}")
 
 
+def _norm(s):
+    return re.sub(r"\s+", " ", SLOT.sub(r"{\1}", str(s))).strip().lower()
+
+
 def dup_key(t):
     """Two traces that differ only in placeholder numbering, whitespace or case are the same fix."""
-    norm = lambda s: re.sub(r"\s+", " ", SLOT.sub(r"{\1}", str(s))).strip().lower()
-    body = [t.get("task"), (t.get("base_model") or {}).get("name"), norm(t.get("input", "")),
-            sorted(t.get("fixed_fields", [])), {k: norm(v) for k, v in sorted((t.get("verified_output") or {}).items())}]
+    body = [t.get("task"), (t.get("base_model") or {}).get("name"), _norm(t.get("input", "")),
+            sorted(t.get("fixed_fields", [])), {k: _norm(v) for k, v in sorted((t.get("verified_output") or {}).items())}]
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def fix_key(t):
+    """The fix itself: task, model and verified output. A trace with the same fix as an earlier one and an input that
+    says much the same thing in other words is a reworded copy, and shares the earlier one's slot."""
+    body = [t.get("task"), (t.get("base_model") or {}).get("name"),
+            {k: _norm(v) for k, v in sorted((t.get("verified_output") or {}).items())}]
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def fix_text(t):
+    """What a verified output says once placeholders are taken out. Long enough, it identifies the fix; a skeleton's
+    output ("{CODE}") says nothing, and its traces are told apart by their inputs alone."""
+    return re.sub(r"\{[a-z]+\}", "", " ".join(_norm(v) for _, v in sorted((t.get("verified_output") or {}).items()))).strip()
+
+
+def words(s):
+    return set(re.findall(r"[a-z0-9_{}]+", _norm(s)))
+
+
+def overlap(a, b):
+    """Share of words two inputs have in common (Jaccard)."""
+    return len(a & b) / len(a | b) if a | b else 1.0
 
 
 def attestation_digest(attestation, salt):
     """What a validator commits before revealing: sha256(canonical attestation + salt)."""
     return hashlib.sha256(canonical(attestation) + str(salt).encode()).hexdigest()
+
+
+def decoy_digest(gain, salt):
+    """How the operator seals a decoy's true gain before validators measure it."""
+    return hashlib.sha256(f"{float(gain):.4f}|{salt}".encode()).hexdigest()
 
 
 def standard_error(att):
@@ -137,12 +181,15 @@ class CoinExchange(Exchange):
         super().__init__(path, **kw)
         self.p, self.beacon_delay = params or Params(), int(beacon_delay)
         self.db.executescript(COIN_SCHEMA)
+        if "fix" not in {r[1] for r in self.db.execute("PRAGMA table_info(dups)").fetchall()}:
+            self.db.execute("ALTER TABLE dups ADD COLUMN fix TEXT")             # databases from testnet v0.2
+        self.db.execute("CREATE INDEX IF NOT EXISTS dups_fix ON dups(fix)")
         if self._meta("pool_coin") is None:                     # genesis
             for k, v in (("pool_usd", self.p.genesis_usd), ("pool_coin", self.p.genesis_coins),
                          ("minted", self.p.genesis_coins), ("burned", 0)):
                 self._set_meta(k, v)
             self._set_meta("beacon", hashlib.sha256(b"traceX genesis").hexdigest())
-            self.db.commit()
+        self.db.commit()
 
     # --- accounting -------------------------------------------------------------------------------------------------
     def _m(self, k):
@@ -252,13 +299,21 @@ class CoinExchange(Exchange):
         out = super().submit_trace(t)
         if out.get("duplicate"):
             return out
-        key = dup_key(t)
+        key, fix = dup_key(t), fix_key(t)
         with self.lock:
             if fee:
                 self._credit(t["producer"], -fee, "trace fee")
                 self._burn(self._amm_buy(fee))
             first = self.db.execute("SELECT canonical FROM dups WHERE key=? LIMIT 1", (key,)).fetchone()
-            self.db.execute("INSERT OR IGNORE INTO dups VALUES (?,?,?)", (out["id"], first[0] if first else out["id"], key))
+            if not first and len(fix_text(t)) >= 20:               # the same distinctive fix, its input reworded
+                mine = words(t.get("input", ""))
+                for tid, canon in self.db.execute("SELECT trace, canonical FROM dups WHERE fix=? LIMIT 200", (fix,)).fetchall():
+                    body = self.db.execute("SELECT body FROM traces WHERE id=?", (tid,)).fetchone()
+                    if body and overlap(mine, words(json.loads(body[0]).get("input", ""))) >= self.p.near_dup:
+                        first = (canon,)
+                        break
+            self.db.execute("INSERT OR IGNORE INTO dups (trace, canonical, key, fix) VALUES (?,?,?,?)",
+                            (out["id"], first[0] if first else out["id"], key, fix))
             self.db.commit()
         if first:
             out["near_duplicate_of"] = first[0]
@@ -303,6 +358,7 @@ class CoinExchange(Exchange):
             self._burn(fee)
             self._coin(f"escrow:bounty:{bounty_id}", net, "pool")
             self._set_holding(bounty_id, buyer, self._holding(bounty_id, buyer) + n)
+            self._set_basis(bounty_id, buyer, self._basis(bounty_id, buyer) + net)
             self.db.execute("UPDATE bounties SET pool=pool+?, supply=supply+? WHERE id=?", (net, n, bounty_id))
             self._event(f"bounty #{bounty_id} backed with {units / UNIT:,.1f} {self.p.symbol}: {n:,.1f} coins; "
                         f"pool {(pool + net) / UNIT:,.1f} {self.p.symbol}")
@@ -311,6 +367,9 @@ class CoinExchange(Exchange):
                 "next_price_units": round(coin.price(supply + n, **self._curve()))}
 
     def sell_coins(self, bounty_id, seller, coins):
+        """Sell back while the bounty is open, for what the coins cost and never more: a later backer's money stays
+        theirs. (The curve decides how many coins a payment buys; early backers' reward is their share of the
+        solution's revenue.)"""
         need_address(seller, "seller")
         with self.lock:
             status, pool, supply = self._bounty(bounty_id)
@@ -320,14 +379,18 @@ class CoinExchange(Exchange):
             coins = min(float(coins), have)
             if coins <= 0:
                 raise ValueError("no coins to sell")
-            value = min(int(coin.sell_value(supply, coins, **self._curve())), pool)
+            basis = self._basis(bounty_id, seller)
+            cost = int(basis * coins / have)
+            value = min(cost, pool)
             fee = self._fee(value)
+            self._set_basis(bounty_id, seller, basis - cost)
             self._set_holding(bounty_id, seller, have - coins)
             self.db.execute("UPDATE bounties SET pool=pool-?, supply=supply-? WHERE id=?", (value, coins, bounty_id))
             self._coin(f"escrow:bounty:{bounty_id}", -value, "sell back")
             self._burn(fee)
             self._coin(seller, value - fee, f"bounty {bounty_id} sell")
-            self._event(f"{coins:,.1f} coins of bounty #{bounty_id} sold back for {(value - fee) / UNIT:,.1f} {self.p.symbol}")
+            self._event(f"{coins:,.1f} coins of bounty #{bounty_id} sold back for what they cost, "
+                        f"{(value - fee) / UNIT:,.1f} {self.p.symbol}")
             self.db.commit()
         return {"bounty": bounty_id, "sold": round(coins, 6), "paid_units": value - fee,
                 "next_price_units": round(coin.price(supply - coins, **self._curve()))}
@@ -348,8 +411,7 @@ class CoinExchange(Exchange):
         return out
 
     def _refund_pool(self, bounty_id, pool, memo):
-        holds = dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?", (bounty_id,)).fetchall())
-        for h, m in coin.pro_rata(pool, holds).items():
+        for h, m in coin.pro_rata(pool, self._refund_weights(bounty_id)).items():   # by what each backer put in
             self._move(f"escrow:bounty:{bounty_id}", h, m, memo, payout=True)
 
     def _expire_bounties(self):
@@ -369,7 +431,7 @@ class CoinExchange(Exchange):
                     self.db.commit()
         return super().remove(kind, oid)
 
-    # --- licences: dollars in, half burned, half to the traces' producers ---------------------------------------------
+    # --- licences: dollars in, half burned, the rest waits until the buyer shows which traces it used ------------------
     def clear(self):
         out = []
         with self.lock:
@@ -379,28 +441,78 @@ class CoinExchange(Exchange):
                 by_lot.setdefault(lot, []).append(Bid(bidder, price))
             for lot, bids in sorted(by_lot.items()):
                 winners, price = clear_shared(bids, self.k, self.reserve)
-                traces = self.db.execute("SELECT id, producer, checker FROM traces WHERE lot=? ORDER BY id", (lot,)).fetchall()
+                traces = [tid for (tid,) in self.db.execute("SELECT id FROM traces WHERE lot=? ORDER BY id", (lot,))]
                 if not winners or not traces:
                     continue
-                vals = self._validator_set()
                 for w in winners:
-                    self.db.execute("INSERT INTO licences VALUES (?,?,?,?,?)", (lot, w, price, e, json.dumps([t[0] for t in traces])))
+                    self.db.execute("INSERT INTO licences VALUES (?,?,?,?,?)", (lot, w, price, e, json.dumps(traces)))
                     self._credit(w, -price, f"licence {lot}")
                     _, kept = self._buy_and_burn(price)
-                    per, dust = divmod(kept, len(traces))
-                    for i, (tid, producer, checker) in enumerate(traces):
-                        for acct, m in split_trace_sale(per + (dust if i == 0 else 0), producer,
-                                                         self._checker_author(checker), vals).items():
-                            self._coin(acct, m, f"sale {tid[:19]}", payout=True)
+                    rid = self.db.execute("INSERT INTO licence_escrow (lot, buyer, units, epoch, traces) VALUES (?,?,?,?,?)",
+                                          (lot, w, kept, e, json.dumps(traces))).lastrowid
+                    self._coin(f"escrow:licence:{rid}", kept, "licence")
                 out.append({"lot": lot, "winners": winners, "price_micros": price, "traces": len(traces)})
                 self._event(f"lot {lot.split('|')[0]} cleared: {len(winners)} licence{'s' if len(winners) != 1 else ''} at "
-                            f"${price / 1e6:,.2f}; half the {self.p.symbol} it bought burned, half paid to producers")
+                            f"${price / 1e6:,.2f}; half the {self.p.symbol} it bought burned, the rest waits for the "
+                            "traces each buyer uses")
+            self.db.execute("DELETE FROM bids WHERE epoch=?", (e,))        # cleared once: a second call charges nobody
             self.db.commit()
         return {"epoch": e, "cleared": out}
 
+    def direct_licence(self, lot, buyer, traces):
+        """A buyer names the traces of a lot it used; its licence money for that lot goes to them. Learnings it
+        registers do this for it (their parents are the traces it used). Nobody else can steer a buyer's money."""
+        need_address(buyer, "buyer")
+        traces = set(traces or [])
+        with self.lock:
+            rows = self.db.execute("SELECT id, traces FROM licence_escrow WHERE lot=? AND buyer=? AND paid=0",
+                                   (lot, buyer)).fetchall()
+            if not rows:
+                raise ValueError("none of your licence money is waiting on that lot")
+            trace_info, _ = self._tree()
+            paid = 0
+            for rid, tjson in rows:
+                used = [t for t in json.loads(tjson) if t in traces]
+                if used:
+                    paid += self._pay_licence(rid, used, trace_info)
+            self.db.commit()
+        return {"lot": lot, "buyer": buyer, "paid_units": paid}
+
+    def _pay_licence(self, rid, used, trace_info):
+        lot, units = self.db.execute("SELECT lot, units FROM licence_escrow WHERE id=?", (rid,)).fetchone()
+        vals = self._validator_set()
+        per, dust = divmod(units, len(used))
+        for i, tid in enumerate(sorted(used)):
+            info = trace_info[tid]
+            for acct, m in split_trace_sale(per + (dust if i == 0 else 0), info["producer"], info["checker_author"],
+                                            vals).items():
+                self._move(f"escrow:licence:{rid}", acct, m, f"licence {tid[:19]}", payout=True)
+        self.db.execute("UPDATE licence_escrow SET paid=1 WHERE id=?", (rid,))
+        self._event(f"licence money for lot {lot.split('|')[0]}: {units / UNIT:,.1f} {self.p.symbol} to the "
+                    f"{len(used)} trace{'s' if len(used) != 1 else ''} its buyer used")
+        return units
+
+    def _pay_licences(self):
+        """At settlement: licence money goes to the traces its buyer's own learnings cite, once validators have finished
+        with them and haven't found the parents padded. Junk no buyer uses never receives any."""
+        rows = self.db.execute("SELECT id, buyer, traces FROM licence_escrow WHERE paid=0").fetchall()
+        if not rows:
+            return
+        trace_info, learnings = self._tree()
+        state = {lid: (st, bad) for lid, st, bad in self.db.execute("SELECT learning, status, audit_bad FROM verdicts")}
+        cited = {}                                       # buyer -> the traces its finished, unpadded learnings cite
+        for lid, L in learnings.items():
+            st, bad = state.get(lid, ("pending", None))
+            if st not in ("pending", "challenged", "decoy") and not (bad is not None and bad > self.p.audit_max_bad):
+                cited.setdefault(L.get("trainer"), set()).update(p["trace"] for p in L["parents"])
+        for rid, buyer, tjson in rows:
+            used = [t for t in json.loads(tjson) if t in cited.get(buyer, ())]
+            if used:
+                self._pay_licence(rid, used, trace_info)
+
     # --- validators ---------------------------------------------------------------------------------------------------
     def register_validator(self, address, stake_units):
-        """Stake TXC to join the validator federation. More stake: picked more often, earns more, loses more."""
+        """Stake TXC to join the validator federation. More stake: drawn more often, earns more, loses more."""
         need_address(address, "validator")
         stake = int(stake_units)
         with self.lock:
@@ -443,7 +555,7 @@ class CoinExchange(Exchange):
         return cut
 
     # --- learnings: bonded, validated by a random federation, commit then reveal --------------------------------------
-    def register_learning(self, l):
+    def register_learning(self, l, bond_from=None):
         a = l.get("attestation") or {}
         need_address(l.get("trainer"), "trainer")
         if a and not float(a.get("after", 0)) > float(a.get("before", 1)):
@@ -453,19 +565,30 @@ class CoinExchange(Exchange):
                                     (p["trace"], p["trace"])).fetchone()
             if not known:
                 raise ValueError(f"rejected: unknown parent {p['trace']}")
+        if self._too_deep(l["parents"]):
+            raise ValueError(f"rejected: learnings nest at most {MAX_DEPTH} deep")
         lid = object_id(l)
+        weights = (l.get("artifact") or {}).get("hash")
         with self.lock:
             if self.db.execute("SELECT 1 FROM learnings WHERE id=?", (lid,)).fetchone():
                 return dict(self.verdict(lid), id=lid)
+            if weights:                                  # the same weights under a new name earn nothing new
+                first = self.db.execute("SELECT learning FROM artifacts WHERE hash=?", (weights,)).fetchone()
+                if first:
+                    raise ValueError(f"rejected: these weights are already learning {first[0][:19]}…; a learning built "
+                                     "on it has weights of its own")
             bond = self.p.learning_bond if self.p.quorum > 0 else 0
             if bond:
-                self._need_coins(l["trainer"], bond)
-                self._move(l["trainer"], f"escrow:bond:{lid}", bond, "learning bond")
+                self._need_coins(bond_from or l["trainer"], bond)
+                self._move(bond_from or l["trainer"], f"escrow:bond:{lid}", bond, "learning bond")
             self.db.execute("INSERT INTO learnings VALUES (?,?,?)", (lid, canonical(l).decode(), self.epoch))
             self.db.execute("INSERT INTO verdicts (learning, status, round, bond, trainer, registered) VALUES (?,?,?,?,?,?)",
                             (lid, "pending", 0, bond, l["trainer"], self.epoch))
+            if weights:
+                self.db.execute("INSERT OR IGNORE INTO artifacts VALUES (?,?)", (weights, lid))
             if self.p.quorum <= 0:
-                self._accept(lid, float(a.get("after", 0)) - float(a.get("before", 0)), None)
+                gain = float(a.get("after", 0)) - float(a.get("before", 0))
+                self._accept(lid, gain, None, gain, 0)
             elif self.beacon_delay == 0:
                 self._assign(lid, 0)
             self._event(f"learning submitted for validation: {l['kind']} for {l['base_model']['name']}"
@@ -563,14 +686,25 @@ class CoinExchange(Exchange):
             self.db.commit()
         return dict(self.verdict(lid), revealed=validator)
 
+    def _claim(self, lid):
+        """The trainer's own claim: (gain, its standard error), or None when it made none."""
+        a = json.loads(self.db.execute("SELECT body FROM learnings WHERE id=?", (lid,)).fetchone()[0]).get("attestation") or {}
+        if "after" not in a or "before" not in a:
+            return None
+        return float(a["after"]) - float(a["before"]), standard_error(a)
+
+    def _claimed_gain(self, lid):
+        c = self._claim(lid)
+        return c[0] if c else None
+
     def _finalize(self, lid, rnd):
         rows = [(v, json.loads(b), g) for v, b, g in self.db.execute(
             "SELECT validator, body, gain FROM reveals WHERE learning=? AND round=?", (lid, rnd)).fetchall()]
         if not rows:
             return
         med = statistics.median(g for _, _, g in rows)
-        agreed, over, audits, ses = [], [], [], []
-        for v, a, g in rows:
+        agreed, audits, ses = [], [], []
+        for v, a, g in rows:                              # far from the median is no fault: it only shares in less
             ok = abs(g - med) <= tolerance(a, self.p.z, self.p.min_tol)
             self.db.execute("UPDATE reveals SET agreed=? WHERE learning=? AND round=? AND validator=?", (int(ok), lid, rnd, v))
             if ok:
@@ -579,59 +713,69 @@ class CoinExchange(Exchange):
                 au = a.get("audit") or {}
                 if au.get("checked"):
                     audits.append(float(au.get("bad", 0)) / float(au["checked"]))
-            elif g > med:
-                over.append(v)
         for v in set(self.assigned(lid, rnd)) - {v for v, _, _ in rows}:
             self._slash(v, self.p.noshow_slash, "assigned but did not reveal")
             self.db.execute("DELETE FROM assignments WHERE learning=? AND round=? AND validator=?", (lid, rnd, v))
         se_med = 1.2533 * statistics.median(ses) / math.sqrt(len(ses)) if ses else 1.0
         lower = med - self.p.accept_z * se_med
         audit = statistics.median(audits) if audits else None
-        status = self.db.execute("SELECT status, audit_bad FROM verdicts WHERE learning=?", (lid,)).fetchone()
-        if rnd == 0:
-            if med < self.p.min_gain:
-                self._reject(lid, med, agreed, over)
+        status, prior_bad = self.db.execute("SELECT status, audit_bad FROM verdicts WHERE learning=?", (lid,)).fetchone()
+        if rnd == 0:                                      # an overclaim: beyond twice the gain, allowing both sides' noise
+            claim = self._claim(lid)
+            over = claim is not None and (claim[0] - self.p.accept_z * claim[1]
+                                          > self.p.overclaim * max(med, self.p.min_gain) + self.p.accept_z * se_med)
+            money = not self._decoy(lid)                   # a decoy looks like any verdict; its money waits for the truth
+            if med < self.p.min_gain or over:
+                self._reject(lid, med, over, money)
             elif lower < self.p.min_gain:
-                bond = self._release_bond(lid, to=None)
-                burn = int(bond * self.p.inconclusive_burn)
-                self._burn(burn)
-                trainer = self.db.execute("SELECT trainer FROM verdicts WHERE learning=?", (lid,)).fetchone()[0]
-                self._coin(trainer, bond - burn, "bond back: inconclusive", payout=True)
-                self.db.execute("UPDATE verdicts SET status='inconclusive', gain=? WHERE learning=?", (med, lid))
-                self._event(f"learning inconclusive: median gain {med * 100:+.1f} points, but within the noise of the "
-                            "validators' eval sets; no rewards, bond back minus 10%")
+                self._inconclusive(lid, med, audit, money)
             else:
-                self._accept(lid, med, audit)
-                for v, _, _ in rows:                       # disagreement is settled once the challenge window closes
-                    if v not in agreed:
-                        self.db.execute("INSERT INTO pending_slash VALUES (?,?,?,?)",
-                                        (lid, v, self.p.outlier_slash, "score far from the median"))
-                self._event(f"learning accepted by {len(agreed)} validators: median gain {med * 100:+.1f} points "
-                            f"(at least {lower * 100:+.1f} at 2 standard errors)")
-        elif status[0] == "challenged":
+                self._accept(lid, med, audit, lower, len(agreed), money)
+        elif status == "challenged" and not self._decoy(lid):     # a challenged decoy waits for the operator's unseal
             if med < self.p.min_gain:
                 self._clawback(lid, med)
-            elif audit is not None and audit > self.p.audit_max_bad and (status[1] is None or status[1] <= self.p.audit_max_bad):
+            elif audit is not None and audit > self.p.audit_max_bad and (prior_bad is None or prior_bad <= self.p.audit_max_bad):
                 self._clawback(lid, med, parents_only=True)
             else:
                 self._challenge_failed(lid, med)
 
-    def _reject(self, lid, med, agreed, over):
-        """No gain: the bond is forfeit, half burned and half to the validators who measured it; validators who
-        reported a gain nobody else could see lose stake."""
-        bond = self._release_bond(lid, to=None)
-        share = (bond - bond // 2) // len(agreed) if bond and agreed else 0
-        for v in agreed:
-            self._coin(v, share, "rejected learning's bond", payout=True)
-        self._burn(bond - share * len(agreed))
-        for v in over:
-            self._slash(v, self.p.outlier_slash, "claimed a gain the federation could not see")
-        self.db.execute("UPDATE verdicts SET status='rejected', gain=? WHERE learning=?", (med, lid))
-        self._event(f"learning rejected: validators measured {med * 100:+.1f} points; its bond is forfeit")
+    def _reject(self, lid, med, over, money=True):
+        """No gain the validators can see, or a claim far beyond what they measured: the bond is forfeit, and burned."""
+        if money:
+            self._burn(self._release_bond(lid, to=None))
+        self.db.execute("UPDATE verdicts SET status='rejected', gain=?, note=? WHERE learning=?",
+                        (med, "overclaimed" if over else None, lid))
+        self._event(f"learning rejected: validators measured {med * 100:+.1f} points"
+                    + (", far below what it claimed" if over else "") + "; its bond is burned")
 
-    def _accept(self, lid, gain, audit_bad):
-        self.db.execute("UPDATE verdicts SET status='accepted', gain=?, accepted=?, audit_bad=? WHERE learning=?",
-                        (gain, self.epoch, audit_bad, lid))
+    def _inconclusive(self, lid, med, audit, money=True):
+        if money:
+            bond = self._release_bond(lid, to=None)
+            burn = int(bond * self.p.inconclusive_burn)
+            self._burn(burn)
+            trainer = self.db.execute("SELECT trainer FROM verdicts WHERE learning=?", (lid,)).fetchone()[0]
+            self._coin(trainer, bond - burn, "bond back: inconclusive", payout=True)
+        self.db.execute("UPDATE verdicts SET status='inconclusive', gain=?, audit_bad=? WHERE learning=?", (med, audit, lid))
+        self._event(f"learning inconclusive: median gain {med * 100:+.1f} points, but within the noise of the "
+                    "validators' eval sets; bond back minus 10%")
+
+    def _accept(self, lid, gain, audit, lower, n, money=True):
+        padded = audit is not None and audit > self.p.audit_max_bad
+        self.db.execute("UPDATE verdicts SET status='accepted', gain=?, accepted=?, audit_bad=?, note=? WHERE learning=?",
+                        (gain, self.epoch, audit, "padded" if padded else None, lid))
+        if padded and money:
+            self._pad_burn(lid)
+        self._event(f"learning accepted by {n} validators: median gain {gain * 100:+.1f} points "
+                    f"(at least {lower * 100:+.1f} at 2 standard errors)"
+                    + ("; its parents are padding, so their share is withheld and half the bond burned" if padded else ""))
+
+    def _pad_burn(self, lid):
+        bond = self.db.execute("SELECT bond FROM verdicts WHERE learning=?", (lid,)).fetchone()[0] or 0
+        cut = int(bond * self.p.pad_burn)
+        if cut:
+            self._coin(f"escrow:bond:{lid}", -cut, "padded parents")
+            self._burn(cut)
+            self.db.execute("UPDATE verdicts SET bond=bond-? WHERE learning=?", (cut, lid))
 
     def _release_bond(self, lid, to):
         r = self.db.execute("SELECT bond, trainer FROM verdicts WHERE learning=?", (lid,)).fetchone()
@@ -644,7 +788,7 @@ class CoinExchange(Exchange):
         return r[0]
 
     def verdict(self, lid):
-        r = self.db.execute("SELECT status, round, gain, bond, trainer, registered, accepted, audit_bad, challenger "
+        r = self.db.execute("SELECT status, round, gain, bond, trainer, registered, accepted, audit_bad, challenger, note "
                             "FROM verdicts WHERE learning=?", (lid,)).fetchone()
         if not r:
             raise KeyError(lid)
@@ -652,19 +796,22 @@ class CoinExchange(Exchange):
                    for v, g, ok, rd in self.db.execute(
                        "SELECT validator, gain, agreed, round FROM reveals WHERE learning=? ORDER BY round, validator", (lid,))]
         return {"learning": lid, "status": r[0], "round": r[1], "median_gain": r[2], "bond_units": r[3], "trainer": r[4],
-                "registered_epoch": r[5], "accepted_epoch": r[6], "audit_bad": r[7], "challenger": r[8],
+                "registered_epoch": r[5], "accepted_epoch": r[6], "audit_bad": r[7], "challenger": r[8], "note": r[9],
                 "assigned": self.assigned(lid, r[1]), "committed": self._committed(lid, r[1]), "reveals": reveals,
                 "quorum": self.p.quorum}
 
-    # --- challenges: a fraud-proof window while rewards vest -----------------------------------------------------------
+    # --- challenges: fraud proofs, any time; they take back whatever hasn't vested yet -----------------------------------
     def challenge(self, lid, challenger):
+        """Anyone can challenge an accepted learning at any time by staking `challenge_stake`. Fresh validators
+        re-measure it on new eval sets (and look at its parents); everything it earns vests, so an upheld challenge
+        always has something to take back."""
         need_address(challenger, "challenger")
         with self.lock:
             v = self.db.execute("SELECT status, accepted, round FROM verdicts WHERE learning=?", (lid,)).fetchone()
             if not v:
                 raise KeyError(lid)
-            if v[0] != "accepted" or self.epoch > v[1] + self.p.vest_epochs:
-                raise ValueError("only an accepted learning whose rewards are still vesting can be challenged")
+            if v[0] != "accepted":
+                raise ValueError("only an accepted learning can be challenged")
             self._need_coins(challenger, self.p.challenge_stake)
             self._move(challenger, f"escrow:challenge:{lid}", self.p.challenge_stake, "challenge stake")
             rnd = v[2] + 1
@@ -677,80 +824,99 @@ class CoinExchange(Exchange):
         return self.verdict(lid)
 
     def _clawback(self, lid, med, parents_only=False):
-        r = self.db.execute("SELECT challenger, challenge_stake, round FROM verdicts WHERE learning=?", (lid,)).fetchone()
-        challenger, stake, rnd = r
-        rows = self.db.execute("SELECT id, account, units, released, source, role FROM vesting WHERE learning=? "
-                               "AND status='vesting'", (lid,)).fetchall()
-        for vid, account, units, released, source, role in rows:
-            if parents_only and role != "parents":
-                continue
-            if role and role.startswith("validator:") and int(role.split(":")[1]) >= rnd:
-                continue                                                # the challenge round's validators were right
-            self.db.execute("UPDATE vesting SET status='clawed' WHERE id=?", (vid,))
-            if source.startswith("escrow:bounty:"):                     # the backers get their pool back
-                bid = int(source.rsplit(":", 1)[1])
-                self._refund_pool(bid, units - released, f"bounty {bid} clawed back")
+        """Upheld: unvested rewards stop (bounty pools go back to their backers), the bond burns, the challenger gets its
+        stake back, and the validators who vouched for it lose stake. An audit challenge does the same to the parents'
+        share and half the bond."""
+        challenger, stake, rnd = self.db.execute("SELECT challenger, challenge_stake, round FROM verdicts WHERE learning=?",
+                                                 (lid,)).fetchone()
+        for bid in self._claw(lid, roles=("parents",) if parents_only else None):
+            if not parents_only:
                 self.db.execute("UPDATE bounties SET status='clawed back' WHERE id=?", (bid,))
-        bond = self._release_bond(lid, to=None)
-        if bond:
-            self._burn(bond // 2)
-            self._coin(challenger, bond - bond // 2, "won a challenge", payout=True)
         self._move(f"escrow:challenge:{lid}", challenger, stake, "challenge stake back", payout=True)
         first = [v for (v,) in self.db.execute("SELECT validator FROM reveals WHERE learning=? AND round<? AND agreed=1",
                                                (lid, rnd))]
         for v in first:
             self._slash(v, self.p.fake_slash / (2 if parents_only else 1),
-                        "passed padded parents" if parents_only else "accepted a gain fresh validators could not reproduce")
+                        "passed padded parents" if parents_only else "vouched for a gain fresh validators could not reproduce")
         if parents_only:
-            self.db.execute("UPDATE verdicts SET status='accepted', challenger=NULL, challenge_stake=0, audit_bad=? "
-                            "WHERE learning=?", (1.0, lid))
-            self._event("audit challenge upheld: the learning's parents were padded; their share is clawed back")
+            self._pad_burn(lid)
+            self.db.execute("UPDATE verdicts SET status='accepted', challenger=NULL, challenge_stake=0, audit_bad=?, "
+                            "note='padded' WHERE learning=?", (1.0, lid))
+            self._event("audit challenge upheld: the learning's parents were padding; their share is clawed back and half "
+                        "the bond burned")
         else:
-            self.db.execute("DELETE FROM pending_slash WHERE learning=?", (lid,))      # the dissenters were right
+            self._burn(self._release_bond(lid, to=None))
             self.db.execute("UPDATE verdicts SET status='clawed back', gain=? WHERE learning=?", (med, lid))
-            self._event(f"challenge upheld: fresh validators measured {med * 100:+.1f} points; unvested rewards clawed back")
+            self._event(f"challenge upheld: fresh validators measured {med * 100:+.1f} points; unvested rewards clawed "
+                        "back and the bond burned")
+
+    def _claw(self, lid, roles=None):
+        """Stop a learning's unvested rewards (only `roles`, if given). Unminted coins are simply never minted; a bounty
+        pool's remainder goes back to its backers; escrowed royalties are burned. Returns the bounties refunded."""
+        bounties = set()
+        for vid, units, released, source, role in self.db.execute(
+                "SELECT id, units, released, source, role FROM vesting WHERE learning=? AND status='vesting'", (lid,)).fetchall():
+            if roles and role not in roles:
+                continue
+            self.db.execute("UPDATE vesting SET status='clawed' WHERE id=?", (vid,))
+            left = units - released
+            if source.startswith("escrow:bounty:"):
+                bid = int(source.rsplit(":", 1)[1])
+                self._refund_pool(bid, left, f"bounty {bid} clawed back")
+                bounties.add(bid)
+            elif source.startswith("escrow:") and left:
+                self._coin(source, -left, "clawed back")
+                self._burn(left)
+        return bounties
 
     def _challenge_failed(self, lid, med):
-        r = self.db.execute("SELECT challenger, challenge_stake, trainer FROM verdicts WHERE learning=?", (lid,)).fetchone()
-        challenger, stake, trainer = r
+        challenger, stake = self.db.execute("SELECT challenger, challenge_stake FROM verdicts WHERE learning=?",
+                                            (lid,)).fetchone()
         self._coin(f"escrow:challenge:{lid}", -stake, "challenge lost")
-        self._burn(stake // 2)
-        self._coin(trainer, stake - stake // 2, "challenge against you failed", payout=True)
+        self._burn(stake)
         self.db.execute("UPDATE verdicts SET status='accepted', challenger=NULL, challenge_stake=0 WHERE learning=?", (lid,))
-        self._event(f"challenge rejected: fresh validators reproduced the gain ({med * 100:+.1f} points)")
+        self._event(f"challenge rejected: fresh validators reproduced the gain ({med * 100:+.1f} points); the challenge "
+                    "stake is burned")
 
-    # --- bounty claims vest too ---------------------------------------------------------------------------------------
-    def claim_bounty(self, bounty_id, learning_id):
+    # --- bounties pay on the poster's own measurement -----------------------------------------------------------------
+    def claim_bounty(self, bounty_id, learning_id, attestation=None):
+        """A bounty pays when its poster measures the learning on the bounty's hidden eval set (the poster's own failing
+        cases) at the target: no validator, however many of them one party controls, can give that for the poster. The
+        learning must also be accepted by the federation. The pool then vests to the solver and down the learning's
+        family tree, so a challenge can still claw it back."""
         with self.lock:
-            row = self.db.execute("SELECT status, eval_set, target, pool, base_model FROM bounties WHERE id=?",
+            row = self.db.execute("SELECT status, eval_set, target, pool, base_model, poster FROM bounties WHERE id=?",
                                   (bounty_id,)).fetchone()
             if not row:
                 raise KeyError(f"bounty {bounty_id}")
-            status, eval_set, target, pool, base_model = row
+            status, eval_set, target, pool, base_model, poster = row
             if status != "open":
                 raise ValueError(f"bounty {bounty_id} is {status}")
-            v = self.db.execute("SELECT status FROM verdicts WHERE learning=?", (learning_id,)).fetchone()
+            v = self.db.execute("SELECT status, audit_bad FROM verdicts WHERE learning=?", (learning_id,)).fetchone()
             if not v or v[0] != "accepted":
                 raise ValueError("the learning must be accepted by the validator federation first")
             L = json.loads(self.db.execute("SELECT body FROM learnings WHERE id=?", (learning_id,)).fetchone()[0])
-            vals = set(self._validator_set())
-            claims = [L.get("attestation") or {}] + [json.loads(b) for (b,) in self.db.execute(
-                "SELECT body FROM reveals WHERE learning=?", (learning_id,))]
-            ok = [a for a in claims if a.get("eval_set") == eval_set and a.get("validator") in vals
-                  and float(a.get("after", 0)) >= target]
-            if not ok:
-                raise ValueError("no staked validator attested this learning on the bounty's eval set at the target")
+            if not any(a.get("eval_set") == eval_set and a.get("validator") == poster and float(a.get("after", 0)) >= target
+                       for a in (L.get("attestation") or {}, attestation or {})):
+                raise ValueError("the poster holds this bounty's hidden eval set: a claim needs the poster's own "
+                                 "measurement there, at the target")
             if base_model and L["base_model"]["name"] != base_model:
                 raise ValueError(f"the bounty is for {base_model}")
-            trace_info, learnings = self._tree()
-            payout = split_usage(pool, dict(L, royalty=dict(L["royalty"], split=BOUNTY_SPLIT)), trace_info,
-                                 self._agreed(learning_id) or self._validator_set(), learnings)
-            for acct, m in payout.items():
-                self._vest(acct, m, f"escrow:bounty:{bounty_id}", learning_id)
+            padded = v[1] is not None and v[1] > self.p.audit_max_bad
+            shares = self._shares(learning_id, pool, BOUNTY_SPLIT, withhold=padded)
+            payout = {}
+            for role, payees in shares.items():
+                for acct, m in payees.items():
+                    self._vest(acct, m, f"escrow:bounty:{bounty_id}", learning_id, role)
+                    payout[acct] = payout.get(acct, 0) + m
+            rest = pool - sum(payout.values())
+            if rest > 0:                                     # padded parents' part, and rounding: back to the backers
+                self._refund_pool(bounty_id, rest, f"bounty {bounty_id} refund")
             self.db.execute("UPDATE bounties SET status='solved', winner=?, learning=? WHERE id=?",
                             (L["trainer"], learning_id, bounty_id))
-            self._event(f"bounty #{bounty_id} solved: {pool / UNIT:,.1f} {self.p.symbol} vests to the solver and the traces "
-                        f"over {self.p.vest_epochs} epochs; its coins now earn {coin.HOLDER_CUT:.0%} of every use")
+            self._event(f"bounty #{bounty_id} solved on its poster's own eval: {pool / UNIT:,.1f} {self.p.symbol} vests "
+                        f"to the solver and the traces over {self.p.vest_epochs} epochs; its coins now earn "
+                        f"{coin.HOLDER_CUT:.0%} of every use")
             self.db.commit()
         return {"bounty": bounty_id, "status": "solved", "winner": L["trainer"], "pool_units": pool, "vesting": payout}
 
@@ -765,6 +931,97 @@ class CoinExchange(Exchange):
             if tid in trace_info and canon in trace_info:
                 trace_info[tid] = trace_info[canon]
         return trace_info, learnings
+
+    def _nested(self, learnings):
+        """Learnings as they count when another learning cites them: each passes its whole slice through to its own
+        traces and checkers, equal per distinct parent (copies count as their original). A trainer and its validators
+        are paid for their own learning's use, not again whenever another learning cites it, so wrapping someone's
+        traces in a learning of one's own, with whatever terms, diverts nothing."""
+        canon = dict(self.db.execute("SELECT trace, canonical FROM dups").fetchall())
+        through = {"traces": 6 / 7, "checkers": 1 / 7, "trainer": 0.0, "validators": 0.0}
+        return {lid: dict(L, royalty=dict(L["royalty"], split=through),
+                          parents=[{"trace": p, "weight": 1}
+                                   for p in sorted({canon.get(q["trace"], q["trace"]) for q in L["parents"]})])
+                for lid, L in learnings.items()}
+
+    def _split_tree(self):
+        trace_info, learnings = self._tree()
+        return trace_info, self._nested(learnings)
+
+    def _shares(self, lid, amount, split=None, withhold=False, tree=None):
+        """Who gets `amount` earned by a learning: by role, on the protocol's split (not the trainer's terms), with equal
+        weight per distinct parent (a copy counts as its original), so neither terms nor padding can tilt it; a parent
+        learning passes its slice on to its own traces (see _nested). With `withhold` (the parents were found padded)
+        the parents' part goes to nobody. Returns {role: {account: units}}; what it leaves out (withheld parts,
+        rounding) the caller burns or refunds."""
+        L = json.loads(self.db.execute("SELECT body FROM learnings WHERE id=?", (lid,)).fetchone()[0])
+        parents = sorted({self._canonical(p["trace"]) for p in L["parents"]})
+        split = dict(split or Learning.DEFAULT_SPLIT)
+        trace_info, learnings = tree or self._split_tree()
+        validators = self._agreed(lid) or self._validator_set()
+        out = {}
+        for role, keys in (("learner", ("trainer", "validators")), ("parents", ("traces", "checkers"))):
+            if role == "parents" and (withhold or not parents):
+                continue
+            part = int(amount * sum(split[k] for k in keys))
+            sub = {k: (split[k] if k in keys else 0) for k in split}
+            L2 = dict(L, parents=[{"trace": p, "weight": 1 / max(len(parents), 1)} for p in parents],
+                      royalty=dict(L["royalty"], split=sub))
+            out[role] = split_usage(part, L2, trace_info, validators, learnings)
+        return out
+
+    def _padded(self, lid):
+        r = self.db.execute("SELECT audit_bad FROM verdicts WHERE learning=?", (lid,)).fetchone()
+        return bool(r and r[0] is not None and r[0] > self.p.audit_max_bad)
+
+    # --- decoys: does a validator measure, or only answer? ------------------------------------------------------------
+    def register_decoy(self, learning, digest, funder):
+        """Operator: submit a learning whose true gain only the operator knows, sealed as decoy_digest(gain, salt), its
+        bond paid by `funder`. Nothing about it differs from other learnings until validators have revealed; then
+        unseal_decoy() opens the truth and slashes every validator whose score sits further from it than its own sample
+        can explain: it never measured. This replaces slashing for disagreement, which a majority could aim at the
+        honest minority."""
+        need_address(funder, "funder")
+        out = self.register_learning(learning, bond_from=funder)
+        with self.lock:
+            self.db.execute("INSERT OR REPLACE INTO decoys (learning, digest, funder) VALUES (?,?,?)",
+                            (out["id"], str(digest), funder))
+            self.db.commit()
+        return out
+
+    def _decoy(self, lid):
+        return self.db.execute("SELECT 1 FROM decoys WHERE learning=? AND unsealed=0", (lid,)).fetchone() is not None
+
+    def unseal_decoy(self, lid, gain, salt):
+        with self.lock:
+            r = self.db.execute("SELECT digest, funder, unsealed FROM decoys WHERE learning=?", (lid,)).fetchone()
+            if not r:
+                raise KeyError(lid)
+            if r[2]:
+                raise ValueError("this decoy is already unsealed")
+            if decoy_digest(gain, salt) != r[0]:
+                raise ValueError("that is not the truth this decoy was sealed with")
+            status = self.db.execute("SELECT status, challenger, challenge_stake FROM verdicts WHERE learning=?",
+                                     (lid,)).fetchone()
+            if status[0] == "pending":
+                raise ValueError("unseal a decoy once its validators have revealed")
+            caught = []
+            for v, body, g in self.db.execute("SELECT validator, body, gain FROM reveals WHERE learning=? AND round=0",
+                                              (lid,)).fetchall():
+                if abs(g - float(gain)) > tolerance(json.loads(body), self.p.decoy_z, self.p.min_tol):
+                    self._slash(v, self.p.fake_slash, "scored a decoy without measuring it")
+                    caught.append(v)
+            if status[0] == "challenged" and status[2]:                     # a watchdog caught it first: stake back
+                self._move(f"escrow:challenge:{lid}", status[1], status[2], "challenge stake back", payout=True)
+            self._release_bond(lid, to=r[1])
+            self._claw(lid)
+            self.db.execute("UPDATE verdicts SET status='decoy', challenger=NULL, challenge_stake=0 WHERE learning=?", (lid,))
+            self.db.execute("UPDATE decoys SET unsealed=1, gain=? WHERE learning=?", (float(gain), lid))
+            self._event(f"a decoy was unsealed (true gain {float(gain) * 100:+.0f} points): "
+                        + (f"{len(caught)} validator{'s' if len(caught) != 1 else ''} scored it without measuring and "
+                           "lost stake" if caught else "every validator measured it"))
+            self.db.commit()
+        return {"learning": lid, "caught": caught}
 
     # --- vesting ----------------------------------------------------------------------------------------------------
     def _vest(self, account, units, source, learning, role=None):
@@ -793,84 +1050,57 @@ class CoinExchange(Exchange):
             self.db.execute("UPDATE vesting SET released=?, status=? WHERE id=?",
                             (due, "done" if due >= units else "vesting", vid))
 
-    # --- emissions ----------------------------------------------------------------------------------------------------
+    # --- emissions: a match on what payments burned, nothing for a verdict ----------------------------------------------
     def emission(self, epoch=None):
         e = self.epoch if epoch is None else epoch
         return self.p.emission >> ((e - 1) // self.p.halving_epochs)
 
-    def _grant_tree(self, lid, amount, withhold_traces=False):
-        """Mint (vesting) for one learning on the protocol's split, with equal weight per distinct parent, so a trainer
-        can't tilt emissions toward their own traces. The trainer's and validators' part and the parents' part vest as
-        separate grants, so a failed parent audit can claw back the parents' part alone."""
-        L = json.loads(self.db.execute("SELECT body FROM learnings WHERE id=?", (lid,)).fetchone()[0])
-        parents = sorted({self._canonical(p["trace"]) for p in L["parents"]})
-        split = dict(Learning.DEFAULT_SPLIT)
-        trace_info, learnings = self._tree()
-        validators = self._agreed(lid) or self._validator_set()
-        granted = 0
-        for role, keys in (("learner", ("trainer", "validators")), ("parents", ("traces", "checkers"))):
-            if role == "parents" and (withhold_traces or not parents):
-                continue
-            part = int(amount * sum(split[k] for k in keys))
-            sub = {k: (split[k] if k in keys else 0) for k in split}
-            L2 = dict(L, parents=[{"trace": p, "weight": 1 / max(len(parents), 1)} for p in parents],
-                      royalty=dict(L["royalty"], split=sub))
-            for acct, m in split_usage(part, L2, trace_info, validators, learnings).items():
-                self._vest(acct, m, "mint", lid, role)
-                granted += m
-        return granted
-
-    def _emit(self):
-        e, E = self.epoch, self.emission()
-        minted = {"improve": 0, "validators": 0, "usage": 0}
-        fresh = self.db.execute("SELECT learning, gain, audit_bad FROM verdicts WHERE status='accepted' AND emitted=0 "
-                                "AND accepted <= ?", (e,)).fetchall()
-        pool = int(E * self.p.pool_improve)
-        total = sum(max(g, 0) for _, g, _ in fresh)
-        for lid, g, bad in fresh:
-            share = min(int(pool * max(g, 0) / total) if total else 0, int(pool * self.p.max_share_per_learning))
-            minted["improve"] += self._grant_tree(lid, share, withhold_traces=bad is not None and bad > self.p.audit_max_bad)
-            self.db.execute("UPDATE verdicts SET emitted=1 WHERE learning=?", (lid,))
-        # validators are paid per verdict they agreed with, tied to that learning: a clawback takes it back
-        agreed = self.db.execute("SELECT r.validator, r.learning, r.round, v.stake FROM reveals r JOIN validators v "
-                                 "ON v.address=r.validator WHERE r.epoch=? AND r.agreed=1", (e,)).fetchall()
-        vpool = int(E * self.p.pool_validators)
-        wsum = sum(s for _, _, _, s in agreed)
-        for v, lid, rnd, s in agreed:
-            m = int(vpool * s / wsum) if wsum else 0
-            self._vest(v, m, "mint", lid, f"validator:{rnd}")
-            minted["validators"] += m
-        burns = dict(self.db.execute("SELECT learning, SUM(units) FROM usage_burns WHERE epoch=? GROUP BY learning", (e,)))
-        accepted = {lid for (lid,) in self.db.execute("SELECT learning FROM verdicts WHERE status='accepted'")}
-        burns = {lid: b for lid, b in burns.items() if lid in accepted}
-        upool, bsum = int(E * self.p.pool_usage), sum(burns.values())
-        for lid, b in burns.items():
-            alloc = min(int(upool * b / bsum), int(b * self.p.usage_cap))
-            minted["usage"] += self._grant_tree(lid, alloc)
-        return minted
+    def _emit(self, tree=None):
+        """Mint only against payments: for each accepted learning, `match` of what its usage burned this epoch, on the
+        protocol's split, vesting. An epoch never mints more than its emission cap; what isn't earned isn't minted."""
+        ok = {lid for (lid,) in self.db.execute("SELECT learning FROM verdicts WHERE status='accepted'")}
+        want = {lid: int(u * self.p.match) for lid, u in self.db.execute(
+            "SELECT ref, SUM(units) FROM burns WHERE epoch=? AND kind='usage' GROUP BY ref", (self.epoch,)) if lid in ok}
+        total, cap = sum(want.values()), self.emission()
+        minted = 0
+        for lid, w in sorted(want.items()):
+            amount = w if total <= cap else w * cap // total
+            for role, payees in self._shares(lid, amount, withhold=self._padded(lid), tree=tree).items():
+                for acct, m in payees.items():
+                    self._vest(acct, m, "mint", lid, role)
+                    minted += m
+        return {"match": minted}
 
     # --- settlement -------------------------------------------------------------------------------------------------
     def settle(self):
         with self.lock:
             e = self.epoch
             self._expire_bounties()
-            trace_info, learnings = self._tree()
+            raw = self._tree()
+            tree = (raw[0], self._nested(raw[1]))
             solved = {lid: bid for bid, lid in self.db.execute("SELECT id, learning FROM bounties WHERE status='solved'")}
             for lid, consumer, calls in self.db.execute(
                     "SELECT learning, consumer, SUM(calls) FROM usage WHERE epoch=? GROUP BY learning, consumer", (e,)).fetchall():
-                L = learnings[lid]
-                micros = calls * L["royalty"]["per_call_micros"]
+                micros = calls * raw[1][lid]["royalty"]["per_call_micros"]
                 self._credit(consumer, -micros, f"usage {lid[:19]}")
                 burned, kept = self._buy_and_burn(micros)
-                self.db.execute("INSERT INTO usage_burns VALUES (?,?,?)", (e, lid, burned))
+                self.db.execute("INSERT INTO burns VALUES (?,?,?,?)", (e, "usage", lid, burned))
                 if lid in solved:
                     holds = dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?", (solved[lid],)))
                     cut = coin.pro_rata(int(kept * coin.HOLDER_CUT), holds)
                     for h, m in cut.items():
                         self._coin(h, m, f"bounty {solved[lid]} coin", payout=True)
                     kept -= sum(cut.values())
-                for acct, m in split_usage(kept, L, trace_info, self._agreed(lid) or self._validator_set(), learnings).items():
-                    self._coin(acct, m, f"royalty {lid[:19]}", payout=True)
+                paid = 0                                 # royalties on the protocol's split; padded parents' part burns
+                for role, payees in self._shares(lid, kept, withhold=self._padded(lid), tree=tree).items():
+                    for acct, m in payees.items():
+                        if role == "parents":            # vests, so an audit challenge can still take it back
+                            self._coin(f"escrow:royalty:{lid}", m, f"royalty {lid[:19]}")
+                            self._vest(acct, m, f"escrow:royalty:{lid}", lid, role)
+                        else:
+                            self._coin(acct, m, f"royalty {lid[:19]}", payout=True)
+                        paid += m
+                self._burn(kept - paid)
             # rounds that ran out of time: settle with the majority that revealed, or re-draw validators
             for lid, rnd in self.db.execute(
                     "SELECT v.learning, v.round FROM verdicts v WHERE v.status IN ('pending','challenged') AND EXISTS "
@@ -880,15 +1110,13 @@ class CoinExchange(Exchange):
                     self._finalize(lid, rnd)
                 else:
                     self._redraw(lid, rnd)
-            minted = self._emit()
+            minted = self._emit(tree)
             self._release()
             for lid, trainer in self.db.execute("SELECT learning, trainer FROM verdicts WHERE status='accepted' AND bond > 0 "
                                                 "AND accepted + ? <= ?", (self.p.vest_epochs, e)).fetchall():
-                self._release_bond(lid, to=trainer)
-                for v, frac, why in self.db.execute("SELECT validator, fraction, why FROM pending_slash WHERE learning=?",
-                                                    (lid,)).fetchall():
-                    self._slash(v, frac, why)
-                self.db.execute("DELETE FROM pending_slash WHERE learning=?", (lid,))
+                if not self._decoy(lid):
+                    self._release_bond(lid, to=trainer)
+            self._pay_licences()
             payouts = {}
             for a, u in self.db.execute("SELECT account, SUM(units) FROM coin_ledger WHERE epoch=? AND payout=1 AND units > 0 "
                                         "GROUP BY account", (e,)):
@@ -905,7 +1133,8 @@ class CoinExchange(Exchange):
             for lid, rnd in self.db.execute("SELECT learning, round FROM verdicts WHERE status='challenged'").fetchall():
                 self._assign(lid, rnd, exclude=self.assigned(lid, rnd - 1))
             self._event(f"epoch {e} settled: {sum(payouts.values()) / UNIT:,.0f} {self.p.symbol} paid out, "
-                        f"{sum(minted.values()) / UNIT:,.0f} granted (vesting), price ${self.price() / 1e6:.4f}", force=True)
+                        f"{sum(minted.values()) / UNIT:,.0f} minted to match usage (vesting), price ${self.price() / 1e6:.4f}",
+                        force=True)
             self._set_meta("epoch", e + 1)
             self.db.commit()
         return {"epoch": e, "root": root, "total_units": sum(payouts.values()), "claims": claims, "granted": minted,
@@ -925,15 +1154,18 @@ class CoinExchange(Exchange):
         return {"symbol": self.p.symbol, "price_micros": self.price(), "supply_units": self.supply(),
                 "minted_units": self._m("minted"), "burned_units": self._m("burned"),
                 "pool": {"usd_micros": self._m("pool_usd"), "coin_units": self._m("pool_coin")},
-                "emission_units": self.emission(), "halving_epochs": self.p.halving_epochs,
+                "emission_cap_units": self.emission(), "halving_epochs": self.p.halving_epochs,
                 "vesting_units": one("SELECT COALESCE(SUM(units - released),0) FROM vesting WHERE status='vesting'"),
+                "licence_escrow_units": one("SELECT COALESCE(SUM(units),0) FROM licence_escrow WHERE paid=0"),
                 "validators": one("SELECT COUNT(*) FROM validators WHERE stake >= ?", self.p.validator_min_stake),
                 "staked_units": one("SELECT COALESCE(SUM(stake),0) FROM validators"),
-                "learnings": dict(self.db.execute("SELECT status, COUNT(*) FROM verdicts GROUP BY status")),
-                "rules": {"burn_share": self.p.burn_share, "protocol_fee_bps": self.p.protocol_fee_bps,
-                          "trace_fee_micros": self.p.trace_fee_micros, "quorum": self.p.quorum,
-                          "vest_epochs": self.p.vest_epochs, "learning_bond_units": self.p.learning_bond,
-                          "validator_min_stake_units": self.p.validator_min_stake, "usage_cap": self.p.usage_cap}}
+                "learnings": dict(self.db.execute("SELECT status, COUNT(*) FROM verdicts WHERE status != 'decoy' "
+                                                  "GROUP BY status")),
+                "rules": {"burn_share": self.p.burn_share, "match": self.p.match,
+                          "protocol_fee_bps": self.p.protocol_fee_bps, "trace_fee_micros": self.p.trace_fee_micros,
+                          "quorum": self.p.quorum, "vest_epochs": self.p.vest_epochs, "overclaim": self.p.overclaim,
+                          "learning_bond_units": self.p.learning_bond,
+                          "validator_min_stake_units": self.p.validator_min_stake}}
 
     def stats(self):
         s = super().stats()
@@ -956,7 +1188,7 @@ class CoinExchange(Exchange):
         keep = []
         for L in out["learnings"]:
             v = self.verdict(L["id"])
-            if v["status"] != "accepted" and not include_pending:
+            if v["status"] == "decoy" or (v["status"] != "accepted" and not include_pending):
                 continue
             gain = v["median_gain"] if v["median_gain"] is not None else L["gain"]
             if gain < float(min_gain):

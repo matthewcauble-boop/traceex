@@ -104,9 +104,20 @@ class AdaptiveAgent:
                 L = act.get("learning")
                 fresh = L and L.get("id") not in {a.get("id") for a in self.adopted}
                 if act["action"] == "adopt" and fresh and L["artifact"].get("body", {}).get("kind") == "routing":
-                    self.adopt(L)
-                    act["adopted"] = True
+                    act["adopted"] = self.helps(L, text)
+                    if act["adopted"]:
+                        self.adopt(L)
         return out
+
+    def helps(self, learning, text):
+        """Try a learning on this agent's own failing case before adopting it: its first pass has to get more fields
+        right than the agent does now. Whatever validators attested, an agent only takes on (and pays for) what helps
+        on its own traffic."""
+        trial = apply_routing(self.base_extract, learning["artifact"], self.narrow)
+        doc = {"case": text}
+        now, _ = first_pass_score(doc, self.extract, self.check, fields=self.fields, clean=self.clean)
+        then, _ = first_pass_score(doc, trial, self.check, fields=self.fields, clean=self.clean)
+        return then > now
 
     def adopt(self, learning):
         art = learning["artifact"]

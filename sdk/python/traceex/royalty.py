@@ -3,6 +3,7 @@ every split sums exactly to the amount paid."""
 from collections import defaultdict
 
 TRACE_SALE_SPLIT = {"producer": 0.85, "checker": 0.10, "validators": 0.05}
+MAX_DEPTH = 32          # learnings nest at most this deep: nodes refuse deeper chains, and payouts never recurse further
 
 
 def _apportion(amount, weights):
@@ -29,11 +30,12 @@ def split_trace_sale(amount, producer, checker_author, validators):
     return dict(out)
 
 
-def split_usage(amount, learning, trace_info, validators, learning_info=None):
+def split_usage(amount, learning, trace_info, validators, learning_info=None, _depth=0):
     """Royalties for metered use of a learning, propagated down the family tree.
 
     trace_info: {trace_id: {"producer": addr, "checker_author": addr}}
     learning_info: {learning_id: learning dict} for learnings that cite other learnings as parents.
+    A part that would go deeper than MAX_DEPTH learnings is left out (the caller sees the shortfall).
     """
     split = learning["royalty"]["split"]
     parts = _apportion(amount, split)
@@ -47,7 +49,7 @@ def split_usage(amount, learning, trace_info, validators, learning_info=None):
         for pid, m in _apportion(parts.get(share, 0), parents).items():
             if pid in trace_info:
                 out[trace_info[pid][role]] += m
-            elif learning_info and pid in learning_info:            # a parent learning: recurse
-                for a, mm in split_usage(m, learning_info[pid], trace_info, validators, learning_info).items():
+            elif learning_info and pid in learning_info and _depth < MAX_DEPTH:      # a parent learning: recurse
+                for a, mm in split_usage(m, learning_info[pid], trace_info, validators, learning_info, _depth + 1).items():
                     out[a] += mm
     return dict(out)

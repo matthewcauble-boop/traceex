@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk", "python"
 from traceex import canonical, object_id  # noqa: E402
 from traceex.client import privacy_leaks  # noqa: E402
 from traceex.auction import Bid, clear_shared  # noqa: E402
-from traceex.royalty import split_trace_sale, split_usage  # noqa: E402
+from traceex.royalty import split_trace_sale, split_usage, MAX_DEPTH  # noqa: E402
 from traceex.merkle import leaf, build_tree, proof  # noqa: E402
 from traceex.classify import classify, default_engine, nodes, RulesEngine, TAXONOMY_VERSION  # noqa: E402
 from traceex import bountycoin as coin  # noqa: E402
@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS bounties (id INTEGER PRIMARY KEY, poster TEXT, title 
                                      supply REAL DEFAULT 0, deadline INT, status TEXT, winner TEXT, learning TEXT,
                                      epoch INT);
 CREATE TABLE IF NOT EXISTS holdings (bounty INT, holder TEXT, coins REAL, PRIMARY KEY (bounty, holder));
+CREATE TABLE IF NOT EXISTS bases    (bounty INT, holder TEXT, amount INT, PRIMARY KEY (bounty, holder));
 CREATE TABLE IF NOT EXISTS events   (id INTEGER PRIMARY KEY, at TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS grants   (account TEXT PRIMARY KEY, micros INT, at TEXT, source TEXT);
 """
@@ -513,6 +514,20 @@ class Exchange:
     def _set_holding(self, bounty_id, holder, coins):
         self.db.execute("INSERT OR REPLACE INTO holdings VALUES (?,?,?)", (bounty_id, holder, max(coins, 0.0)))
 
+    def _basis(self, bounty_id, holder):
+        """What a holder has put into a bounty and not yet taken out: its cost basis."""
+        r = self.db.execute("SELECT amount FROM bases WHERE bounty=? AND holder=?", (bounty_id, holder)).fetchone()
+        return r[0] if r else 0
+
+    def _set_basis(self, bounty_id, holder, amount):
+        self.db.execute("INSERT OR REPLACE INTO bases VALUES (?,?,?)", (bounty_id, holder, max(int(amount), 0)))
+
+    def _refund_weights(self, bounty_id):
+        """Refunds go back by what each holder put in, never by coin count: cheap early coins don't claim a share of
+        later backers' money."""
+        bases = dict(self.db.execute("SELECT holder, amount FROM bases WHERE bounty=? AND amount > 0", (bounty_id,)).fetchall())
+        return bases or dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?", (bounty_id,)).fetchall())
+
     def buy_coins(self, bounty_id, buyer, micros):
         """Spend `micros` on the curve. Every micro goes into the bounty's pool."""
         micros = int(micros)
@@ -526,6 +541,7 @@ class Exchange:
             self._need_funds(buyer, micros)
             n = coin.coins_for(supply, micros)
             self._set_holding(bounty_id, buyer, self._holding(bounty_id, buyer) + n)
+            self._set_basis(bounty_id, buyer, self._basis(bounty_id, buyer) + micros)
             self.db.execute("UPDATE bounties SET pool=pool+?, supply=supply+? WHERE id=?", (micros, n, bounty_id))
             self._credit(buyer, -micros, f"bounty {bounty_id} coins")
             self._event(f"bounty #{bounty_id} backed with ${micros / 1e6:,.2f}: {n:,.1f} coins at "
@@ -535,7 +551,9 @@ class Exchange:
                 "next_price_micros": round(coin.price(supply + n)), "pool_micros": pool + micros}
 
     def sell_coins(self, bounty_id, seller, coins):
-        """While a bounty is open, sell coins back to the curve at the current price."""
+        """While a bounty is open, sell coins back for what they cost (pro rata), never more: any profit could only come
+        out of later backers' money. The curve decides how many coins a dollar buys, so early backers hold a bigger
+        share of the solution's revenue; that is their reward."""
         need_address(seller, "seller")
         with self.lock:
             status, pool, supply = self._bounty(bounty_id)
@@ -545,11 +563,14 @@ class Exchange:
             coins = min(float(coins), have)
             if coins <= 0:
                 raise ValueError("no coins to sell")
-            value = min(int(coin.sell_value(supply, coins)), pool)
+            basis = self._basis(bounty_id, seller)
+            cost = int(basis * coins / have)
+            value = min(cost, pool)
+            self._set_basis(bounty_id, seller, basis - cost)
             self._set_holding(bounty_id, seller, have - coins)
             self.db.execute("UPDATE bounties SET pool=pool-?, supply=supply-? WHERE id=?", (value, coins, bounty_id))
             self._credit(seller, value, f"bounty {bounty_id} sell")
-            self._event(f"{coins:,.1f} coins of bounty #{bounty_id} sold back to the curve for ${value / 1e6:,.2f}")
+            self._event(f"{coins:,.1f} coins of bounty #{bounty_id} sold back for what they cost, ${value / 1e6:,.2f}")
             self.db.commit()
         return {"bounty": bounty_id, "sold": round(coins, 6), "paid_micros": value,
                 "next_price_micros": round(coin.price(supply - coins))}
@@ -564,6 +585,10 @@ class Exchange:
             coins = float(coins)
             if coins <= 0 or coins > have + 1e-9:
                 raise ValueError(f"{sender} holds {have:.6f} coins")
+            basis = self._basis(bounty_id, sender)                 # the coins carry what they cost
+            moved = int(basis * min(coins / have, 1.0))
+            self._set_basis(bounty_id, sender, basis - moved)
+            self._set_basis(bounty_id, to, self._basis(bounty_id, to) + moved)
             self._set_holding(bounty_id, sender, have - coins)
             self._set_holding(bounty_id, to, self._holding(bounty_id, to) + coins)
             self.db.commit()
@@ -639,26 +664,24 @@ class Exchange:
         return trace_info, learnings
 
     def _expire_bounties(self):
-        """At settlement, a bounty unsolved past its deadline returns its pool to coin holders, pro rata."""
+        """At settlement, a bounty unsolved past its deadline returns its pool to its backers, by what each put in."""
         for bid, pool in self.db.execute(
                 "SELECT id, pool FROM bounties WHERE status='open' AND deadline < ?", (self.epoch,)).fetchall():
-            holds = dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?", (bid,)).fetchall())
-            for h, m in coin.pro_rata(pool, holds).items():
+            for h, m in coin.pro_rata(pool, self._refund_weights(bid)).items():
                 self._credit(h, m, f"bounty {bid} refund")
             self.db.execute("UPDATE bounties SET status='expired', pool=0 WHERE id=?", (bid,))
-            self._event(f"bounty #{bid} expired unsolved: ${pool / 1e6:,.2f} refunded to its coin holders pro rata")
+            self._event(f"bounty #{bid} expired unsolved: ${pool / 1e6:,.2f} back to its backers, by what each put in")
 
     def remove(self, kind, oid):
-        """Operator takedown. A bounty is withdrawn and its pool refunded to coin holders pro rata; a trace leaves the
-        index and search (its record stays, so royalties already owed down a learning's tree still add up)."""
+        """Operator takedown. A bounty is withdrawn and its pool refunded to its backers, by what each put in; a trace
+        leaves the index and search (its record stays, so royalties already owed down a learning's tree still add up)."""
         with self.lock:
             if kind == "bounty":
                 r = self.db.execute("SELECT status, pool FROM bounties WHERE id=?", (int(oid),)).fetchone()
                 if not r:
                     raise KeyError(f"bounty {oid}")
                 if r[0] == "open":
-                    holds = dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?", (int(oid),)).fetchall())
-                    for h, m in coin.pro_rata(r[1], holds).items():
+                    for h, m in coin.pro_rata(r[1], self._refund_weights(int(oid))).items():
                         self._credit(h, m, f"bounty {oid} refund")
                 self.db.execute("UPDATE bounties SET status='removed', pool=0, title='(removed)' WHERE id=?", (int(oid),))
                 self.db.execute("DELETE FROM events WHERE text LIKE ?", (f"bounty #{int(oid)} %",))
@@ -721,12 +744,28 @@ class Exchange:
                 out.append({"lot": lot, "winners": winners, "price_micros": price, "traces": len(traces)})
                 self._event(f"lot {lot.split('|')[0]} cleared: {len(winners)} licence{'s' if len(winners) != 1 else ''} "
                             f"at ${price / 1e6:,.2f}, paid to {len(traces)} traces' producers")
+            self.db.execute("DELETE FROM bids WHERE epoch=?", (e,))        # cleared once: a second call charges nobody
             self.db.commit()
         return {"epoch": e, "cleared": out}
 
     def _checker_author(self, checker_id):
         r = self.db.execute("SELECT author FROM checkers WHERE id=?", (checker_id,)).fetchone()
         return r[0] if r else self.validators[0]
+
+    def _too_deep(self, parents):
+        """Would a learning citing these parents sit more than MAX_DEPTH learnings deep? Walked level by level, so it
+        stops at MAX_DEPTH however long a chain someone built."""
+        frontier, depth = {p["trace"] for p in parents}, 0
+        while frontier:
+            bodies = [r[0] for r in (self.db.execute("SELECT body FROM learnings WHERE id=?", (pid,)).fetchone()
+                                     for pid in frontier) if r]
+            if not bodies:
+                return False
+            depth += 1
+            if depth >= MAX_DEPTH:
+                return True
+            frontier = {p["trace"] for b in bodies for p in json.loads(b)["parents"]}
+        return False
 
     def register_learning(self, l):
         a = l.get("attestation") or {}
@@ -738,6 +777,8 @@ class Exchange:
                                     (p["trace"], p["trace"])).fetchone()
             if not known:
                 raise ValueError(f"rejected: unknown parent {p['trace']}")
+        if self._too_deep(l["parents"]):
+            raise ValueError(f"rejected: learnings nest at most {MAX_DEPTH} deep")
         lid = object_id(l)
         with self.lock:
             new = self.db.execute("INSERT OR IGNORE INTO learnings VALUES (?,?,?)",
@@ -865,12 +906,14 @@ class Exchange:
                 "settlement": settlement, "privacy": ["skeleton", "open"],
                 "start_here": ["GET /v0/taxonomy", "GET /v0/search", "GET /v0/learnings", "GET /v0/bounties"]}
 
-    def provenance(self, oid):
+    def provenance(self, oid, _depth=0):
         r = self.db.execute("SELECT body FROM learnings WHERE id=?", (oid,)).fetchone()
         if r:
             L = json.loads(r[0])
+            parents = ([dict(p, **self.provenance(p["trace"], _depth + 1)) for p in L["parents"]]
+                       if _depth < MAX_DEPTH else [dict(p, truncated=True) for p in L["parents"]])
             return {"id": oid, "type": "learning", "trainer": L["trainer"], "attestation": L["attestation"],
-                    "parents": [dict(p, **self.provenance(p["trace"])) for p in L["parents"]]}
+                    "parents": parents}
         r = self.db.execute("SELECT producer, lot FROM traces WHERE id=?", (oid,)).fetchone()
         if r:
             return {"id": oid, "type": "trace", "producer": r[0], "lot": r[1]}
@@ -889,7 +932,7 @@ MAX_BODY = 64 * 1024
 # On a public node these stay with the operator: attestations and settlement are not signed yet, so whoever could call
 # them could mint payouts. Coin transfers wait for signed wallets for the same reason.
 ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove",
-                "/v0/admin/reclassify", "/v0/validators"}
+                "/v0/admin/reclassify", "/v0/validators", "/v0/decoys", "/v0/decoys/unseal", "/v0/licences/direct"}
 ADMIN_LEARNING_ACTIONS = {"commits", "reveals"}   # validator messages: operator-relayed until they are signed
 ADMIN_ACTIONS = {"claims", "transfer"}
 
@@ -1095,7 +1138,10 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                           "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
                 if coin_mode:
                     routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"), b.get("amount", 0)),
-                                   "/v0/validators": lambda b: ex.register_validator(b.get("address"), b.get("stake_units", 0))})
+                                   "/v0/validators": lambda b: ex.register_validator(b.get("address"), b.get("stake_units", 0)),
+                                   "/v0/decoys": lambda b: ex.register_decoy(b["learning"], b["digest"], b["funder"]),
+                                   "/v0/decoys/unseal": lambda b: ex.unseal_decoy(b["learning"], b["gain"], b["salt"]),
+                                   "/v0/licences/direct": lambda b: ex.direct_licence(b["lot"], b["buyer"], b["traces"])})
                 ml = re.fullmatch(r"/v0/learnings/([^/]+)/(commits|reveals|challenges)", self.path)
                 if ml and coin_mode:
                     lid, act = ml[1], ml[2]
@@ -1111,7 +1157,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                 if m:
                     i, act = int(m[1]), m[2]
                     admin = act in ADMIN_ACTIONS
-                    fn = {"claims": lambda b: ex.claim_bounty(i, b["learning"]),
+                    fn = {"claims": (lambda b: ex.claim_bounty(i, b["learning"], b.get("attestation"))) if coin_mode
+                          else (lambda b: ex.claim_bounty(i, b["learning"])),
                           "buy": (lambda b: ex.buy_coins(i, b["buyer"], b.get("micros", 0),
                                                          units=int(float(b.get("coins", 0)) * 1_000_000))) if coin_mode
                           else (lambda b: ex.buy_coins(i, b["buyer"], b["micros"])),

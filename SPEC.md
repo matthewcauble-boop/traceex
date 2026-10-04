@@ -142,8 +142,11 @@ get solved with learnings or packages that are then sold. The classifier engine 
   it shares in the solution. A bounty names a taxonomy branch (optionally a failure mode and base model), a hidden eval set by
   hash, and the score a solution must reach.
   - *Backing:* anyone buys the bounty's coin on a linear bonding curve (`price = $0.01 + $0.0001 × supply`); every
-    dollar goes into the bounty's pool. Early backers pay less per coin. While the bounty is open, holders can sell
-    back to the curve; coins transfer freely at any time, so a coin can be sold on when its value rises.
+    dollar goes into the bounty's pool. Early backers pay less per coin, so they hold a bigger share of the solution's
+    revenue. While the bounty is open, holders can sell coins back for what they paid for them, never more (any profit
+    there could only come out of later backers' money); unsolved at the deadline, the pool goes back to the backers by
+    what each put in. Coins transfer freely at any time (they carry what they cost), so a coin can be sold on, holder
+    to holder, when its value rises.
   - *Matching:* new traces that match an open bounty are flagged on submission, so producers see where their fixes
     are wanted and trainers see the demand next to the supply in search.
   - *Solving:* a learning claims the bounty when its validator attestation is on that same eval set and reaches the
@@ -219,80 +222,123 @@ an agent a participant by default.
   gain first, each with its branch (from the traces it was built from), release, price and artifact;
   `GET /v0/learnings/{id}` returns the whole learning for adoption.
 - **Measured (examples/flight_emails, step 6):** a fresh agent on autopilot meets a date format its model can't read.
-  On the first failure it finds the routing learning on the exchange and adopts it by itself; when the same four
-  fields keep failing, it posts bounty #2 for them, free, with its two failing emails kept on the device as the hidden
-  eval, and backs it with $1.00 of its $1.00 budget. On the third email it sees the bounty already stands.
+  On the first failure it finds the routing learning on the exchange and tries it on that email before adopting it
+  (`AdaptiveAgent.helps`: the first pass must get more fields right); it doesn't help there, so it isn't adopted. When
+  the same four fields keep failing, it posts bounty #2 for them, free, with its two failing emails kept on the device
+  as the hidden eval, and backs it with $1.00 of its $1.00 budget. On the third email it sees the bounty already
+  stands.
 
-## 4e. The coin economy (testnet v0.2)
+## 4e. The coin economy (testnet v0.3)
 
 Contributors earn a network coin, TXC; users keep paying dollars; the market prices the coin. Run a node with
 `--economy coin` (`node/coin.py`); the v0.1 dollar economy stays the default for the library and its tests.
 
-- **Burn and mint.** Every payment (metered usage, a lot licence, a trace fee) arrives in dollars (test dollars here,
+- **Burn and match.** Every payment (metered usage, a lot licence, a trace fee) arrives in dollars (test dollars here,
   USDC on mainnet), buys TXC from the pool, and half of what it buys is burned; the other half goes to the contributors
-  whose work was used, down the family tree. New TXC is minted only for proven value (below) and vests over four
-  epochs. Usage burns are what tie the coin's value to real use; the same pattern runs Helium and Render.
+  whose work was used. New TXC is minted only to match that: for each accepted learning, at most half of what its
+  usage burned that epoch, to the same contributors, vesting over four epochs. Nothing is minted for a verdict, a
+  submission or a stake. Usage burns tie the coin's value to real use, as in Render (operators are minted for jobs
+  users paid for) and Helium, which moved rewards from proof-of-coverage, farmed by GPS spoofers, toward paid data.
 - **The pool sets the price.** A constant-product pool (Uniswap v2 maths) holds protocol-owned liquidity from
   genesis: 1,000,000 TXC beside $10,000, so TXC opens at $0.01. Swaps pay 0.3% to the pool; 0.1% of the TXC side of
   every swap, bounty backing and payout is burned.
-- **Emissions.** 50,000 TXC an epoch at most, halving every 180 epochs, split 70% to newly accepted learnings by their
-  median gain (no single learning takes more than a quarter), 20% to validators per verdict they agreed with (by
-  stake), 10% to learnings by the usage they burned (capped at half of that burn). Whatever isn't earned is simply
-  not minted. Emissions use the protocol's split (traces 60, trainer 25, checkers 10, validators 5) and equal weight
-  per distinct parent, not the trainer's chosen split.
+- **An emission cap, not a target.** At most 50,000 TXC an epoch, halving every 180 epochs; when an epoch's matches
+  add up to more, each is scaled down. Whatever isn't earned isn't minted.
+- **The protocol's split.** Royalties and matches go traces 60, trainer 25, checkers 10, validators 5, with equal
+  weight per distinct parent (a copy counts as its original), whatever split the trainer asked for. A learning cited
+  by another learning takes no cut of its own there: its slice passes through to its own traces and checkers, so
+  wrapping someone's traces in a learning of one's own diverts nothing. The trainer and validators are paid as usage
+  settles; the parents' part vests over four epochs, so an audit challenge can claw it back. Learnings nest at most 32
+  deep.
+- **Licences.** A licence payment's kept half waits in escrow until its buyer shows which of the lot's traces it used:
+  the parents its own learnings cite, once validators are done with them, or a list it sends
+  (`POST /v0/licences/direct`). Those traces share it (producer 85, checker 10, validators 5).
 - **Bounties** stay free to post and are backed in TXC on their bonding curve (the first coin costs 1 TXC, each one
-  sold adds 0.01 TXC); backing with dollars buys TXC on the way in. A solved bounty's pool vests to the solver.
+  sold adds 0.01 TXC); backing with dollars buys TXC on the way in. The curve decides how many coins a payment buys:
+  early backers hold a bigger share of the solution's revenue. Selling back returns what the coins cost, never more,
+  and an unsolved bounty refunds its backers by what each put in, so nobody can cash out later backers' money (the
+  same rule holds on the dollar node and in `contracts/BountyMarket.sol`). A bounty pays when its poster measures an
+  accepted learning on the bounty's hidden eval at the target (the poster's attestation comes with the claim); the
+  pool vests to the solver and down the family tree (trainer 70, traces 20, checkers 5, validators 5).
 
 ## 4f. Validation by federation, and why farming loses
 
-A learning is accepted by a federation of staked validators, never by its trainer's own attestation.
+The rule everything else follows: **only payments pay, and whoever pays judges.** A federation of staked validators
+decides which learnings are accepted, and only accepted learnings can earn; but no verdict moves money by itself.
+Users pay for a learning after trying it on their own data, a bounty's poster measures solutions on its own hidden
+eval, and a licence buyer's own learnings decide which traces get its money. So a federation captured by a majority
+of stake can still block honest work, but it has nothing to print and nothing to take.
 
-1. **Pay for proof, not volume.** Only accepted learnings mint; a trace earns only through a learning that passed.
-2. **Validators you can't pick.** Each learning gets `quorum` validators (3 on the testnet), drawn by stake-weighted
+1. **Validators you can't pick.** Each learning gets `quorum` validators (3 on the testnet), drawn by stake-weighted
    rendezvous hashing over a beacon published at the settlement *after* it was submitted, so nobody can grind a
    learning's content for friendly validators.
-3. **Commit, then reveal.** Every assigned validator commits `sha256(attestation + salt)` before any reveal opens, so
+2. **Commit, then reveal.** Every assigned validator commits `sha256(attestation + salt)` before any reveal opens, so
    nobody can copy another's score (Bittensor's weight-copying problem).
-4. **Robust aggregation, as in federated learning.** Each validator measures on its own private held-out data and
-   reports the paired standard error of its gain. The gain that counts is the median. The learning is *accepted* only
-   if `median - 2 x SE(median) >= 1 point`, *inconclusive* if the median clears 1 point but not that bound (bond back
-   minus 10%, no rewards), and *rejected* below it (bond forfeit, half burned, half to the validators who measured it).
-   A validator further from the median than 2.5 of its own standard errors loses 10% of stake, once the challenge
-   window closes, so validators outvoted by a bribed majority keep their stake when a challenge proves them right.
-5. **Skin in the game.** Trainers bond 500 TXC (locked through vesting), validators stake 1,000+ TXC, challengers stake
-   200 TXC. While rewards vest anyone can challenge: a fresh draw of validators re-measures on new eval sets. Upheld:
-   unvested rewards are clawed back (bounty pools return to their backers), the bond goes half to the challenger and
-   half to the burn, and the validators who accepted it lose 25%. Rejected: half the challenger's stake is burned and
-   half compensates the trainer. Validators who sit on an assignment are replaced and lose 5%.
-6. **Paying yourself loses.** Usage minting is capped at half of what that usage burned, so buying your own learning's
-   usage returns less than it costs (Ocean Protocol's wash-consume lesson: fees must exceed rewards).
-7. **Copies and padding earn nothing.** Traces that differ only in placeholder numbering, spacing or case share one
-   attribution slot (the first producer). Every reveal must audit at least 10 of the learning's parents; if the
-   median audit finds more than 10% junk, the parents' share is withheld, and an audit challenge can claw back just
-   that share later.
-8. **A minuscule fee on everything**: $0.0005 per trace, 0.1% of every swap, backing and payout, all burned.
+3. **Robust aggregation, as in federated learning.** Each validator measures on its own private held-out data and
+   reports the paired standard error of its gain. The median gain counts. *Accepted* if
+   `median - 2 x SE(median) >= 1 point`; *inconclusive* if the median clears 1 point but not that bound (bond back
+   minus 10%); *rejected* below it (bond burned). A claim more than twice the measured gain, beyond the noise on both
+   sides, is rejected as an overclaim, so a bribed vote that lifts the median a little still costs the whole bond.
+4. **Forfeits burn.** Bonds (500 TXC), challenge stakes (200 TXC) and slashed stake go to nobody, so a verdict is
+   never worth buying, or faking, for the money it moves.
+5. **Validators earn from what they vouch for.** A validator's pay is its 5% of what the learnings it agreed with go
+   on to earn. Disagreeing is no fault (slashing for it would let a majority punish the honest minority). Stake is
+   slashed for not revealing (5%), for agreeing with a gain a challenge round couldn't reproduce (25%), and for scoring
+   a **decoy** without measuring it (25%): the operator submits learnings whose true gain it has sealed
+   (`sha256(gain|salt)`), indistinguishable from real ones until validators reveal; whoever is further from the truth
+   than four of its own standard errors never measured it. Decoys catch validators who repeat the claim.
+6. **Challenges, any time.** Anyone can stake 200 TXC to challenge an accepted learning; fresh validators re-measure it
+   on new eval sets and look at its parents. Upheld: unvested rewards stop (bounty pools go back to their backers,
+   escrowed royalties burn), the bond burns, the challenger gets its stake back, and the validators who accepted it
+   lose 25%. An audit challenge (padding) takes the parents' share and half the bond. Failed: the challenger's stake
+   burns.
+7. **Paying yourself loses.** A payment returns at most three quarters of what it bought to its contributors (half
+   kept, plus a match of at most half the burn), so wash usage, a self-funded bounty or licensing one's own traces
+   always loses (Ocean Protocol's wash-consume lesson: fees must exceed rewards).
+8. **Copies and padding earn nothing.** Traces that differ only in placeholder numbering, spacing or case share one
+   slot, and so do traces with the same distinctive fix (a verified output of 20+ characters, placeholders aside)
+   whose inputs share 30% of their words: a reworded copy. The same weights can't be registered twice, even citing
+   the first. Every reveal audits at least 10 parents; if the median audit finds more than 10% junk, the parents' share
+   is withheld (burned) and half the bond burns.
+9. **A minuscule fee on everything**: $0.0005 per trace, 0.1% of every swap, backing and payout, all burned. For the
+   attacks that earn nothing (spam, copies, stuffing a lot) it is the whole loss; no rule depends on it being large.
+10. **Users judge.** The SDK's `AdaptiveAgent` tries a learning on its own failing cases before adopting it
+    (`helps`), and the MCP instructions tell agents to do the same: an attested gain is where to look, not proof it
+    helps you.
 
-`examples/farming/attacks.py` runs each farming strategy against a real coin node (7 validators, quorum 3, an honest
-watchdog that challenges what it can show is fake) and prints the profit or loss; `tests/test_coin.py` fails the build
-if any of them stops losing:
+`examples/farming/attacks.py` runs each strategy against a real coin node (7 validators, quorum 3) with honest
+neighbours: a producer, a user who pays $10 for an accepted learning only when it helps on its own traffic, a watchdog
+that challenges what it can show is fake, bounty posters and licence buyers. Each attack is compared with its honest
+twin: the same run, where the attacker's real learning draws the same validation noise. `--seeds 30` runs each on 30
+different random draws; `tests/test_coin.py` fails the build if any stops losing. Strategies 13 and 14 came from an
+independent red-team pass; both paid before the fixes in 4e and 4f.
 
-| attack | vs honest work |
-|---|---|
-| trace spam (1,000 junk traces) | -$0.50 |
-| near-copies of honest traces | -$0.01 |
-| fake learning (+30 points claimed, true gain 0) | -$5.14 (rejected) |
-| fake learning, 1 bribed validator | -$0.51 (inconclusive) |
-| 12 fake learnings, 2 of 7 validators bribed | -$41.29 |
-| wash usage ($100 of one's own usage) | -$80.56 |
-| self-funded bounty solved with one's own learning | -$14.74 |
-| real learning padded with 200 junk parents, honest audits | -$0.10 |
-| the same, lazy audits (caught by an audit challenge) | -$5.20 |
-| a majority of validator stake (4 of 7 seats) | +$526 |
+| attack | mean vs honest work, 30 runs | best run for the attacker |
+|---|---|---|
+| trace spam (1,000 junk traces) | -$0.50 | -$0.50 |
+| 1,000 junk traces stuffed into an honest lot | -$0.50 | -$0.50 |
+| near-copies, or reworded copies, of honest traces | -$0.01 | -$0.01 |
+| fake learning (+30 points claimed, true gain 0) | -$5.14 | -$5.14 |
+| fake learning, 1 bribed validator | -$4.99 | -$0.54 |
+| 12 fake learnings, 2 of 7 validators bribed | -$65.71 | -$51.97 |
+| wash usage ($100 of one's own usage) | -$31.62 | -$31.62 |
+| self-funded bounty solved with one's own learning | -$14.69 | -$14.69 |
+| real learning padded with 200 junk parents (honest or lazy audits) | -$2.66 | -$2.66 |
+| 13. real learning citing a wrapper of one's own (100% to itself) around honest traces | -$0.05 | -$0.04 |
+| 14. pump and dump: back one's own bounty first, sell into an honest backer's $60 | -$0.02 | -$0.02 |
+| a validator that never measures (6 decoys among 24 learnings) | -$4.40 | -$3.22 |
+| **4 of 7 validator seats (57% of stake):** fake learnings | -$23.13 | -$3.17 |
+| 4 of 7 seats: wash usage of its own accepted fake | -$26.09 | -$26.09 |
+| 4 of 7 seats: claim an honest bounty with a fake | -$0.10 | -$0.10 |
+| 4 of 7 seats: block honest work | -$3.17 | -$0.04 |
 
-The one strategy that pays is owning most of the validator stake, the standing assumption of every proof-of-stake
-network. On the testnet that takes 4 seats of 1,500 TXC (about $62) against at most $90 of emissions per fake learning
-per epoch. Mainnet has to keep honest stake worth many epochs of emissions and spread across independent validators,
-and size `emission` to the stake that secures it.
+Decoys are spot checks: a validator that is never drawn for one keeps its savings (about one run in 30 at this decoy
+rate), but on average it loses. The last row is what a majority of stake can still do. It controls the vote, so it can
+reject honest learnings or claw them back with challenges, and their trainers lose bonds ($20.61 for four learnings in
+the default run); it gains nothing by it. That griefing is the remaining limit, and the reason a real network still
+wants many independent validators. Not covered on the testnet yet: signatures (the operator relays validator and
+poster messages), a public randomness beacon (the testnet's comes from each epoch's payout root; mainnet would use
+drand), and decoys from someone other than the operator.
 
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
@@ -354,7 +400,21 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 | POST | `/v0/bounties` | `{poster, title, path, eval_set, target, seed_micros?, failure?, base_model?, epochs?}` → free; mints the coin |
 | GET | `/v0/bounties` | `path`, `status` filters; each with pool, supply, current coin price |
 | POST | `/v0/bounties/{id}/buy` | `{buyer, micros}` → coins on the curve |
-| POST | `/v0/bounties/{id}/sell` | `{seller, coins}` → back to the curve while open |
+| POST | `/v0/bounties/{id}/sell` | `{seller, coins}` → back for what they cost, while open |
 | POST | `/v0/bounties/{id}/transfer` | `{from, to, coins}` |
 | GET | `/v0/bounties/{id}/holders` | holders, pool, supply, price |
-| POST | `/v0/bounties/{id}/claims` | `{learning}` → paid if the attestation is on the bounty's eval set and meets the target |
+| POST | `/v0/bounties/{id}/claims` | `{learning}` → paid if the attestation is on the bounty's eval set and meets the target; on a coin node, `{learning, attestation}` with the poster's own measurement |
+
+A coin-economy node (`--economy coin`, sections 4e and 4f) adds:
+
+| Method | Path | Body / result |
+|---|---|---|
+| GET | `/v0/coin` | price, supply, burns, vesting, licence money waiting, stake, rules |
+| POST | `/v0/swap` | `{account, side: buy|sell, amount}` → test dollars for TXC and back, at the pool's price |
+| GET | `/v0/quote` | `side`, `amount` → what a swap would get now |
+| GET / POST | `/v0/validators` | the federation; operator: `{address, stake_units}` stakes a validator |
+| POST | `/v0/learnings/{id}/commits`, `.../reveals` | operator-relayed until signed: a validator's commitment, then its attestation and salt |
+| POST | `/v0/learnings/{id}/challenges` | `{challenger}` → stakes 200 TXC; fresh validators re-measure |
+| GET | `/v0/learnings/{id}/verdict` | who was drawn, their reveals, the outcome |
+| POST | `/v0/licences/direct` | operator-relayed: `{lot, buyer, traces}` → the buyer's licence money to the traces it used |
+| POST | `/v0/decoys`, `/v0/decoys/unseal` | operator: `{learning, digest, funder}`, then `{learning, gain, salt}` → slashes validators who never measured |

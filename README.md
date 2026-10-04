@@ -28,18 +28,28 @@ a testnet: every wallet takes $25 of test credits, no real money moves. Steps, l
 ## The coin
 
 On a coin-economy node (`--economy coin`, what the hosted testnet runs) contributors earn **TXC** instead of dollars.
-Users still pay dollars; every payment buys TXC from an open pool and burns half of what it buys, and new TXC is
-minted only for learnings a federation of staked validators proves better on data they each hold privately. The pool
-sets the price. Farming is designed to lose: validators are drawn at random after you submit, commit before anyone
-reveals, and the median of their paired measurements decides; trainers bond, validators stake, rewards vest and can
-be clawed back by a challenge; usage can mint at most half of what it burned; copies and padded parents earn nothing.
+Users still pay dollars; every payment buys TXC from an open pool and burns half of what it buys, and the protocol
+mints at most half of that burn back to the same contributors. Nothing is minted for a verdict. The pool sets the
+price.
+
+Farming is designed to lose because **only payments pay, and whoever pays judges**:
+
+- Users pay for a learning after trying it on their own data.
+- A bounty pays on its poster's own measurement on its hidden eval.
+- A licence buyer's own learnings decide which traces get its money.
+- Validators, drawn at random after you submit, decide which learnings may earn. They commit before anyone reveals, and
+  the median of their paired measurements decides.
+- Forfeited bonds and stakes burn. Validators earn only from what the learnings they vouched for go on to earn.
+- Decoys with a sealed true gain catch validators who don't measure.
+- Copies, reworded copies and padded parents earn nothing.
 
 ```
-python examples/farming/attacks.py        # every farming strategy against a real node, with its profit or loss
+python examples/farming/attacks.py              # every farming strategy against a real node, with its profit or loss
+python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
 ```
 
-Every strategy loses against honest work except owning most of the validator stake, the limit of any proof-of-stake
-network. Rules and numbers: SPEC sections 4e and 4f.
+Every strategy loses against honest work, including owning most of the validator stake. A majority can still block
+honest work, because it controls the vote, but no verdict moves money to it. Rules and numbers: SPEC sections 4e and 4f.
 
 ## Join the network: share your traces
 
@@ -106,8 +116,10 @@ agent = AdaptiveAgent(model, check, ..., autopilot=pilot)
 ```
 
 In the flight demo (step 6) a fresh agent on autopilot meets a date format its model can't read: it finds the proven
-learning on the exchange and adopts it by itself, then, when the same four fields keep failing, posts a bounty for them
-(free), keeps its failing emails on the device as the hidden eval, and backs it with its $1 budget.
+learning on the exchange and tries it on its own failing email before adopting it (it doesn't help there, so it
+doesn't), then, when the same four fields keep failing, posts a bounty for them (free), keeps its failing emails on the
+device as the hidden eval, and backs it with its $1 budget. An agent only takes on, and pays for, what helps on its own
+traffic, whatever anyone attested.
 
 ## Improve open-weight models
 
@@ -163,7 +175,7 @@ Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it 
 | `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, bounty coins, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
 | `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --test-credits 25000000` for a hosted testnet |
 | `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a coin node it also stakes three validators and runs the federation on real held-out slices |
-| `node/coin.py`, `node/validator.py` | the coin economy (pool, burn and mint, federated validation, vesting, challenges) and a validator's commit/reveal tool |
+| `node/coin.py`, `node/validator.py` | the coin economy (pool, burn and match, federated validation, decoys, licence escrow, vesting, challenges) and a validator's commit/reveal tool |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real coin node, with profit or loss |
 | `render.yaml`, `DEPLOY.md` | one-click hosting on Render, costs, limits and operator calls |
 | `contracts/` | `Registry.sol` (ownership + family tree), `PayoutDistributor.sol` (per-epoch Merkle root, claim with proof), `BountyMarket.sol` (free bounties, bonding-curve coins, holder revenue share) |

@@ -103,8 +103,13 @@ class Client:
         qs = urllib.parse.urlencode({k: v for k, v in dict(path=path, status=status).items() if v})
         return self._call("GET", f"/v0/bounties?{qs}")
 
-    def claim_bounty(self, bounty_id, learning_id):
-        return self._call("POST", f"/v0/bounties/{bounty_id}/claims", {"learning": learning_id})
+    def claim_bounty(self, bounty_id, learning_id, attestation=None):
+        """On a coin node the claim needs the bounty poster's own measurement on its hidden eval (`attestation`, signed
+        by the poster as `validator`), unless the learning already carries it."""
+        body = {"learning": learning_id}
+        if attestation:
+            body["attestation"] = attestation
+        return self._call("POST", f"/v0/bounties/{bounty_id}/claims", body)
 
     def provenance(self, object_id):
         return self._call("GET", f"/v0/provenance/{object_id}")
@@ -142,6 +147,17 @@ class Client:
 
     def challenge(self, learning_id):
         return self._call("POST", f"/v0/learnings/{learning_id}/challenges", {"challenger": self.address})
+
+    def direct_licence(self, lot, traces):
+        """Send this buyer's licence money for a lot to the traces it used (learnings it registers do this for it)."""
+        return self._call("POST", "/v0/licences/direct", {"lot": lot, "buyer": self.address, "traces": list(traces)})
+
+    def register_decoy(self, learning, digest, funder):
+        """Operator: a learning whose true gain is sealed (coin.decoy_digest); unseal it once validators have revealed."""
+        return self._call("POST", "/v0/decoys", {"learning": dict(learning), "digest": digest, "funder": funder})
+
+    def unseal_decoy(self, learning_id, gain, salt):
+        return self._call("POST", "/v0/decoys/unseal", {"learning": learning_id, "gain": gain, "salt": salt})
 
     def faucet(self, address=None):
         """On a testnet node: open a wallet with test credits (no real money)."""

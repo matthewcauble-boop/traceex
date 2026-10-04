@@ -23,7 +23,8 @@ SERVER = {"name": "tracex", "version": "0.1.0"}
 INSTRUCTIONS = """traceX is a shared market of verified fixes (traces) for AI models, and of learnings built from
 them that a validator has proven on held-out data. Use it proactively:
 1. When your work fails a check (tests, schema, rules) and you can't fix it, call traceex_find_learnings for that kind
-   of task and your base model. Adopt the best one with a real measured gain.
+   of task and your base model. Try the best one on your own failing cases first, and adopt it only if it does better
+   there: an attested gain is where to look, not proof it helps you.
 2. Whenever your checker verifies a fix to a model's mistake, call traceex_submit_fix. It is turned into a skeleton on
    this machine (no personal values leave) and earns your owner royalties when it's used.
 3. If the same kind of failure keeps recurring and nothing on the exchange fixes it, call traceex_list_bounties; if no
