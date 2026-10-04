@@ -253,10 +253,11 @@ input[type=range]{width:100%;accent-color:var(--brand)}
 .join-grid{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:clamp(28px,5vw,72px);margin-top:40px;align-items:start}
 @media (max-width:900px){.join-grid{grid-template-columns:minmax(0,1fr)}}
 .tabs{display:inline-flex;gap:4px;background:var(--surface-2);border-radius:999px;padding:4px;max-width:100%;overflow-x:auto}
+@media (max-width:480px){.tabs{display:flex;flex-wrap:wrap;border-radius:22px}}
 .tabs button{all:unset;cursor:pointer;padding:10px 16px;border-radius:999px;font:600 14px/1 var(--font);color:var(--text-2);white-space:nowrap}
 .tabs button[aria-selected="true"]{background:#fff;color:var(--text);box-shadow:0 1px 3px rgba(10,11,13,.1)}
 .code{position:relative;background:#fff;color:var(--text);margin-top:12px;border:1px solid var(--line);border-radius:16px;overflow-x:auto}
-.code pre{margin:0;padding:22px;font:400 13.5px/1.7 var(--mono);color:var(--text)}
+.code pre{margin:0;padding:56px 22px 22px;font:400 13.5px/1.7 var(--mono);color:var(--text)}   /* the first line starts below the Copy button */
 .code .c{color:var(--text-3)}.code .k{color:var(--brand)}.code .s{color:var(--text-2)}
 .code .copy{position:absolute;top:12px;right:12px;background:var(--surface-2);color:var(--text);border:0;padding:8px 14px;border-radius:999px;font:600 13px var(--font);cursor:pointer}
 .steps{display:grid;gap:24px;counter-reset:s}
