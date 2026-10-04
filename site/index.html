@@ -853,7 +853,9 @@ function drawTree(now){
       tg.fillStyle = k === 'holders' ? C.coral : k.startsWith('t') && k.length === 2 ? C.gold : big ? C.cream : 'rgba(10,11,13,.78)';
       if (big) { for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2 + Math.PI / 6; i ? tg.lineTo(px + Math.cos(a) * 22, py + Math.sin(a) * 22) : (tg.beginPath(), tg.moveTo(px + Math.cos(a) * 22, py + Math.sin(a) * 22)); } tg.closePath(); tg.fill(); }
       else { tg.beginPath(); tg.arc(px, py, k.startsWith('t') && k.length === 2 ? 8 : 6, 0, 7); tg.fill(); }
-      tg.fillStyle = 'rgba(10,11,13,.72)'; tg.font = '500 12px "Geist Mono", monospace'; tg.textAlign = 'center'; tg.fillText(label, px, py + (big ? 40 : 26)); });
+      tg.font = '500 12px "Geist Mono", monospace'; tg.textAlign = 'center'; tg.lineJoin = 'round';
+      tg.lineWidth = 6; tg.strokeStyle = '#fff'; tg.strokeText(label, px, py + (big ? 40 : 26));   // a halo, so passing dots never cut a label
+      tg.fillStyle = 'rgba(10,11,13,.72)'; tg.fillText(label, px, py + (big ? 40 : 26)); });
   }
   if (!reduce) requestAnimationFrame(drawTree);
 }
