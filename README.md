@@ -45,15 +45,20 @@ Farming is designed to lose because **only payments pay, and whoever pays judges
 - Forfeited bonds and stakes burn. Validators earn only from what the learnings they vouched for go on to earn.
 - Decoys with a sealed true gain catch validators who don't measure.
 - Copies, reworded copies and padded parents earn nothing.
-- Every transaction pays one standard fee, $0.0000004: about the electricity it uses
-  (`python examples/fees/measure.py` shows the measurement).
+- Payments are in credits (a dollar always buys a million; the TXC it buys is burned). Each epoch mints at most a
+  fixed emission to the work that was paid for, and nobody is minted more than their credits were worth at the
+  epoch's time-weighted price, so paying yourself returns at most what you burned.
+- Every transaction pays one standard fee, $0.00005 in credits, burned: about 125x the electricity of the dearest
+  transaction (`python examples/fees/measure.py` shows the measurement), enough to fund the network and price out spam.
 
 ```
 python examples/farming/attacks.py              # every farming strategy against a real node, with its profit or loss
 python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
+python examples/scaling/simulate.py             # TXC's price as usage grows to $1B a day, crashes and recovers
 ```
 
-Every strategy loses against honest work, including owning most of the validator stake. A majority can still block
+All 29 strategies lose against honest work in every one of 30 random runs, including owning most of the validator
+stake. A majority can still block
 honest work, because it controls the vote, but no verdict moves money to it. Rules and numbers: SPEC sections 4e and 4f.
 
 ## Join the network: share your traces
@@ -180,7 +185,7 @@ Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it 
 | `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, bounty coins, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
 | `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --test-credits 25000000` for a hosted testnet |
 | `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a coin node it also stakes three validators and runs the federation on real held-out slices |
-| `node/coin.py`, `node/validator.py` | the coin economy (pool, burn and match, federated validation, decoys, licence escrow, vesting, challenges) and a validator's commit/reveal tool |
+| `node/coin.py`, `node/validator.py` | the coin economy (pool, credits, burn and mint, federated validation, decoys, licence escrow, vesting, challenges) and a validator's commit/reveal tool |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real coin node, with profit or loss |
 | `examples/fees/` | `measure.py`: what each kind of transaction costs in electricity, and so the standard fee |
 | `render.yaml`, `DEPLOY.md` | one-click hosting on Render, costs, limits and operator calls |

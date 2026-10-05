@@ -35,11 +35,15 @@ from traceex import bountycoin as coin  # noqa: E402
 
 # A bounty's pool, when a learning claims it: the solver is paid most, the traces it was built from still earn.
 BOUNTY_SPLIT = {"trainer": 0.70, "traces": 0.20, "checkers": 0.05, "validators": 0.05}
-# The standard transaction fee, in nano-dollars: $0.0000004, the electricity of the dearest transaction measured by
-# examples/fees/measure.py (registering a learning, whose 5.5 KB is kept in three copies for ten years). Every
-# transaction pays it, so each pays for its own electricity and none much more. Fees accrue per account and are billed
-# each epoch in whole micro-dollars, the smallest amount USDC can move; the fraction carries over.
-TX_FEE_NANOS = 400
+# The standard transaction fee, in nano-dollars: $0.00005, about 125 times the electricity of the dearest transaction
+# examples/fees/measure.py finds (registering a learning, its 5.5 KB kept in three copies for ten years: about
+# $0.0000004), and far more than any other. The margin is the point: the fee funds the network (on a coin node it is
+# paid in credits and burned, and it is the operator's claim on 10% of each epoch's emission) and prices out spam at
+# machine scale, where a billion junk transactions cost $50,000 instead of $400. This is the one setting; 100x to 200x
+# the measured electricity (40,000 to 80,000) keeps both jobs. Fees accrue per account and are billed each epoch in
+# whole micro-dollars (credits), the smallest amount USDC can move; the fraction carries over.
+TX_FEE_NANOS = 50_000
+SAFE_INT = 2 ** 53                 # JavaScript loses integers above this
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS traces   (id TEXT PRIMARY KEY, lot TEXT, producer TEXT, checker TEXT, body TEXT, epoch INT);
@@ -94,6 +98,18 @@ def need_address(a, what):
     if not ADDRESS.fullmatch(str(a or "")):
         raise ValueError(f"{what} must be a 0x address (40 hex characters)")
     return a
+
+
+def wire(obj, key=""):
+    """What goes into JSON for any client: TXC amounts (keys ending in _units, 18 decimals) travel as decimal strings,
+    and so does any other integer JavaScript would round (above 2**53)."""
+    if isinstance(obj, dict):
+        return {k: wire(v, k if str(k).endswith("_units") else key) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [wire(v, key) for v in obj]
+    if isinstance(obj, int) and not isinstance(obj, bool) and (key.endswith("_units") or abs(obj) >= SAFE_INT):
+        return str(obj)
+    return obj
 FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS trace_fts USING fts5(id UNINDEXED, path, signature, model, task, body)"
 
 
@@ -1017,6 +1033,7 @@ class RateLimit:
 def make_handler(ex, public=False, admin_token=None, limiter=None):
     limiter = limiter or (RateLimit() if public else None)
     coin_mode = getattr(ex, "economy", "") == "coin"
+    to_units = sys.modules[type(ex).__module__].to_units if coin_mode else None     # "12.5" TXC -> base units, exactly
 
     class H(BaseHTTPRequestHandler):
         server_version = "traceX/0.1"
@@ -1044,7 +1061,7 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
             self.end_headers()
 
         def _send(self, code, obj, extra=None):
-            body = json.dumps(obj, indent=1).encode()
+            body = json.dumps(wire(obj), indent=1).encode()
             self.send_response(code)
             self._headers("application/json", len(body), dict({"Cache-Control": "no-store"}, **(extra or {})))
             self.wfile.write(body)
@@ -1126,6 +1143,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     return self._send(200, ex.get_learning(u.path.split("/", 3)[3]))
                 if u.path == "/v0/coin" and coin_mode:
                     return self._send(200, ex.coin_stats())
+                if u.path == "/v0/fees" and hasattr(ex, "fees"):
+                    return self._send(200, ex.fees())
                 if u.path == "/v0/validators" and coin_mode:
                     return self._send(200, ex.validators_list())
                 if u.path == "/v0/quote" and coin_mode:
@@ -1189,8 +1208,11 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                                                                                   int(b.get("limit") or 0)),
                           "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
                 if coin_mode:
-                    routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"), b.get("amount", 0)),
-                                   "/v0/validators": lambda b: ex.register_validator(b.get("address"), b.get("stake_units", 0)),
+                    routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"), int(b.get("amount") or 0)),
+                                   "/v0/credits": lambda b: ex.buy_credits(b.get("account"), int(b.get("micros") or 0),
+                                                                           int(b.get("units") or 0)),
+                                   "/v0/validators": lambda b: ex.register_validator(b.get("address"),
+                                                                                     int(b.get("stake_units") or 0)),
                                    "/v0/decoys": lambda b: ex.register_decoy(b["learning"], b["digest"], b["funder"]),
                                    "/v0/decoys/unseal": lambda b: ex.unseal_decoy(b["learning"], b["gain"], b["salt"]),
                                    "/v0/licences/direct": lambda b: ex.direct_licence(b["lot"], b["buyer"], b["traces"])})
@@ -1211,9 +1233,9 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     admin = act in ADMIN_ACTIONS
                     fn = {"claims": (lambda b: ex.claim_bounty(i, b["learning"], b.get("attestation"))) if coin_mode
                           else (lambda b: ex.claim_bounty(i, b["learning"])),
-                          "buy": (lambda b: ex.buy_coins(i, b["buyer"], b.get("micros", 0),
-                                                         units=int(float(b.get("coins", 0)) * 1_000_000))) if coin_mode
-                          else (lambda b: ex.buy_coins(i, b["buyer"], b["micros"])),
+                          "buy": (lambda b: ex.buy_coins(i, b["buyer"], int(b.get("micros") or 0),
+                                                         units=int(b.get("units") or 0) or to_units(b.get("coins") or 0)))
+                          if coin_mode else (lambda b: ex.buy_coins(i, b["buyer"], b["micros"])),
                           "sell": lambda b: ex.sell_coins(i, b["seller"], b["coins"]),
                           "transfer": lambda b: ex.transfer_coins(i, b["from"], b["to"], b["coins"])}[act]
                 if not fn:

@@ -58,12 +58,13 @@ Every push to `main` redeploys; the disk keeps the data. The seed never runs aga
 
 ## The coin economy
 
-The blueprint runs the node with `TRACEX_ECONOMY=coin`: contributors earn TXC, users pay test dollars that buy TXC
-from the pool and burn half of it, and the protocol mints at most half of that burn back to the same contributors.
+The blueprint runs the node with `TRACEX_ECONOMY=coin` (testnet v0.4; it opens on an empty database and refuses a
+v0.3 one): users pay in credits (test dollars buy TXC from the pool and burn it, a million credits a dollar), and each
+epoch mints at most a fixed emission to the work that was paid for, never more than its credits were worth.
 A federation of staked validators decides which learnings may earn; no verdict mints or moves money by itself
 (SPEC 4e, 4f). On first boot the seed stakes three validators (1,500 TXC each, operator-run) and validates the seeded
 learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's $20 of usage is
-matched; the flight routing learning is inconclusive (three emails can't prove a gain), so its bounty stays open. The
+minted to its traces; the flight routing learning is inconclusive (three emails can't prove a gain), so its bounty stays open. The
 node opens on epoch 3.
 
 New learnings are validated by the validators the beacon draws for them. On the testnet those are operator-run, and
@@ -75,9 +76,10 @@ python node/validator.py --url $URL --token $TOKEN --address 0xVALIDATOR --learn
 # run once to commit, again to reveal; GET /v0/learnings/<id>/verdict shows who was drawn and the result
 ```
 
-Add a validator: `POST /v0/validators {"address": ..., "stake_units": 1500000000}` with the admin token (the address
+Add a validator: `POST /v0/validators {"address": ..., "stake_units": "1500000000000000000000"}` (1,500 TXC; TXC has
+18 decimals and every `_units` amount travels as a decimal string; the minimum is $10 of TXC at the reference price) with the admin token (the address
 needs the TXC: `POST /v0/swap`). Anyone can challenge an accepted learning, any time:
-`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes 200 TXC). `GET /v0/coin` shows the price, supply,
+`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes $2 of TXC). `GET /v0/coin` shows the price, supply,
 burns, vesting, licence money waiting and stake.
 
 Operator-only, with the admin token:
@@ -89,9 +91,12 @@ Operator-only, with the admin token:
   hides it.
 - **Licence money.** It waits until each buyer shows which traces it used. A buyer's learnings do that automatically.
   A buyer that builds nothing names the traces: `POST /v0/licences/direct {"lot": ..., "buyer": ..., "traces": [...]}`.
-- **Transaction fees.** Every transaction pays $0.0000004, about its electricity, billed each epoch in whole
-  micro-dollars to `TRACEX_FEE_TO`, the address that pays the hosting bill (set it in the Render dashboard). Until it
-  is set they collect in an account called `network`. `GET /v0/stats` shows what has been billed.
+- **Transaction fees.** Every transaction pays $0.00005 in credits, billed each epoch and burned. They are the
+  operator's claim on 10% of each epoch's emission, minted to `TRACEX_FEE_TO`, the address that pays the hosting bill
+  (set it in the Render dashboard). Until it is set they count for an account called `network`. `GET /v0/fees` and
+  `GET /v0/coin` show what has been burned and minted.
+- **Credits.** `POST /v0/credits {"account": ..., "micros": 1000000}` makes a million credits from $1;
+  `{"units": "..."}` burns held TXC instead.
 - **Bounty claims** carry the poster's own measurement on its hidden eval:
   `POST /v0/bounties/<id>/claims {"learning": ..., "attestation": {"validator": <poster>, "eval_set": ..., "after": ...}}`.
 

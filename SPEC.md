@@ -228,49 +228,83 @@ an agent a participant by default.
   as the hidden eval, and backs it with $1.00 of its $1.00 budget. On the third email it sees the bounty already
   stands.
 
-## 4e. The coin economy (testnet v0.3)
+## 4e. The coin economy (testnet v0.4)
 
-Contributors earn a network coin, TXC; users keep paying dollars; the market prices the coin. Run a node with
-`--economy coin` (`node/coin.py`); the v0.1 dollar economy stays the default for the library and its tests.
+Contributors earn a network coin, TXC; everything is paid for in credits, which hold their dollar value; the market
+prices the coin. Run a node with `--economy coin` (`node/coin.py`); the v0.1 dollar economy stays the default for the
+library and its tests. v0.4 opens a fresh testnet: a node refuses a v0.3 database.
 
-- **Burn and match.** Every payment (metered usage, a lot licence, a trace fee) arrives in dollars (test dollars here,
-  USDC on mainnet), buys TXC from the pool, and half of what it buys is burned; the other half goes to the contributors
-  whose work was used. New TXC is minted only to match that: for each accepted learning, at most half of what its
-  usage burned that epoch, to the same contributors, vesting over four epochs. Nothing is minted for a verdict, a
-  submission or a stake. Usage burns tie the coin's value to real use, as in Render (operators are minted for jobs
-  users paid for) and Helium, which moved rewards from proof-of-coverage, farmed by GPS spoofers, toward paid data.
-- **The pool sets the price.** A constant-product pool (Uniswap v2 maths) holds protocol-owned liquidity from
-  genesis: 1,000,000 TXC beside $10,000, so TXC opens at $0.01. The pool keeps a 0.3% spread on each swap; nobody
-  collects it, it stays in the pool.
-- **One standard transaction fee: its electricity.** Every transaction (a trace, a swap, a backing or sale, a bid, a
-  learning, a usage report, a validator's commitment or reveal, a challenge, a claim) pays the same fee, $0.0000004
-  (`exchange.TX_FEE_NANOS` = 400 nano-dollars). `examples/fees/measure.py` runs each kind of transaction on the reference
-  node and prices what it uses: CPU time at 10 W a busy core, bytes moved at 0.02 kWh/GB, bytes stored in three copies
-  for ten years, a data-centre PUE of 1.4, electricity at $0.15/kWh. The cheapest came to about $0.00000001 (backing a
-  bounty); the dearest, registering a learning, to $0.00000038, nearly all of it the ten years of storage. The standard
-  fee is set just above the dearest, so every transaction pays for its own electricity and none pays much more. Fees
-  accrue per account and are billed each epoch in whole micro-dollars, the smallest amount USDC can move; the fraction
-  carries over. They go to whoever runs the node (`--fee-to`), who pays for the electricity. Operator actions
-  (checkers, clearing, settling, decoys) don't pay. The hosted classifier, when a node uses it, costs more than this
-  (about $0.00004 a trace); a node caps its classifier calls per day instead.
-- **An emission cap, not a target.** At most 50,000 TXC an epoch, halving every 180 epochs; when an epoch's matches
-  add up to more, each is scaled down. Whatever isn't earned isn't minted.
-- **The protocol's split.** Royalties and matches go traces 60, trainer 25, checkers 10, validators 5, with equal
-  weight per distinct parent (a copy counts as its original), whatever split the trainer asked for. A learning cited
-  by another learning takes no cut of its own there: its slice passes through to its own traces and checkers, so
-  wrapping someone's traces in a learning of one's own diverts nothing. The trainer and validators are paid as usage
-  settles; the parents' part vests over four epochs, so an audit challenge can claw it back. Learnings nest at most 32
-  deep.
-- **Licences.** A licence payment's kept half waits in escrow until its buyer shows which of the lot's traces it used:
-  the parents its own learnings cite, once validators are done with them, or a list it sends
-  (`POST /v0/licences/direct`). Those traces share it (producer 85, checker 10, validators 5).
-- **Bounties** stay free to post and are backed in TXC on their bonding curve (the first coin costs 1 TXC, each one
-  sold adds 0.01 TXC); backing with dollars buys TXC on the way in. The curve decides how many coins a payment buys:
-  early backers hold a bigger share of the solution's revenue. Selling back returns what the coins cost, never more,
-  and an unsolved bounty refunds its backers by what each put in, so nobody can cash out later backers' money (the
-  same rule holds on the dollar node and in `contracts/BountyMarket.sol`). A bounty pays when its poster measures an
-  accepted learning on the bounty's hidden eval at the target (the poster's attestation comes with the claim); the
-  pool vests to the solver and down the family tree (trainer 70, traces 20, checkers 5, validators 5).
+- **Two units.** *TXC* is the asset: rewards, stakes, bonds and bounty pools. It has 18 decimals (`UNIT = 10**18`):
+  a credit's worth of TXC at $1,000,000,000 a TXC is 10^-15 TXC, so 15 decimals is the least that pays every credit
+  there, and 18 leaves a thousand times headroom. *Credits* are what everything is paid in: 1 credit = $0.000001, whole
+  numbers, the same at every TXC price, so a machine always knows what a call costs. Credits are made only by burning
+  TXC: dollars (test dollars here, USDC on mainnet) buy TXC from the pool and burn it in the same step, one credit per
+  micro-dollar (`POST /v0/credits`, or automatically when a payment needs topping up), or a holder burns TXC at the
+  lower of the pool's spot and reference prices. Credits can't be moved between accounts and never turn back into TXC
+  or dollars. Every TXC amount is stored as TEXT (SQLite integers stop at 2^63) and travels in JSON as a decimal
+  string; every key ending `_units` is one.
+- **Burn and mint.** Usage, licences and the transaction fee are paid in credits, and spent credits are gone. Each
+  epoch mints at most a fixed emission: 50,000 TXC, halving every 180 epochs five times, then 1,562.5 TXC an epoch for
+  good. 90% goes to the people whose work was paid for that epoch (on the protocol's split, below; a solved bounty's
+  coin holders first take 20% of its learning's usage), 10% to the node operator for the transactions it served,
+  each by its share of the credits burned on its work.
+- **The anti-farming cap.** Nobody is minted more TXC than the credits burned on their own work were worth at the
+  epoch's *time-weighted* pool price (never the spot), and never more than the TXC those credits burned at the
+  pool's price before its spread. Emission nobody earned is never minted and never rolls over. So paying yourself
+  returns at most what you burned, less every share that isn't yours, the spread, and the fee.
+- **What the price does.** Burning pushes the price up to where an epoch's burns match its emission, P* = credits
+  burned / work emission, and there the network mints exactly what it burns: TXC follows the *rate* of paid usage and
+  the halvings, not the sum of everything ever paid. Below P* the emission is over-subscribed and shared out pro rata,
+  so wash usage earns less than it costs; above P* the cap binds. The protocol never pushes the price down (that would
+  take minting TXC nobody earned, which is exactly what farming wants); only holders selling does.
+  `examples/scaling/simulate.py` runs v0.3 and v0.4 side by side: usage growing from $10,000 to $1B a day, a 90%
+  crash and a recovery, and a machine economy at $1B a day from day one (10 billion machines x 100 paid uses x
+  $0.001). When contributors sell what they earn, v0.4 tracks P* to within 2% through growth ($711k a TXC at $1B a
+  day after five halvings, $81k after the crash, where v0.3 compounds to $2.2T), and contributors realise about 100% of
+  what users pay. If contributors hoard instead, *both* versions climb far above P*, because nobody sells into the
+  burn; that is holders' choice and harmless to payers (credits still cost $1 per million), and 18 decimals keep every
+  amount payable at the prices reached ($10T a TXC is 10^-5 dollars per base unit). `--top-up` shows an option the
+  node does *not* implement: minting unearned emission into the protocol-owned pool, which holds the price near P*
+  even when contributors hoard, at the cost of diluting holders with TXC nobody earned.
+- **The pool.** A constant-product pool (Uniswap v2 maths) holds protocol-owned liquidity from genesis: 1,000,000 TXC
+  beside $10,000, so TXC opens at $0.01. It keeps a 0.3% spread on each swap; nobody collects it. Prices are kept as
+  micro-dollars per TXC times 10^12, exact from a billionth of a dollar to beyond a trillion dollars a TXC. The
+  time-weighted price accumulates price x milliseconds between every change to the reserves; each settlement fixes the
+  epoch's TWAP, which becomes the *reference price* for the next.
+- **Dollar-priced, whatever TXC does.** Bonds ($5), the validator minimum stake ($10), challenge stakes ($2) and the
+  bounty curve (first coin $0.01, each one sold adds $0.0001, as on the dollar node) are priced in dollars and charged
+  in TXC at the reference price, so they keep their real cost at any TXC price. Backing a bounty with dollars buys TXC
+  on the way in and counts for no more than that TXC is worth at the reference price (pumping the pool first buys no
+  extra coins). A validator the price pushes under the minimum keeps its seat for 4 epochs to top up, so a dump can't
+  empty the federation and hand every seat to whoever stakes right after it.
+- **One standard transaction fee: $0.00005** (`exchange.TX_FEE_NANOS` = 50,000 nano-dollars). Every transaction (a
+  trace, a swap, making credits, a backing or sale, a bid, a learning, a usage report, a validator's commitment or
+  reveal, a challenge, a claim) pays it, in credits, burned; it is the operator's claim on its 10% of the emission.
+  `examples/fees/measure.py` runs each kind of transaction on the reference node and prices its electricity: CPU at
+  10 W a busy core, bytes moved at 0.02 kWh/GB, bytes stored in three copies (traces and learnings for ten years,
+  everything else through the challenge window), PUE 1.4, $0.15/kWh. The dearest, registering a learning, comes to
+  about $0.0000004; the fee is about 125 times that. The margin is the point: the fee funds the network and prices out
+  spam at machine scale (a billion junk transactions cost $50,000, not $400). 100x to 200x the measured electricity
+  keeps both jobs. Fees accrue per account and are billed each epoch in whole credits; the fraction carries over. An
+  account can't spend the dollars that cover what it owes, so nobody can drain a wallet before the fee bill. Operator
+  actions (checkers, clearing, settling, decoys) don't pay.
+- **Storage at machine scale.** Per-transaction detail (usage reports, payments, burns, ledger rows, per-address
+  Merkle claims) is kept through the challenge window (`keep_epochs`, 6), then folded: each account's older ledger
+  rows become one carried-forward row, so balances stay exact to the unit. Every epoch keeps its Merkle root and total
+  for good; traces and learnings stay.
+- **The protocol's split.** Usage goes traces 60, trainer 25, checkers 10, validators 5, with equal weight per
+  distinct parent (a copy counts as its original), whatever split the trainer asked for. A learning cited by another
+  learning takes no cut of its own there: its slice passes through to its own traces and checkers, so wrapping
+  someone's traces in a learning of one's own diverts nothing. The trainer's and validators' mint is paid at once; the
+  parents' part vests over four epochs, so an audit challenge can claw it back. Learnings nest at most 32 deep.
+- **Licences.** A licence is paid in credits and burned at clearing; the credits count as burned on the work of the
+  traces its buyer shows it used: the parents its own learnings cite, once validators are done with them, or a list it
+  sends (`POST /v0/licences/direct`). Those traces share it (producer 85, checker 10, validators 5).
+- **Bounties** stay free to post. The pool holds TXC; the curve is priced in dollars. Selling back returns the TXC the
+  coins cost, never more, and an unsolved bounty refunds its backers by the TXC each put in, so nobody can cash out
+  later backers' money (the same rule holds on the dollar node and in `contracts/BountyMarket.sol`). A bounty pays when
+  its poster measures an accepted learning on the bounty's hidden eval at the target; the pool vests to the solver and
+  down the family tree (trainer 70, traces 20, checkers 5, validators 5).
 
 ## 4f. Validation by federation, and why farming loses
 
@@ -290,7 +324,7 @@ of stake can still block honest work, but it has nothing to print and nothing to
    `median - 2 x SE(median) >= 1 point`; *inconclusive* if the median clears 1 point but not that bound (bond back
    minus 10%); *rejected* below it (bond burned). A claim more than twice the measured gain, beyond the noise on both
    sides, is rejected as an overclaim, so a bribed vote that lifts the median a little still costs the whole bond.
-4. **Forfeits burn.** Bonds (500 TXC), challenge stakes (200 TXC) and slashed stake go to nobody, so a verdict is
+4. **Forfeits burn.** Bonds ($5 of TXC), challenge stakes ($2 of TXC) and slashed stake go to nobody, so a verdict is
    never worth buying, or faking, for the money it moves.
 5. **Validators earn from what they vouch for.** A validator's pay is its 5% of what the learnings it agreed with go
    on to earn. Disagreeing is no fault (slashing for it would let a majority punish the honest minority). Stake is
@@ -298,22 +332,24 @@ of stake can still block honest work, but it has nothing to print and nothing to
    a **decoy** without measuring it (25%): the operator submits learnings whose true gain it has sealed
    (`sha256(gain|salt)`), indistinguishable from real ones until validators reveal; whoever is further from the truth
    than four of its own standard errors never measured it. Decoys catch validators who repeat the claim.
-6. **Challenges, any time.** Anyone can stake 200 TXC to challenge an accepted learning; fresh validators re-measure it
+6. **Challenges, any time.** Anyone can stake $2 of TXC to challenge an accepted learning; fresh validators re-measure it
    on new eval sets and look at its parents. Upheld: unvested rewards stop (bounty pools go back to their backers,
    escrowed royalties burn), the bond burns, the challenger gets its stake back, and the validators who accepted it
    lose 25%. An audit challenge (padding) takes the parents' share and half the bond. Failed: the challenger's stake
    burns.
-7. **Paying yourself loses.** A payment returns at most three quarters of what it bought to its contributors (half
-   kept, plus a match of at most half the burn), so wash usage, a self-funded bounty or licensing one's own traces
-   always loses (Ocean Protocol's wash-consume lesson: fees must exceed rewards).
+7. **Paying yourself loses.** Nobody is minted more than the credits burned on their own work were worth at the
+   epoch's time-weighted price, nor more than the TXC those credits burned (4e), so wash usage, a self-funded bounty or
+   licensing one's own traces returns at most what it burned, less the shares that aren't yours, the spread and the
+   fee; below the equilibrium price it returns much less (Ocean Protocol's wash-consume lesson: fees must exceed rewards).
 8. **Copies and padding earn nothing.** Traces that differ only in placeholder numbering, spacing or case share one
    slot, and so do traces with the same distinctive fix (a verified output of 20+ characters, placeholders aside)
    whose inputs share 30% of their words: a reworded copy. The same weights can't be registered twice, even citing
    the first. Every reveal audits at least 10 parents; if the median audit finds more than 10% junk, the parents' share
    is withheld (burned) and half the bond burns.
-9. **The standard fee: $0.0000004 a transaction, its electricity** (4e). For the attacks that earn nothing (spam,
-   copies, stuffing a lot) it is the whole loss: 1,000 junk traces cost $0.0004, exactly the electricity they use. No
-   rule depends on the fee being large.
+9. **The standard fee: $0.00005 a transaction, in credits, burned** (4e), about 125 times the electricity of the
+   dearest transaction. For the attacks that earn nothing (spam, copies, stuffing a lot) it is the whole loss: 1,000
+   junk traces cost $0.05. The operator is minted for the fees it collects, never more than they burned, so
+   self-dealing to claim more of its 10% loses too.
 10. **Users judge.** The SDK's `AdaptiveAgent` tries a learning on its own failing cases before adopting it
     (`helps`), and the MCP instructions tell agents to do the same: an attested gain is where to look, not proof it
     helps you.
@@ -325,24 +361,41 @@ twin: the same run, where the attacker's real learning draws the same validation
 different random draws; `tests/test_coin.py` fails the build if any stops losing. Strategies 13 and 14 came from an
 independent red-team pass; both paid before the fixes in 4e and 4f.
 
-| attack | mean vs honest work, 30 runs | best run for the attacker |
-|---|---|---|
-| trace spam (1,000 junk traces) | -$0.0004 | -$0.0004 |
-| 1,000 junk traces stuffed into an honest lot | -$0.0004 | -$0.0004 |
-| 20 near-copies, or reworded copies, of honest traces | -$0.000008 | -$0.000008 |
-| fake learning (+30 points claimed, true gain 0) | -$5.13 | -$5.13 |
-| fake learning, 1 bribed validator | -$4.98 | -$0.53 |
-| 12 fake learnings, 2 of 7 validators bribed | -$65.64 | -$51.90 |
-| wash usage ($100 of one's own usage) | -$31.61 | -$31.61 |
-| self-funded bounty solved with one's own learning | -$14.62 | -$14.62 |
-| real learning padded with 200 junk parents (honest or lazy audits) | -$2.56 | -$2.56 |
-| 13. real learning citing a wrapper of one's own (100% to itself) around honest traces | -$0.05 | -$0.03 |
-| 14. pump and dump: back one's own bounty first, sell into an honest backer's $60 | -$0.01 | -$0.01 |
-| a validator that never measures (6 decoys among 24 learnings) | -$6.34 | -$3.05 |
-| **4 of 7 validator seats (57% of stake):** fake learnings | -$23.09 | -$3.13 |
-| 4 of 7 seats: wash usage of its own accepted fake | -$26.07 | -$26.07 |
-| 4 of 7 seats: claim an honest bounty with a fake | -$0.08 | -$0.08 |
-| 4 of 7 seats: block honest work | -$3.16 | -$0.04 |
+| attack | mean vs honest work, 30 runs | best run for the attacker | runs it paid |
+|---|---|---|---|
+| trace spam (1,000 junk traces) | -$0.05 | -$0.05 | 0 of 30 |
+| 1,000 junk traces stuffed into an honest lot | -$0.05 | -$0.05 | 0 of 30 |
+| 20 near-copies, or reworded copies, of honest traces | -$0.001 | -$0.001 | 0 of 30 |
+| fake learning (+30 points claimed, true gain 0) | -$5.13 | -$5.13 | 0 of 30 |
+| fake learning, 1 bribed validator | -$4.98 | -$0.53 | 0 of 30 |
+| 12 fake learnings, 2 of 7 validators bribed | -$67.24 | -$45.58 | 0 of 30 |
+| wash usage ($100 of one's own usage), price above equilibrium | -$8.54 | -$8.54 | 0 of 30 |
+| self-funded bounty solved with one's own learning | -$13.88 | -$13.88 | 0 of 30 |
+| real learning padded with 200 junk parents (honest or lazy audits) | -$2.57 | -$2.57 | 0 of 30 |
+| 13. real learning citing a wrapper of one's own (100% to itself) around honest traces | -$0.05 | -$0.03 | 0 of 30 |
+| 14. pump and dump: back one's own bounty first, sell into an honest backer's $60 | -$0.01 | -$0.01 | 0 of 30 |
+| a validator that never measures (6 decoys among 24 learnings) | -$6.65 | -$3.46 | 0 of 30 |
+| **4 of 7 validator seats (57% of stake):** fake learnings | -$30.87 | -$15.46 | 0 of 30 |
+| 4 of 7 seats: wash usage of its own accepted fake | -$16.47 | -$7.05 | 0 of 30 |
+| 4 of 7 seats: claim an honest bounty with a fake | -$0.08 | -$0.08 | 0 of 30 |
+| 4 of 7 seats: block honest work | -$2.48 | -$0.001 | 0 of 30 |
+| *v0.4:* wash usage below equilibrium ($2,000 of honest usage that epoch) | -$97.03 | -$97.03 | 0 of 30 |
+| *v0.4:* wash usage while the price climbs 23% above its TWAP | -$5.76 | -$5.76 | 0 of 30 |
+| *v0.4:* pump the pool, then burn held TXC for cheap credits | -$1.01 | -$1.01 | 0 of 30 |
+| *v0.4:* dump 300,000 TXC to hold the price 41% down for an epoch, pay itself, buy back | -$23.17 | -$23.17 | 0 of 30 |
+| *v0.4:* operator sends 2,000 transactions of its own for more of the 10% | -$0.0003 | -$0.0003 | 0 of 30 |
+| *v0.4:* fee evasion: pack 10,000 fixes in 25 traces, batch usage, drain before the bill | -$0.08 | -$0.08 | 0 of 30 |
+| *v0.4:* back one's own bounty with the pool pumped (dollar curve) | -$0.52 | -$0.52 | 0 of 30 |
+| *v0.4:* a large holder dumps 300,000 TXC into the pool at once | -$720.53 | -$720.53 | 0 of 30 |
+| *v0.4:* sybil: 10 trainers, 10 payers, 5 minimum-stake validators | -$7.72 | -$7.51 | 0 of 30 |
+| *v0.4:* dump to push honest validators under the minimum, stake 3 of its own | -$695.60 | -$687.83 | 0 of 30 |
+
+The v0.4 rows are the attacks the new design invites. Two needed fixes before they lost: the time-weighted price alone
+let a payer whose credits were made as the price climbed be minted more TXC than it burned (the TWAP lags the spot),
+so the cap is also bounded by the TXC the credits burned; and a dump that pushed every honest validator under the
+dollar minimum handed all 12 seats on its fakes to the attacker's 3 fresh validators (+$2,364), so a validator the
+price pushes under keeps its seat for 4 epochs to top up (now 1 of 12 seats, all 4 fakes rejected). Backing a bounty
+with dollars into a pumped pool also counts only what the TXC is worth at the reference price.
 
 Decoys are spot checks: a validator that is never drawn for one keeps its savings (about one run in 30 at this decoy
 rate), but on average it loses. The last row is what a majority of stake can still do. It controls the vote, so it can

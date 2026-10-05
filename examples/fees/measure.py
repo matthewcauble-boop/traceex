@@ -7,16 +7,18 @@ CPU time it takes, the bytes it moves over the network and the bytes it leaves o
 
     energy = CPU seconds x watts per busy core x PUE
            + bytes moved x network energy per GB
-           + bytes stored x copies kept x storage watts per GB x years kept x PUE
+           + bytes stored x copies kept x storage watts per GB x time kept x PUE
     cost   = energy in kWh x electricity price
 
-The assumptions are printed with the result: change them and run it again. The node charges every transaction one
-standard fee (exchange.TX_FEE_NANOS), set at or above the dearest transaction here, so each one pays for its own
-electricity and none pays much more.
+Time kept follows the node's storage rule (SPEC 4e): traces and learnings are kept for good (priced here as ten years);
+everything else is per-transaction detail, kept only through the challenge window (`keep_epochs`, a day each on the
+hosted node) and then folded into balances and one Merkle root per epoch. The assumptions are printed with the result:
+change them and run it again. The standard fee (exchange.TX_FEE_NANOS) is set at about 125 times the dearest
+transaction here, so it funds the network and prices out spam at machine scale, not just the electricity.
 """
 import json
 import os
-import sqlite3
+import shutil
 import sys
 import tempfile
 import time
@@ -26,13 +28,16 @@ ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [os.path.join(ROOT, "sdk", "python"), os.path.join(ROOT, "node")]
 from traceex import Trace, Learning, attest  # noqa: E402
 from coin import CoinExchange, Params, UNIT, attestation_digest  # noqa: E402
+from exchange import TX_FEE_NANOS  # noqa: E402
 
 KWH_USD = 0.15              # $ per kWh: the US commercial average is about $0.13-0.14 (EIA); data centres often pay less
 WATTS_PER_CORE = 10         # a busy server core with its share of memory, board and fans
 PUE = 1.4                   # data-centre overhead: cooling and power conversion on top of the servers themselves
 NET_KWH_PER_GB = 0.02       # moving data across the internet; published estimates run from about 0.006 to 0.06
 STORE_WATTS_PER_GB = 0.0012  # an enterprise SSD draws about 5 W for 4 TB
-COPIES, YEARS = 3, 10       # every byte kept in three copies for ten years
+COPIES = 3                  # every byte kept in three copies...
+FOR_GOOD_YEARS = 10         # ...traces and learnings priced for ten years ("for good")...
+WINDOW_DAYS = Params().keep_epochs   # ...everything else through the challenge window, one day an epoch
 HTTP_BYTES = 800            # request and response headers, both ways
 N = 300                     # repetitions of each transaction
 
@@ -69,8 +74,8 @@ def trace(i):
                           failure_modes={"code": "wrong_answer"})
 
 
-def measure(ex, label, make, run):
-    """Each transaction: CPU seconds, bytes over the wire, bytes left on disk."""
+def measure(ex, label, make, run, kept="window"):
+    """Each transaction: CPU seconds, bytes over the wire, bytes left on disk, and how long they are kept."""
     bodies = [make(i) for i in range(N)]
     disk0, cpu0, wire = db_bytes(ex), time.process_time(), 0
     for body in bodies:
@@ -78,13 +83,15 @@ def measure(ex, label, make, run):
         ex.db.commit()
         wire += len(json.dumps(body, default=str)) + len(json.dumps(out, default=str)) + HTTP_BYTES
     cpu = (time.process_time() - cpu0) / N
-    return {"transaction": label, "cpu_s": cpu, "wire_bytes": wire / N, "disk_bytes": max(db_bytes(ex) - disk0, 0) / N}
+    return {"transaction": label, "cpu_s": cpu, "wire_bytes": wire / N, "disk_bytes": max(db_bytes(ex) - disk0, 0) / N,
+            "kept": kept}
 
 
 def price(row):
+    seconds = FOR_GOOD_YEARS * 365.25 * 86400 if row["kept"] == "for good" else WINDOW_DAYS * 86400
     cpu_j = row["cpu_s"] * WATTS_PER_CORE * PUE
     net_j = row["wire_bytes"] / 1e9 * NET_KWH_PER_GB * J_PER_KWH
-    disk_j = row["disk_bytes"] / 1e9 * COPIES * STORE_WATTS_PER_GB * YEARS * 365.25 * 86400 * PUE
+    disk_j = row["disk_bytes"] / 1e9 * COPIES * STORE_WATTS_PER_GB * seconds * PUE
     joules = cpu_j + net_j + disk_j
     return dict(row, joules=joules, nanos=joules / J_PER_KWH * KWH_USD * 1e9,
                 parts={"cpu": cpu_j / joules, "network": net_j / joules, "storage": disk_j / joules})
@@ -92,16 +99,23 @@ def price(row):
 
 def main():
     folder = tempfile.mkdtemp(prefix="tracex-fees-")
+    try:
+        return _main(folder)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)            # leave nothing behind
+
+
+def _main(folder):
     ex, vals = node(os.path.join(folder, "exchange.db"))
-    rows = []
-    ids = []
+    rows, ids = [], []
 
     def submit(t):
         r = ex.submit_trace(t)
         ids.append(r["id"])
         return r
-    rows.append(measure(ex, "file a trace (about 1 KB)", lambda i: dict(trace(i)), submit))
+    rows.append(measure(ex, "file a trace (about 1 KB)", lambda i: dict(trace(i)), submit, kept="for good"))
     rows.append(measure(ex, "swap dollars for TXC", lambda i: ("buy", 10_000), lambda b: ex.swap(A("2"), *b)))
+    rows.append(measure(ex, "buy credits (TXC burned)", lambda i: 10_000, lambda m: ex.buy_credits(A("7"), micros=m)))
     bounty = ex.post_bounty({"poster": A("3"), "path": "code/generate", "eval_set": "sha256:x", "target": 0.5,
                              "title": "measure"})["id"]
     ex.swap(A("3"), "buy", 100_000_000)
@@ -123,29 +137,32 @@ def main():
                                                  parents=[(t, 1) for t in ids[i % 200:i % 200 + 20]], trainer=A("5"),
                                                  attestation=attest(vals[0], "sha256:c", "pass@1", .3, .4),
                                                  per_call_micros=50),
-                        register))
-    atts = {}
+                        register, kept="for good"))
 
     def commit(lid):
         v = ex.verdict(lid)["assigned"][0]
         att = {"validator": v, "eval_set": "sha256:p", "metric": "pass@1", "before": .3, "after": .4, "n": 500,
                "se": .02, "audit": {"checked": 10, "bad": 0}}
-        atts[lid] = (v, att)
         return ex.commit(lid, v, attestation_digest(att, "salt"))
     rows.append(measure(ex, "a validator's commitment", lambda i: learning_ids[i], commit))
-    rows.append(measure(ex, "report metered usage", lambda i: {"learning": learning_ids[i], "consumer": A("6"),
-                                                                 "calls": 1_000}, ex.usage))
+    # Paying for usage needs accepted learnings: this harness accepts them directly (validation is measured above).
+    ex.db.execute("UPDATE verdicts SET status='accepted', accepted=1")
+    rows.append(measure(ex, "pay for metered usage", lambda i: {"learning": learning_ids[i], "consumer": A("6"),
+                                                                  "calls": 1_000}, ex.usage))
     rows = [price(r) for r in rows]
     print(__doc__.split("\n\n")[0], "\n")
     print(f"assumptions: ${KWH_USD}/kWh, {WATTS_PER_CORE} W a busy core, PUE {PUE}, {NET_KWH_PER_GB} kWh/GB moved, "
-          f"{STORE_WATTS_PER_GB} W/GB stored, {COPIES} copies for {YEARS} years, {N} runs each\n")
-    print(f"{'transaction':32} {'CPU':>8} {'wire':>8} {'disk':>8} {'energy':>9} {'cost':>13}   where it goes")
+          f"{STORE_WATTS_PER_GB} W/GB stored, {COPIES} copies; traces and learnings kept {FOR_GOOD_YEARS} years, "
+          f"everything else {WINDOW_DAYS} days (the challenge window); {N} runs each\n")
+    print(f"{'transaction':32} {'kept':>8} {'CPU':>8} {'wire':>8} {'disk':>8} {'energy':>9} {'cost':>13}   where it goes")
     for r in rows:
         parts = ", ".join(f"{k} {v:.0%}" for k, v in sorted(r["parts"].items(), key=lambda kv: -kv[1]) if v >= 0.01)
-        print(f"{r['transaction']:32} {r['cpu_s'] * 1e3:6.2f}ms {r['wire_bytes'] / 1e3:6.1f}KB "
+        print(f"{r['transaction']:32} {r['kept']:>8} {r['cpu_s'] * 1e3:6.2f}ms {r['wire_bytes'] / 1e3:6.1f}KB "
               f"{r['disk_bytes'] / 1e3:6.1f}KB {r['joules']:7.2f} J  ${r['nanos'] / 1e9:.9f}   {parts}")
-    top = max(r["nanos"] for r in rows)
-    print(f"\ndearest: {top:.0f} nano-dollars (${top / 1e9:.9f}); cheapest: {min(r['nanos'] for r in rows):.0f}")
+    top, low = max(r["nanos"] for r in rows), min(r["nanos"] for r in rows)
+    print(f"\ndearest: {top:.0f} nano-dollars (${top / 1e9:.9f}); cheapest: {low:.0f}")
+    print(f"the standard fee: {TX_FEE_NANOS:,} nano-dollars (${TX_FEE_NANOS / 1e9:.5f}), {TX_FEE_NANOS / top:,.0f}x the "
+          f"dearest transaction's electricity and {TX_FEE_NANOS / low:,.0f}x the cheapest's")
     ex.db.close()
     return rows
 

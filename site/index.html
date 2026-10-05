@@ -599,7 +599,7 @@ footer a{color:inherit}
     </div>
     <div class="coinbox" id="coinbox" hidden>
       <h3>The coin, live</h3>
-      <p class="sub">Contributors earn TXC. Users pay dollars, which buy TXC from the pool; half of what they buy is burned, and the protocol mints at most half that burn back to the same contributors. Nothing is minted for a verdict. Nobody sets the price; the pool does. Every transaction pays <b id="c-fee">$0.0000004</b>, about the electricity it uses.</p>
+      <p class="sub">Users pay in credits: a dollar buys a million, always, by buying TXC from the pool and burning it. Each epoch mints at most a fixed emission (50,000 TXC, halving five times) to the work that was paid for, never more than its credits were worth, so TXC follows how much the network is used, not the sum of all it was ever paid. Nothing is minted for a verdict. Nobody sets the price; the pool does. Every transaction pays <b id="c-fee">$0.00005</b> in credits, burned: it funds the network and prices out spam.</p>
       <div class="coin-stats" aria-live="off">
         <div><b id="c-price">$0.0100</b>per TXC</div>
         <div><b id="c-supply">1,000,000</b>TXC in existence</div>
@@ -1099,8 +1099,9 @@ function allPaths(tree = TAXO, pre = '') { let out = []; for (const [k, n] of Ob
 /* ---- state ---- */
 const live = {mode: 'sample', db: null, user: null, uid: null, canWrite: null, traces: [], bounties: [], learnings: [], feed: [], account: null, counts: null,
               coinMode: false, symbol: 'TXC'};
-const txc = u => (u / 1e6).toLocaleString(undefined, {maximumFractionDigits: Math.abs(u) < 1e8 ? 1 : 0}) + ' ' + live.symbol;
-const coinUsd = u => live.counts && live.counts.coin ? usd(u * live.counts.coin.price_micros / 1e6) : '';
+// TXC has 18 decimals and travels as a decimal string: whole TXC, to a millionth, via BigInt so nothing rounds away
+const whole = u => { try { return Number(BigInt(String(u || 0).split('.')[0]) / 1000000000000n) / 1e6; } catch (e) { return 0; } };
+const txc = u => { const w = whole(u); return w.toLocaleString(undefined, {maximumFractionDigits: Math.abs(w) < 100 ? 4 : 0}) + ' ' + live.symbol; };
 const chip = $('#live-status');
 function setChip(text, cls) { if (chip) { chip.lastChild.textContent = text; chip.className = 'livechip ' + (cls || ''); } }
 const firstLines = s => String(s || '').split('\n').filter(l => l.trim()).slice(0, 2).join('  ').slice(0, 160);
@@ -1132,9 +1133,9 @@ function stats() {
 function renderCoin() {
   const k = live.counts && live.counts.coin; if (!k) return;
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  set('c-price', '$' + (k.price_micros / 1e6).toFixed(4)); set('c-supply', Math.round(k.supply_units / 1e6).toLocaleString());
-  set('c-burned', Math.round(k.burned_units / 1e6).toLocaleString()); set('c-vesting', Math.round(k.vesting_units / 1e6).toLocaleString());
-  set('c-validators', k.validators); set('c-staked', 'validators, ' + Math.round(k.staked_units / 1e6).toLocaleString() + ' ' + live.symbol + ' staked');
+  set('c-price', '$' + (k.price_micros / 1e6).toFixed(4)); set('c-supply', Math.round(whole(k.supply_units)).toLocaleString());
+  set('c-burned', Math.round(whole(k.burned_units)).toLocaleString()); set('c-vesting', Math.round(whole(k.vesting_units)).toLocaleString());
+  set('c-validators', k.validators); set('c-staked', 'validators, ' + Math.round(whole(k.staked_units)).toLocaleString() + ' ' + live.symbol + ' staked');
   if (k.rules && k.rules.tx_fee_nanos) set('c-fee', '$' + (k.rules.tx_fee_nanos / 1e9).toFixed(9).replace(/0+$/, ''));
 }
 
@@ -1151,8 +1152,8 @@ function renderBoard() {
   if (!list.length) { el.innerHTML = '<p class="empty">No bounties yet. Post the first one, free.</p>'; return; }
   el.innerHTML = list.map(b => {
     const mine = myCoins(b.id), price = BASE + SLOPE * (b.supply || 0), open = b.status === 'open';
-    const poolText = live.coinMode ? txc(b.pool || 0) + ' <span style="color:var(--text-3);font-weight:500">≈ ' + coinUsd(b.pool || 0) + '</span>' : usd(b.pool || 0);
-    const nextText = live.coinMode ? ((b.priceUnits || 0) / 1e6).toFixed(4) + ' ' + live.symbol : '$' + price.toFixed(4);
+    const poolText = live.coinMode ? usd(b.pool || 0) + ' <span style="color:var(--text-3);font-weight:500">in ' + txc(b.poolUnits || 0) + '</span>' : usd(b.pool || 0);
+    const nextText = '$' + price.toFixed(4);           // the curve is priced in dollars on both nodes
     return '<div class="bcard"><div class="btop"><span class="pill ' + (open ? 'on' : '') + '">' + esc(b.status || 'open') + '</span><span class="bpath" title="' + esc(b.path + (b.failure ? ' · ' + b.failure : '')) + '">' + esc(b.path) + (b.failure ? ' · ' + esc(b.failure) : '') + '</span></div>' +
       '<h4>' + (b.num ? '<span style="color:var(--text-3)">#' + b.num + '</span> ' : '') + esc(b.title) + '</h4><div class="bmeta"><span>model <b>' + esc(b.model || 'any') + '</b></span><span>target <b>' + Math.round((b.target || 0) * 100) + '%</b></span>' +
       '<span>pool <b>' + poolText + '</b></span><span>coins <b>' + Math.round(b.supply || 0).toLocaleString() + '</b></span><span>next coin <b>' + nextText + '</b></span>' + closes(b) + '</div>' +
@@ -1168,7 +1169,7 @@ function renderWallet() {
   if (live.mode === 'node') {
     if (!live.account) { w.innerHTML = '<span>Testnet: no real money</span><button class="btn ghost sm" id="open-wallet">Get $25 test credits</button>'; $('#open-wallet').onclick = openWallet; return; }
     const held = Object.values(live.account.coins || {}).filter(c => c > 0).length;
-    const coinPart = live.coinMode ? ' · <b>' + txc(live.account.coinUnits || 0) + '</b>' + (live.account.vesting ? ' (+' + txc(live.account.vesting) + ' vesting)' : '') : '';
+    const coinPart = live.coinMode ? ' · <b>' + txc(live.account.coinUnits || 0) + '</b>' + (whole(live.account.vesting) > 0 ? ' (+' + txc(live.account.vesting) + ' vesting)' : '') : '';
     w.innerHTML = '<span>Test wallet <b>' + usd(live.account.balance) + '</b>' + coinPart + ' · coins in ' + held + ' bount' + (held === 1 ? 'y' : 'ies') + '</span>' +
       (live.coinMode ? '<button class="btn ghost sm" id="buy-txc">Buy ' + live.symbol + ' with $1</button>' : '') +
       '<code title="your testnet address, kept in this browser">' + esc(short(live.uid)) + '</code>';
@@ -1225,7 +1226,7 @@ async function nodeLoad(full) {
     api.get('/v0/events?limit=30'), api.get('/v0/wallets/' + live.uid)]);
   live.counts = st;
   live.bounties = bs.bounties.map(b => ({id: String(b.id), num: b.id, title: b.title, path: b.path, model: b.base_model || 'any', failure: b.failure,
-    target: b.target, pool: live.coinMode ? b.pool_units : b.pool_micros, priceUnits: b.price_units, supply: b.supply, status: b.status, deadline: b.deadline_epoch}));
+    target: b.target, pool: b.pool_micros, poolUnits: b.pool_units, supply: b.supply, status: b.status, deadline: b.deadline_epoch}));
   live.learnings = ls.learnings.map(L => ({id: L.id, name: L.name || (L.kind + ' for ' + L.base_model), kind: L.kind, model: L.base_model, path: L.path,
     metric: L.metric, before: L.before, after: L.after, gain: L.gain, p: fmtP(L.p_value), firstTry: L.first_try,
     status: L.solved_bounty ? 'solved bounty #' + L.solved_bounty
@@ -1247,8 +1248,7 @@ async function nodeSearch({q, path, mode, sort, offset}) {
   const s = await api.get('/v0/search?' + p);
   return {rows: s.results.map(rowFromHit), total: s.total, facets: s.facets,
           bounties: s.bounties.map(b => ({path: b.path, text: esc('Bounty #' + b.id + ' · ' + b.title + ' · pool ' +
-            (live.coinMode ? txc(b.pool_units) + ' · next coin ' + (b.price_units / 1e6).toFixed(4) + ' ' + live.symbol
-                           : usd(b.pool_micros) + ' · next coin $' + (b.price_micros / 1e6).toFixed(4)))}))};
+            usd(b.pool_micros) + (live.coinMode ? ' (' + txc(b.pool_units) + ')' : '') + ' · next coin $' + (b.price_micros / 1e6).toFixed(4))}))};
 }
 async function buyCoin(btn) {
   btn.disabled = true;
@@ -1291,7 +1291,7 @@ async function back(bid, micros, btn) {
     if (!live.account) { toast('Get your $25 of test credits first (button above).'); return; }
     btn.disabled = true;
     try { const r = await api.post('/v0/bounties/' + bid + '/buy', {buyer: live.uid, micros});
-      const each = live.coinMode ? (r.spent_units / 1e6 / r.coins).toFixed(2) + ' ' + live.symbol : '$' + (r.avg_price_micros / 1e6).toFixed(4);
+      const each = '$' + (r.avg_price_micros / 1e6).toFixed(4);
       toast('Backed with ' + usd(micros) + (live.coinMode ? ' (' + txc(r.spent_units) + ')' : '') + ': ' + r.coins.toFixed(1) + ' coins at ' + each + ' each.', true); await nodeLoad(false); }
     catch (e) { toast('Could not back it: ' + e.message); }
     btn.disabled = false; return;

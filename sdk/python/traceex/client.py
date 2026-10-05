@@ -123,10 +123,16 @@ class Client:
 
     def swap(self, side, amount):
         """side "buy": spend `amount` dollar micros on TXC; side "sell": sell `amount` TXC units for dollars."""
-        return self._call("POST", "/v0/swap", {"account": self.address, "side": side, "amount": int(amount)})
+        return self._call("POST", "/v0/swap", {"account": self.address, "side": side, "amount": str(int(amount))})
+
+    def buy_credits(self, micros=0, units=0):
+        """Make credits (1 credit = $0.000001): `micros` of dollars buy TXC that is burned, or burn `units` of TXC you
+        hold. Credits pay for everything; they can't be moved or turned back. TXC amounts travel as decimal strings."""
+        return self._call("POST", "/v0/credits", {"account": self.address, "micros": int(micros), "units": str(int(units))})
 
     def back_with_coins(self, bounty_id, coins):
-        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", {"buyer": self.address, "coins": coins})
+        """Back a bounty with TXC you hold: `coins` is an amount of TXC ("12.5"), sent exactly as a string."""
+        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", {"buyer": self.address, "coins": str(coins)})
 
     def validators(self):
         return self._call("GET", "/v0/validators")
