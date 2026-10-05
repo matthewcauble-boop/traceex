@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="traceX: open agents share the fixes their checkers verify, own them as traces, and earn when the learnings built from them are used.">
+<meta name="description" content="Models learn in two places: in the lab, before they ship, and in the world, after. Open agents only get the first. traceX is the second.">
 <title>traceX</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -348,13 +348,51 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
 .reg{margin-top:56px;display:grid;gap:10px}
 .scroll{overflow-x:auto}
 .reg .pay td:last-child{font-weight:500}
+.thesis{margin-top:22px;font:500 clamp(20px,2.1vw,28px)/1.32 var(--font);letter-spacing:-.015em;color:var(--text-2);max-width:36ch}
+.thesis b{display:inline-block;margin-top:6px;font-weight:600;color:var(--text)}
+.thesis em{font-style:normal;color:var(--brand)}
+.hero .thesis+.lede{margin-top:16px}
+.signup{position:relative;margin-top:28px;max-width:640px}
+.signup .field{display:flex;gap:8px;background:#fff;border:1px solid var(--line-2);border-radius:999px;padding:6px;box-shadow:0 1px 2px rgba(10,11,13,.04),0 10px 28px rgba(0,82,255,.07);transition:border-color .15s,box-shadow .15s}
+.signup .field:focus-within{border-color:var(--brand);box-shadow:0 0 0 4px var(--brand-soft)}
+.signup .field input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:500 17px var(--font);color:var(--text);padding:0 16px}
+.signup .field input::placeholder{color:var(--text-3)}
+.signup .field .btn{padding:13px 22px;flex:none}
+.roles{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px}
+.roles-l{font:500 13px var(--font);color:var(--text-2);margin-right:2px}
+.roles label{cursor:pointer;position:relative}
+.roles input{position:absolute;opacity:0;width:1px;height:1px}
+.roles label span{display:inline-block;font:500 13px/1 var(--font);color:var(--text-2);background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 12px;transition:background .15s,color .15s,border-color .15s}
+.roles label:hover span{border-color:var(--line-2);color:var(--text)}
+.roles input:checked+span{background:var(--brand-soft);border-color:var(--brand);color:var(--brand)}
+.roles input:focus-visible+span{outline:2px solid var(--brand);outline-offset:2px}
+.signup .after{display:none;margin-top:14px}
+.signup .after>label{display:block;font:500 14px var(--font);color:var(--text-2);margin:0 0 8px 8px}
+.signup .after>label span{color:var(--text-3)}
+.signup.is-done .field.main,.signup.is-done .roles{display:none}
+.signup.is-done .after{display:block}
+.signup.is-sent .after{display:none}
+.msg{margin-top:12px;font:600 15px/1.4 var(--font);color:var(--brand)}
+.msg:empty{display:none}
+.msg.bad{color:#c0262d}
+.fine{margin-top:12px;font:400 13px/1.45 var(--font);color:var(--text-3)}
+.fine a{color:var(--text-2)}
+.hp{position:absolute!important;left:-9999px;width:1px;height:1px;opacity:0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.howlink{display:inline-block;margin-top:20px;font:500 15px var(--font);color:var(--text-2);text-decoration:none}
+.howlink:hover{color:var(--brand)}
+.join .signup{margin-top:28px}
+.join-sub{margin:72px 0 0;font:600 clamp(20px,2vw,26px)/1.25 var(--font);letter-spacing:-.015em}
+.join-sub+.join-grid{margin-top:24px}
+footer a{color:inherit}
+@media (max-width:560px){.signup .field{flex-direction:column;border-radius:20px;padding:8px}.signup .field input{padding:12px 10px}.signup .field .btn{justify-content:center}}
 </style>
 
 <!-- ============ HERO: the living network ============ -->
 <section class="hero night" id="top" aria-label="traceX">
   <header class="nav">
     <a class="brand" href="#top" aria-label="traceX"><i aria-hidden="true"></i><span class="wm">trace<b>X</b></span></a>
-    <nav aria-label="Sections"><a href="#how">How it works</a><a href="#bounties">Bounties</a><a href="#money">Royalties</a><a href="#open-weights">Open weights</a><a href="#autopilot">Autopilot</a><a class="nav-join" href="#join">Join</a></nav>
+    <nav aria-label="Sections"><a href="#how">How it works</a><a href="#bounties">Bounties</a><a href="#money">Royalties</a><a href="#open-weights">Open weights</a><a href="#autopilot">Autopilot</a><a class="nav-join" href="#join">Get early access</a></nav>
   </header>
   <canvas id="net" aria-hidden="true"></canvas>
   <div class="legend" aria-hidden="true">
@@ -364,9 +402,31 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
   </div>
   <div class="wrap">
     <div>
-      <h1>Each agent<br>learns from<br><em>every</em> agent.</h1>
-      <p class="lede">Open agents share the fixes their checkers verify. Those fixes become traces you own, the learnings built from them have to prove they help, and every use pays back the people whose fixes made them.</p>
-      <div class="btns"><a class="btn gold" href="#join">Share your first trace</a><a class="btn ghost" href="#how">See how it works</a></div>
+      <h1>Models learn in <em>two</em> places.</h1>
+      <p class="thesis">In the lab, before they ship.<br>And in the world, after.<br><b>Open agents only get the first.<br><em>traceX is the second.</em></b></p>
+      <p class="lede">Every fix an agent's checker proves becomes training any open agent can use, and every use pays the people whose fixes made it.</p>
+      <form class="signup" data-from="hero" novalidate>
+        <div class="field main">
+          <label class="sr" for="em-hero">Email</label>
+          <input id="em-hero" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@yourlab.ai" required>
+          <button class="btn gold" type="submit">Get early access</button>
+        </div>
+        <div class="roles" role="radiogroup" aria-label="What you'd like to do on traceX (optional)">
+          <span class="roles-l">I'd like to</span>
+          <label><input type="radio" name="role" value="share"><span>share my agents' fixes</span></label>
+          <label><input type="radio" name="role" value="train"><span>train on verified fixes</span></label>
+          <label><input type="radio" name="role" value="bounty"><span>post bounties</span></label>
+          <label><input type="radio" name="role" value="validate"><span>validate learnings</span></label>
+        </div>
+        <p class="msg" role="status" aria-live="polite"></p>
+        <div class="after">
+          <label for="bd-hero">What are you building? <span>(optional)</span></label>
+          <div class="field"><input id="bd-hero" name="building" maxlength="280" placeholder="a coding agent whose unit tests catch its mistakes"><button class="btn ghost" type="submit">Send</button></div>
+        </div>
+        <input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <p class="fine">Early-access news only, nothing else. <a href="/privacy.html">Privacy, and how to remove yourself</a>.</p>
+      </form>
+      <a class="howlink" href="#how">See how it works &darr;</a>
       <p class="livechip" id="live-status"><i></i><span>Connecting to the live test exchange…</span></p>
     </div>
     <div class="stats" aria-live="off">
@@ -621,8 +681,31 @@ agent = AdaptiveAgent(..., autopilot=Autopilot(client, task=..., base_model=...)
 <!-- ============ JOIN ============ -->
 <section class="join paper" id="join" aria-labelledby="j-h">
   <div class="wrap">
-    <div class="kick">09 · Join</div>
-    <h2 class="poster-h" id="j-h" style="margin-top:22px">Five lines.<br><span class="own">Your fixes start earning.</span></h2>
+    <div class="kick">09 · Early access</div>
+    <h2 class="poster-h" id="j-h" style="margin-top:22px">Learning after they ship.<br><span class="own">Get early access.</span></h2>
+    <p class="lede" style="margin-top:20px">The live exchange opens in stages. Leave your email and we'll bring you in.</p>
+    <form class="signup" data-from="join" novalidate>
+        <div class="field main">
+          <label class="sr" for="em-join">Email</label>
+          <input id="em-join" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@yourlab.ai" required>
+          <button class="btn gold" type="submit">Get early access</button>
+        </div>
+        <div class="roles" role="radiogroup" aria-label="What you'd like to do on traceX (optional)">
+          <span class="roles-l">I'd like to</span>
+          <label><input type="radio" name="role" value="share"><span>share my agents' fixes</span></label>
+          <label><input type="radio" name="role" value="train"><span>train on verified fixes</span></label>
+          <label><input type="radio" name="role" value="bounty"><span>post bounties</span></label>
+          <label><input type="radio" name="role" value="validate"><span>validate learnings</span></label>
+        </div>
+        <p class="msg" role="status" aria-live="polite"></p>
+        <div class="after">
+          <label for="bd-join">What are you building? <span>(optional)</span></label>
+          <div class="field"><input id="bd-join" name="building" maxlength="280" placeholder="a coding agent whose unit tests catch its mistakes"><button class="btn ghost" type="submit">Send</button></div>
+        </div>
+        <input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <p class="fine">Early-access news only, nothing else. <a href="/privacy.html">Privacy, and how to remove yourself</a>.</p>
+      </form>
+    <h3 class="join-sub">Building now? Five lines connect an agent to the testnet.</h3>
     <div class="join-grid">
       <ol class="steps">
         <li><div><b>Keep your loop</b><p>Any model, any task. If you already extract and check, <code>AdaptiveAgent</code> wraps it and emits traces as fixes happen.</p></div></li>
@@ -647,7 +730,7 @@ agent = AdaptiveAgent(..., autopilot=Autopilot(client, task=..., base_model=...)
 </section>
 
 <div class="ticker" aria-hidden="true"><div id="tick"></div></div>
-<footer class="night"><span>traceX · the trace exchange protocol, v0.1 · October 2026</span><span>Demo model: Cactus Needle (26M, Apache-2.0), on-device.</span></footer>
+<footer class="night"><span>traceX · the trace exchange protocol, v0.1 · October 2026 · <a href="/privacy.html">Privacy</a></span><span>Demo model: Cactus Needle (26M, Apache-2.0), on-device.</span></footer>
 
 <script>
 (function(){
@@ -1368,5 +1451,48 @@ async function start() {
   else renderWallet();
 }
 start();
+})();
+</script>
+<script>
+(function(){
+'use strict';
+const looksLikeEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+async function send(payload){
+  const r = await fetch('/api/signup', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) { const e = new Error(j.error || 'failed'); e.code = j.error; throw e; }
+  return j;
+}
+document.querySelectorAll('form.signup').forEach(form => {
+  const msg = form.querySelector('.msg');
+  const say = (text, bad) => { msg.textContent = text; msg.classList.toggle('bad', !!bad); };
+  let email = '';
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const joined = form.classList.contains('is-done');
+    const btn = form.querySelector(joined ? '.after button' : '.field.main button');
+    if (!joined) {
+      email = String(fd.get('email') || '').trim();
+      if (!looksLikeEmail(email)) { say('That email address doesn’t look right.', true); form.querySelector('input[type=email]').focus(); return; }
+    }
+    btn.disabled = true;
+    try {
+      if (!joined) {
+        const j = await send({email, role: fd.get('role') || '', from: form.dataset.from, website: fd.get('website') || ''});
+        form.classList.add('is-done');
+        say(j.returning ? 'You’re already on the list. Thanks for coming back.' : 'You’re on the list. We’ll be in touch.');
+        form.querySelector('.after input').focus({preventScroll: true});
+      } else {
+        const building = String(fd.get('building') || '').trim();
+        if (building) await send({email, building, from: form.dataset.from, website: fd.get('website') || ''});
+        form.classList.add('is-sent');
+        if (building) say('Got it. Thank you.');
+      }
+    } catch (err) {
+      say(err.code === 'email' ? 'That email address doesn’t look right.' : 'Something went wrong on our side. Please try again in a minute.', true);
+    } finally { btn.disabled = false; }
+  });
+});
 })();
 </script>

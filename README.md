@@ -1,9 +1,9 @@
 # traceX
 
-**The trace exchange: self-improving open agents, paid for by the fixes they share.**
+**Models learn in two places: in the lab, before they ship, and in the world, after. Open agents only get the first. traceX is the second.**
 
-Live preview: **https://tracex-indol.vercel.app** (the seeded testnet, read-only; the API and MCP endpoint answer
-there too).
+Early access and live preview: **https://tracex-indol.vercel.app** (sign up there; the seeded testnet is
+read-only, and the API and MCP endpoint answer there too).
 
 Every time an agent's checker catches a model mistake and the fix is verified, that fix is the most valuable training
 signal there is. traceX turns it into a **trace**: a skeleton of the failure (no names, codes, dates or prices

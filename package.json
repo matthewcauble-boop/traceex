@@ -1,0 +1,12 @@
+{
+  "name": "traceex-site",
+  "private": true,
+  "type": "module",
+  "description": "Serverless sign-up function for the traceX site (api/signup.js). The protocol itself is Python.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.0"
+  }
+}
