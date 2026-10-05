@@ -1,8 +1,9 @@
-"""The coin economy (node/coin.py): python -m unittest tests.test_coin
+"""The coin economy (node/coin.py, testnet v0.5, everything priced in sats): python -m unittest tests.test_coin
 
 Each test is one rule of the economy, most of them a rule that makes a farming strategy lose. Every test ends with
 the books balanced: minted - burned == everything held by accounts and escrows + the pool's reserve, and every credit
-made is spent or still held."""
+made is spent or still held. Amounts are msats (1 credit = 1 msat); TXC opens at 10 sats (10,000 msats), so the
+numbers here are the v0.4 tests' with micro-dollars read as msats, and each wallet takes 30,000 test sats."""
 import json
 import os
 import sys
@@ -34,13 +35,13 @@ class Clock:
 
 
 def make_ex(validators=3, quorum=3, delay=0, fee_to=OPERATOR, **params):
-    ex = CoinExchange(":memory:", test_credits=25_000_000, beacon_delay=delay, params=Params(quorum=quorum, **params),
+    ex = CoinExchange(":memory:", test_credits=30_000_000, beacon_delay=delay, params=Params(quorum=quorum, **params),
                       clock=Clock(), fee_to=fee_to)
     vals = []
     for i in range(validators):
         v = V(i)
         ex.faucet(v)
-        ex.swap(v, "buy", 15_000_000)                     # $15 of TXC, then stake 1,000 of it ($10 at $0.01)
+        ex.swap(v, "buy", 15_000_000)                     # 15,000 sats of TXC, then stake 1,000 of it (10,000 sats)
         ex.register_validator(v, 1_000 * UNIT)
         vals.append(v)
     for who in (TRAINER, PRODUCER, CONSUMER, CHALLENGER):
@@ -57,10 +58,10 @@ def trace(text="Write a function to add two numbers.\nassert add(1, 2) == 3", pr
 
 def learning(ex, parents, trainer=TRAINER, validator=None, eval_set="sha256:claimed", before=0.6, after=0.7, name="x",
              weights=None, split=None, per_call=200):
-    ex.swap(trainer, "buy", 6_000_000)                    # enough TXC for the $5 bond
+    ex.swap(trainer, "buy", 6_000_000)                    # enough TXC for the 5,000-sat bond
     att = attest(validator or V(0), eval_set, "pass@1", before, after)
     L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": name, "hash": weights},
-                       parents=[(p, 1) for p in parents], trainer=trainer, attestation=att, per_call_micros=per_call,
+                       parents=[(p, 1) for p in parents], trainer=trainer, attestation=att, per_call_msats=per_call,
                        split=split)
     return ex.register_learning(L)["id"]
 
@@ -87,10 +88,10 @@ def accepted(ex, vals, parents=None, **kw):
 
 
 def worth(ex, account, price=None):
-    """An account's TXC (liquid + vesting) at a fixed price (the pool's current one by default), plus its dollars and
-    credits."""
+    """An account's TXC (liquid + vesting) at a fixed price (the pool's current one by default), plus its sats and
+    credits, in msats."""
     w = ex.wallet(account)
-    return (w["balance_micros"] + w["credits_micros"]
+    return (w["balance_msats"] + w["credits_msats"]
             + (w["coin_units"] + w["vesting_units"]) * (price or ex.price()) // UNIT)
 
 
@@ -105,7 +106,7 @@ class Pool(unittest.TestCase):
         r = ex.swap(CONSUMER, "buy", 5_000_000)
         self.assertGreater(ex.price(), p0)
         ex.swap(CONSUMER, "sell", r["bought_units"])
-        self.assertLess(ex.wallet(CONSUMER)["balance_micros"], 25_000_000)   # the pool keeps its 0.3% each way
+        self.assertLess(ex.wallet(CONSUMER)["balance_msats"], 30_000_000)   # the pool keeps its 0.3% each way
         self.assertTrue(ex.audit()["balanced"])
         with self.assertRaisesRegex(ValueError, "not enough TXC"):
             ex.swap(CONSUMER, "sell", 10 * UNIT)
@@ -139,46 +140,46 @@ class Pool(unittest.TestCase):
 
 
 class Credits(unittest.TestCase):
-    def test_a_dollar_makes_a_million_credits_at_any_price_and_burns_the_txc_it_buys(self):
+    def test_a_sat_makes_a_thousand_credits_at_any_price_and_burns_the_txc_it_buys(self):
         ex, _ = make_ex(validators=0)
         burned0 = ex.coin_stats()["burned_units"]
-        r = ex.buy_credits(CONSUMER, micros=1_000_000)
-        self.assertEqual((r["credits_micros"], ex.wallet(CONSUMER)["credits_micros"]), (1_000_000, 1_000_000))
+        r = ex.buy_credits(CONSUMER, msats=1_000_000)
+        self.assertEqual((r["credits_msats"], ex.wallet(CONSUMER)["credits_msats"]), (1_000_000, 1_000_000))
         self.assertEqual(ex.coin_stats()["burned_units"] - burned0, r["burned_units"])   # every TXC it bought, burned
         ex.swap(PRODUCER, "buy", 20_000_000)                                 # TXC gets dearer...
-        r2 = ex.buy_credits(CONSUMER, micros=1_000_000)
-        self.assertEqual(r2["credits_micros"], 1_000_000)                    # ...a dollar still makes a million credits
+        r2 = ex.buy_credits(CONSUMER, msats=1_000_000)
+        self.assertEqual(r2["credits_msats"], 1_000_000)                    # ...1,000 sats still make 1,000,000 credits
         self.assertLess(r2["burned_units"], r["burned_units"])               # by burning fewer TXC
         self.assertTrue(ex.audit()["balanced"])
 
     def test_credits_cannot_be_moved_or_turned_back(self):
         ex, _ = make_ex(validators=0)
-        ex.buy_credits(CONSUMER, micros=1_000_000)
+        ex.buy_credits(CONSUMER, msats=1_000_000)
         self.assertFalse([m for m in dir(ex) if "credit" in m and any(w in m for w in ("transfer", "sell", "redeem",
                                                                                          "withdraw", "refund"))])
-        dollars = ex.wallet(CONSUMER)["balance_micros"]
-        with self.assertRaisesRegex(ValueError, "not enough test credits"):    # credits never buy TXC or dollars
-            ex.swap(CONSUMER, "buy", dollars + 500_000)
-        self.assertEqual(ex.wallet(CONSUMER)["credits_micros"], 1_000_000)
+        sats = ex.wallet(CONSUMER)["balance_msats"]
+        with self.assertRaisesRegex(ValueError, "not enough test sats"):    # credits never buy TXC or sats
+            ex.swap(CONSUMER, "buy", sats + 500_000)
+        self.assertEqual(ex.wallet(CONSUMER)["credits_msats"], 1_000_000)
 
     def test_burning_held_txc_counts_at_the_lower_of_spot_and_reference(self):
         ex, _ = make_ex(validators=0)
         units = ex.swap(CONSUMER, "buy", 1_000_000)["bought_units"]
         ex.swap(PRODUCER, "buy", 20_000_000)                                 # someone pumps the spot
         self.assertGreater(ex._price_q(), ex.ref_q())
-        made = ex.buy_credits(CONSUMER, units=units)["credits_micros"]
+        made = ex.buy_credits(CONSUMER, units=units)["credits_msats"]
         self.assertEqual(made, credits_for(units, ex.ref_q()))              # the reference price, not the pumped spot
         self.assertLess(made, credits_for(units, ex._price_q()))
         self.assertTrue(ex.audit()["balanced"])
 
-    def test_payments_spend_credits_first_and_dollars_top_them_up(self):
+    def test_payments_spend_credits_first_and_sats_top_them_up(self):
         ex, vals = make_ex()
         lid = accepted(ex, vals)
-        ex.buy_credits(CONSUMER, micros=3_000_000)
-        dollars = ex.wallet(CONSUMER)["balance_micros"]
-        ex.usage({"learning": lid, "consumer": CONSUMER, "calls": 50_000})   # $10 of calls: $3 of credits, $7 more
+        ex.buy_credits(CONSUMER, msats=3_000_000)
+        sats = ex.wallet(CONSUMER)["balance_msats"]
+        ex.usage({"learning": lid, "consumer": CONSUMER, "calls": 50_000})   # 10,000 sats of calls: 3,000 in credits
         w = ex.wallet(CONSUMER)
-        self.assertEqual((w["credits_micros"], w["balance_micros"]), (0, dollars - 7_000_000))
+        self.assertEqual((w["credits_msats"], w["balance_msats"]), (0, sats - 7_000_000))
         self.assertTrue(ex.audit()["balanced"])
 
 
@@ -243,7 +244,7 @@ class BurnAndMint(unittest.TestCase):
     def test_credits_made_when_txc_was_cheap_earn_only_todays_value(self):
         ex, vals = make_ex()
         lid = accepted(ex, vals)
-        ex.buy_credits(TRAINER, micros=5_000_000)                            # credits made at about $0.01...
+        ex.buy_credits(TRAINER, msats=5_000_000)                            # credits made at about $0.01...
         for _ in range(3):
             ex.swap(PRODUCER, "buy", 6_000_000)
             ex.clock.advance(86_400)
@@ -279,7 +280,7 @@ class BurnAndMint(unittest.TestCase):
             ex.submit_trace(dict(trace(f"Write a function number {i} that adds.", code=f"return a+b+{i}")))
         s = ex.settle()
         fees = s["mint"]["credits_burned"]["operator"]
-        self.assertEqual(fees, 40 * 50)                                      # 40 transactions at 50 credits
+        self.assertEqual(fees, 40 * 58)                                      # 40 transactions at 58 msats
         self.assertGreater(ex.wallet(OPERATOR)["coin_units"], 0)
         self.assertLessEqual(ex.wallet(OPERATOR)["coin_units"], units_for(fees, ex.last_mint()["twap_q"]))
         self.assertTrue(ex.audit()["balanced"])
@@ -293,21 +294,21 @@ class BurnAndMint(unittest.TestCase):
 
 class Fee(unittest.TestCase):
     def test_every_transaction_pays_the_standard_fee_in_credits_and_it_burns(self):
-        from exchange import TX_FEE_NANOS
-        self.assertEqual(TX_FEE_NANOS, 50_000)                               # $0.00005
+        from exchange import TX_FEE_MSATS
+        self.assertEqual(TX_FEE_MSATS, 58)                                   # about $0.00005 at $85,962 a bitcoin
         ex, _ = make_ex(validators=0)
-        owed = lambda who: (ex.db.execute("SELECT nanos FROM fees WHERE account=?", (who,)).fetchone() or [0])[0]
+        owed = lambda who: ex.wallet(who)["owed_fee_msats"]
         for i in range(3):
             ex.submit_trace(dict(trace(f"Write a function number {i} to add two numbers.", code=f"return a + b + {i}")))
-        self.assertEqual(owed(PRODUCER), 3 * TX_FEE_NANOS)
-        self.assertEqual(ex.wallet(PRODUCER)["balance_micros"], 25_000_000)  # nothing billed until settlement
+        self.assertEqual(owed(PRODUCER), 3 * TX_FEE_MSATS)
+        self.assertEqual(ex.wallet(PRODUCER)["balance_msats"], 30_000_000)  # nothing billed until settlement
         burned0 = ex.coin_stats()["burned_units"]
         ex.settle()
-        self.assertEqual(ex.wallet(PRODUCER)["balance_micros"], 25_000_000 - 150)   # 150 credits, topped up from dollars
+        self.assertEqual(ex.wallet(PRODUCER)["balance_msats"], 30_000_000 - 174)   # 174 credits, topped up from sats
         self.assertEqual(owed(PRODUCER), 0)
-        self.assertEqual(ex.fees()["burned_micros"], 150)
+        self.assertEqual(ex.fees()["burned_msats"], 174)
         self.assertGreater(ex.coin_stats()["burned_units"], burned0)         # the credits burned TXC
-        with self.assertRaisesRegex(ValueError, "not enough test credits"):
+        with self.assertRaisesRegex(ValueError, "not enough test sats"):
             ex.submit_trace(dict(trace(producer=A("9"))))                    # no wallet, no transaction
         self.assertTrue(ex.audit()["balanced"])
 
@@ -315,21 +316,36 @@ class Fee(unittest.TestCase):
         ex, _ = make_ex(validators=0)
         for i in range(10):
             ex.submit_trace(dict(trace(f"Write a function number {i} to add.", code=f"return a+b+{i}")))
-        dollars = ex.wallet(PRODUCER)["balance_micros"]
-        with self.assertRaisesRegex(ValueError, "not enough test credits"):
-            ex.swap(PRODUCER, "buy", dollars)                                # the fees it owes are spoken for
-        ex.swap(PRODUCER, "buy", dollars - 1_000)
+        sats = ex.wallet(PRODUCER)["balance_msats"]
+        with self.assertRaisesRegex(ValueError, "not enough test sats"):
+            ex.swap(PRODUCER, "buy", sats)                                   # the fees it owes are spoken for
+        ex.swap(PRODUCER, "buy", sats - 1_000)
         ex.settle()
-        self.assertEqual(ex.fees()["burned_micros"], 11 * 50)                # every fee was paid, the swap's too
+        self.assertEqual(ex.fees()["burned_msats"], 11 * 58)                # every fee was paid, the swap's too
+        self.assertTrue(ex.audit()["balanced"])
+
+    def test_the_fee_is_fixed_in_sats_unless_the_operator_turns_on_the_repeg(self):
+        ex, _ = make_ex(validators=0)
+        ex.set_btc_usd(171_924)                                              # bitcoin doubles...
+        for _ in range(4):
+            ex.settle()
+        self.assertEqual(ex.tx_fee_msats, 58)                                # ...the fee stays 58 msats (now ~$0.0001)
+        ex, _ = make_ex(validators=0, fee_repeg_epochs=2)
+        ex.set_btc_usd(171_924)
+        ex.settle()
+        self.assertEqual(ex.tx_fee_msats, 58)                                # re-pegs only every 2nd epoch...
+        ex.settle()
+        self.assertEqual(ex.tx_fee_msats, 29)                                # ...back to $0.00005: 29 msats
+        self.assertEqual(ex.fees()["per_transaction_msats"], 29)
         self.assertTrue(ex.audit()["balanced"])
 
 
 class Divisibility(unittest.TestCase):
-    def test_amounts_stay_payable_at_a_billion_dollars_a_txc(self):
-        ex, vals = make_ex(validators=0, quorum=0, genesis_coins=10 * UNIT, genesis_usd=10 ** 16)   # $1e9 a TXC
-        self.assertEqual(ex.price(), 10 ** 15)                               # micro-dollars per TXC
-        r = ex.buy_credits(CONSUMER, micros=50)                              # one fee's worth of credits
-        self.assertGreater(r["burned_units"], 10_000)                        # 50 credits burn ~50,000 base units
+    def test_amounts_stay_payable_at_a_trillion_sats_a_txc(self):
+        ex, vals = make_ex(validators=0, quorum=0, genesis_coins=10 * UNIT, genesis_msats=10 ** 16)   # 1e12 sats a TXC
+        self.assertEqual(ex.price(), 10 ** 15)                               # msats per TXC
+        r = ex.buy_credits(CONSUMER, msats=58)                              # one fee's worth of credits
+        self.assertGreater(r["burned_units"], 10_000)                        # 58 credits burn ~58,000 base units
         self.assertIn(units_for(1, ex._price_q()), (999, 1_000))            # one credit = ~1,000 units; 6 decimals: 0
         self.assertEqual(1 * 10 ** 6 * PQ // ex._price_q(), 0)
         lid = learning(ex, [ex.submit_trace(dict(trace()))["id"]], per_call=1)
@@ -340,46 +356,46 @@ class Divisibility(unittest.TestCase):
 
     def test_json_carries_txc_amounts_as_strings(self):
         from exchange import wire
-        w = wire({"coin_units": 12 * UNIT, "price_micros": 10_000, "claims": {A("a"): {"amount_units": 5, "proof": []}},
+        w = wire({"coin_units": 12 * UNIT, "price_msats": 10_000, "claims": {A("a"): {"amount_units": 5, "proof": []}},
                   "vesting_units": {A("b"): 7 * UNIT}, "big": 2 ** 60})
         self.assertEqual(w["coin_units"], "12000000000000000000")
-        self.assertEqual((w["price_micros"], w["claims"][A("a")]["amount_units"], w["vesting_units"][A("b")], w["big"]),
+        self.assertEqual((w["price_msats"], w["claims"][A("a")]["amount_units"], w["vesting_units"][A("b")], w["big"]),
                          (10_000, "5", "7000000000000000000", str(2 ** 60)))
         self.assertEqual(to_units("1.5"), 15 * UNIT // 10)
 
 
-class DollarPriced(unittest.TestCase):
-    def test_bonds_stakes_and_challenges_cost_the_same_dollars_at_any_price(self):
+class SatsPriced(unittest.TestCase):
+    def test_bonds_stakes_and_challenges_cost_the_same_sats_at_any_price(self):
         ex, _ = make_ex(validators=0)
         at_genesis = (ex.learning_bond_units(), ex.min_stake_units(), ex.challenge_stake_units())
-        self.assertEqual(at_genesis, (500 * UNIT, 1_000 * UNIT, 200 * UNIT))   # $5, $10, $2 at $0.01
+        self.assertEqual(at_genesis, (500 * UNIT, 1_000 * UNIT, 200 * UNIT))   # 5,000, 10,000, 2,000 sats at 10 sats
         ex.swap(PRODUCER, "buy", 10_000_000)
         ex.clock.advance(86_400)
         ex.settle()                                                          # TXC is dearer; the reference follows
         ref = ex.ref_q()
         self.assertGreater(ref, 10_000 * PQ)
-        for units, micros in zip((ex.learning_bond_units(), ex.min_stake_units(), ex.challenge_stake_units()),
-                                 (5_000_000, 10_000_000, 2_000_000)):
-            self.assertEqual(units, units_for(micros, ref))                  # fewer TXC, the same dollars
-            self.assertLess(units, at_genesis[0] * micros // 5_000_000)
+        for units, msats in zip((ex.learning_bond_units(), ex.min_stake_units(), ex.challenge_stake_units()),
+                                (5_000_000, 10_000_000, 2_000_000)):
+            self.assertEqual(units, units_for(msats, ref))                   # fewer TXC, the same sats
+            self.assertLess(units, at_genesis[0] * msats // 5_000_000)
 
-    def test_a_dollar_backs_a_bounty_with_the_same_coins_at_any_price(self):
+    def test_a_sat_backs_a_bounty_with_the_same_coins_at_any_price(self):
         coins = []
-        for usd in (10_000 * 1_000_000, 10_000_000 * 1_000_000):             # TXC at $0.01, and at $10
-            ex, _ = make_ex(validators=0, genesis_usd=usd)
+        for pool in (10_000_000 * 1000, 10_000_000_000 * 1000):             # TXC at 10 sats, and at 10,000
+            ex, _ = make_ex(validators=0, genesis_msats=pool)
             b = ex.post_bounty({"poster": CONSUMER, "path": "code", "eval_set": "sha256:B", "target": .7, "title": "t"})
             coins.append(ex.buy_coins(b["id"], CONSUMER, 1_000_000)["coins"])
-            self.assertEqual(ex.bounties()["bounties"][0]["price_micros"], round(10_000 + 100 * coins[-1]))
+            self.assertEqual(ex.bounties()["bounties"][0]["price_msats"], round(10_000 + 100 * coins[-1]))
         self.assertAlmostEqual(coins[0], coins[1], delta=0.5)                # about 73 coins either way
-        self.assertAlmostEqual(coins[0], 73.2, delta=0.5)                    # $0.01 + $0.0001 a coin: 0.01n + 0.00005n^2 = 1
+        self.assertAlmostEqual(coins[0], 73.2, delta=0.5)                    # 10 sats + 0.1 a coin: 10n + 0.05n^2 = 1,000
 
     def test_pumping_the_pool_buys_no_extra_bounty_coins(self):
         ex, _ = make_ex(validators=0)
         b = ex.post_bounty({"poster": CONSUMER, "path": "code", "eval_set": "sha256:B", "target": .7, "title": "t"})
         ex.swap(PRODUCER, "buy", 15_000_000)                                 # the pump
         r = ex.buy_coins(b["id"], CONSUMER, 5_000_000)
-        self.assertLess(r["spent_micros"], 5_000_000)                        # only the TXC that went in counts
-        self.assertEqual(r["spent_micros"], credits_for(r["spent_units"], ex.ref_q()))
+        self.assertLess(r["spent_msats"], 5_000_000)                        # only the TXC that went in counts
+        self.assertEqual(r["spent_msats"], credits_for(r["spent_units"], ex.ref_q()))
         self.assertTrue(ex.audit()["balanced"])
 
     def test_validators_the_price_pushes_under_the_minimum_keep_their_seat_while_they_top_up(self):
@@ -391,7 +407,7 @@ class DollarPriced(unittest.TestCase):
         ex.swap(whale, "sell", 300_000 * UNIT)                               # TXC falls about 40%
         ex.clock.advance(86_400)
         ex.settle()
-        self.assertLess(ex._stake(vals[0]), ex.min_stake_units())           # under the dollar minimum now...
+        self.assertLess(ex._stake(vals[0]), ex.min_stake_units())           # under the sats minimum now...
         self.assertTrue(all(ex.validator(v)["active"] for v in vals))        # ...but still seated
         for _ in range(ex.p.stake_grace_epochs):
             ex.settle()
@@ -414,8 +430,8 @@ class Storage(unittest.TestCase):
             return ex
         pruned, kept = run(6), run(1_000)
         for who in (TRAINER, PRODUCER, CONSUMER, OPERATOR, V(0)):            # the same balances, to the unit
-            self.assertEqual({k: v for k, v in pruned.wallet(who).items() if k != "price_micros"},
-                             {k: v for k, v in kept.wallet(who).items() if k != "price_micros"})
+            self.assertEqual({k: v for k, v in pruned.wallet(who).items() if k != "price_msats"},
+                             {k: v for k, v in kept.wallet(who).items() if k != "price_msats"})
         cut = pruned.epoch - 1 - pruned.p.keep_epochs + 1
         old = lambda table: pruned.db.execute(f"SELECT COUNT(*) FROM {table} WHERE epoch < ?", (cut,)).fetchone()[0]
         self.assertEqual([old(t) for t in ("usage", "paid", "work", "burns")], [0, 0, 0, 0])
@@ -551,7 +567,7 @@ class Nesting(unittest.TestCase):
         ex, _ = make_ex(validators=0, quorum=0)                                     # no federation, no bonds: quick
         link = lambda parent, name: Learning.build(kind="lora", task="code.python", base_model="qwen",
                                                    artifact={"uri": name, "hash": None}, parents=[(parent, 1)],
-                                                   trainer=TRAINER, per_call_micros=200,
+                                                   trainer=TRAINER, per_call_msats=200,
                                                    attestation=attest(V(0), "sha256:c", "pass@1", .6, .7))
         prev = ex.submit_trace(dict(trace()))["id"]
         for i in range(MAX_DEPTH):
@@ -712,9 +728,9 @@ class Licences(unittest.TestCase):
                 for i in range(40)]                                          # 40 junk traces in the same lot
         lot = ex.lots()["lots"][0]["lot"]
         for who in (TRAINER, CONSUMER):
-            ex.bid({"lot": lot, "bidder": who, "price_micros": 2_000_000})
+            ex.bid({"lot": lot, "bidder": who, "price_msats": 2_000_000})
         ex.clear()
-        self.assertEqual(ex.coin_stats()["licence_escrow_micros"], 4_000_000)   # paid in credits, burned, waiting
+        self.assertEqual(ex.coin_stats()["licence_escrow_msats"], 4_000_000)   # paid in credits, burned, waiting
         with self.assertRaisesRegex(ValueError, "none of your licence money"):
             ex.direct_licence(lot, junk_maker, junk)                          # nobody steers another buyer's money
         lid = learning(ex, real)                                              # the trainer's learning uses the 4
@@ -723,7 +739,7 @@ class Licences(unittest.TestCase):
         self.assertGreater(ex.wallet(PRODUCER)["coin_units"], 0)
         ex.direct_licence(lot, CONSUMER, real[:2])                            # the other buyer used two of them
         ex.settle()
-        self.assertEqual(ex.coin_stats()["licence_escrow_micros"], 0)
+        self.assertEqual(ex.coin_stats()["licence_escrow_msats"], 0)
         self.assertEqual(ex.wallet(junk_maker)["coin_units"], 0)              # 40 junk traces earned nothing
         self.assertTrue(ex.audit()["balanced"])
 
@@ -737,7 +753,7 @@ class Decoys(unittest.TestCase):
         tid = ex.submit_trace(dict(trace()))["id"]
         L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": "d", "hash": None},
                            parents=[(tid, 1)], trainer=trainer, attestation=attest(V(0), "sha256:c", "pass@1", .30, .45),
-                           per_call_micros=200)
+                           per_call_msats=200)
         lid = ex.register_decoy(L, decoy_digest(0.0, "salt"), operator)["id"]
         bond = ex.wallet(operator)["coin_units"]
         lazy = vals[0]
@@ -749,6 +765,7 @@ class Decoys(unittest.TestCase):
         r = ex.unseal_decoy(lid, 0.0, "salt")
         self.assertEqual(r["caught"], [lazy])                                 # repeated the claim, never measured
         self.assertEqual(ex.validator(lazy)["stake_units"], 750 * UNIT)
+        self.assertFalse(ex.validator(lazy)["active"])                       # slashed under the minimum: seat gone now
         self.assertEqual(ex.validator(vals[1])["slashed_units"], 0)
         self.assertEqual(ex.wallet(operator)["coin_units"], bond + ex.learning_bond_units())   # the decoy's bond comes home
         self.assertEqual(ex.verdict(lid)["status"], "decoy")
@@ -786,14 +803,16 @@ class Scaling(unittest.TestCase):
         self.assertGreater(g[1800][0]["price"] / g[1800][1]["price"], 1e6)    # v0.3 compounds on everything ever paid
         self.assertLess(g[1440][1]["price"], 2 * g[1440][1]["equilibrium"])  # v0.4 comes down after the crash
         self.assertGreater(g[1800][1]["take"], 0.99)                          # contributors realise what users pay
-        self.assertLess(max(r[1]["price"] for r in out["machine"].values()), 1e9)   # payable at every price reached
+        self.assertLess(max(r[1]["price"] for r in out["machine"].values()), 1e12)  # sats a TXC: one msat is still
+        #                                                                     10^3+ base units at every price reached
+        self.assertAlmostEqual(out["machine_sats_per_day"] / 1e12, 1.1633, places=3)   # $1B a day at $85,962 a BTC
 
 
 class Hosted(unittest.TestCase):
     def setUp(self):
         import threading
         from exchange import serve
-        self.ex, self.srv = serve(0, ":memory:", public=True, admin_token="op", economy="coin", test_credits=25_000_000,
+        self.ex, self.srv = serve(0, ":memory:", public=True, admin_token="op", economy="coin", test_credits=30_000_000,
                                   beacon_delay=0, clock=Clock())
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
@@ -811,11 +830,11 @@ class Hosted(unittest.TestCase):
         self.assertIsInstance(got, str)                                      # 18 decimals travel as strings
         self.assertGreater(int(got), 150 * UNIT)
         b = me.post_bounty(title="t", path="code", eval_set="sha256:E", target=.5)
-        r = me.back_with_coins(b["id"], "100")                               # 100 TXC, about $1 at the reference price
-        self.assertAlmostEqual(r["coins"], 73.2, delta=0.5)                  # the dollar curve: $0.01, +$0.0001 a coin
-        self.assertGreater(me.buy_coins(b["id"], 1_000_000)["coins"], 0)       # dollars are swapped on the way in
-        made = me.buy_credits(micros=500_000)
-        self.assertEqual(made["credits_micros"], 500_000)
+        r = me.back_with_coins(b["id"], "100")                               # 100 TXC, 1,000 sats at the reference price
+        self.assertAlmostEqual(r["coins"], 73.2, delta=0.5)                  # the sats curve: 10 sats, +0.1 sat a coin
+        self.assertGreater(me.buy_coins(b["id"], msats=1_000_000)["coins"], 0)       # sats are swapped on the way in
+        made = me.buy_credits(msats=500_000)
+        self.assertEqual(made["credits_msats"], 500_000)
         c = me.coin()
         self.assertEqual((c["symbol"], c["decimals"]), ("TXC", 18))
         self.assertIsInstance(c["supply_units"], str)
@@ -823,12 +842,33 @@ class Hosted(unittest.TestCase):
         hits = me.search(sort="bounty")
         self.assertEqual((hits["total"], len(hits["bounties"])), (1, 1))
         w = me.wallet()
-        self.assertEqual((int(w["coin_units"]), w["credits_micros"]), (int(got) - 100 * UNIT, 500_000))
+        self.assertEqual((int(w["coin_units"]), w["credits_msats"]), (int(got) - 100 * UNIT, 500_000))
         for path in ("/v0/validators", "/v0/learnings/x/commits", "/v0/learnings/x/reveals", "/v0/decoys",
                      "/v0/decoys/unseal", "/v0/licences/direct", "/v0/bounties/1/claims"):
             with self.assertRaisesRegex(RuntimeError, "^403"):
                 me._call("POST", path, {})
+        with self.assertRaisesRegex(RuntimeError, r"^400[\s\S]*prices everything in bitcoin"):   # dollars are refused
+            me._call("POST", "/v0/credits", {"account": CONSUMER, "micros": 1_000_000})
+        self.assertIsInstance(c["price_msats"], int)                         # msats a TXC, an integer
+        self.assertTrue(c["price"].endswith("sats") and c["price_usd_approx"].startswith("$"))
         self.assertTrue(self.ex.audit()["balanced"])
+
+    def test_a_payment_the_wallet_cannot_cover_answers_402_with_an_l402_challenge(self):
+        import urllib.error
+        import urllib.request
+        from traceex import Client
+        from traceex.client import PaymentRequired
+        me = Client(self.url, CONSUMER)
+        me.faucet()
+        with self.assertRaises(PaymentRequired) as caught:
+            me.buy_credits(msats=40_000_000)                                 # 40,000 sats; the wallet holds 30,000
+        l402 = caught.exception.l402
+        self.assertEqual((l402["scheme"], l402["amount_msats"]), ("L402", 10_000_000))
+        self.assertTrue(l402["invoice_is_placeholder"] and l402["invoice"].startswith("lntbs"))
+        self.assertTrue(caught.exception.challenge.startswith('L402 macaroon="'))
+        d = me.describe()
+        self.assertEqual((d["payments"]["protocol"], d["settlement"]["priced_in"]), ("L402", "sats"))
+        self.assertEqual(d["fee_per_transaction_msats"], 58)
 
     def test_operator_routes_for_decoys_licences_and_claims(self):
         from traceex import Client
@@ -851,12 +891,12 @@ class Hosted(unittest.TestCase):
         r = op().claim_bounty(b["id"], lid, attest(CONSUMER, "sha256:B", "pass@1", .5, .75))
         self.assertEqual(r["status"], "solved")
         lot = ex.lots()["lots"][0]["lot"]
-        ex.bid({"lot": lot, "bidder": CONSUMER, "price_micros": 50_000})
+        ex.bid({"lot": lot, "bidder": CONSUMER, "price_msats": 50_000})
         ex.clear()
-        self.assertGreater(op(CONSUMER).direct_licence(lot, [tid])["paid_micros"], 0)
+        self.assertGreater(op(CONSUMER).direct_licence(lot, [tid])["paid_msats"], 0)
         ex.swap(A("3"), "buy", 6_000_000)                                     # the operator's decoy fund
         L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": "d", "hash": None},
-                           parents=[(tid, 1)], trainer="0x" + "d2" * 20, per_call_micros=200,
+                           parents=[(tid, 1)], trainer="0x" + "d2" * 20, per_call_msats=200,
                            attestation=attest(V(0), "sha256:c", "pass@1", .30, .45))
         decoy = op().register_decoy(L, decoy_digest(0.0, "s"), A("3"))["id"]
         validate(ex, decoy, {vals[0]: (.30, .45, 600), vals[1]: (.30, .30, 600), vals[2]: (.30, .29, 600)})
@@ -895,14 +935,14 @@ class Hosted(unittest.TestCase):
         import threading
         from exchange import serve
         from traceex import Client
-        ex, srv = serve(0, ":memory:", economy="coin", test_credits=25_000_000)    # no rate limits: all from one IP
+        ex, srv = serve(0, ":memory:", economy="coin", test_credits=30_000_000)    # no rate limits: all from one IP
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.server_close)
         self.addCleanup(srv.shutdown)
         url = f"http://127.0.0.1:{srv.server_address[1]}"
         people = [Client(url, "0x" + f"{i:02x}" * 20) for i in range(8)]
         for c in people:                                                     # (the faucet allows 3 per network a day)
-            ex.db.execute("INSERT INTO grants VALUES (?,?,?,?)", (c.address, 25_000_000, "t", "test"))
+            ex.db.execute("INSERT INTO grants VALUES (?,?,?,?)", (c.address, 30_000_000, "t", "test"))
 
         def work(c):
             for _ in range(12):
@@ -934,17 +974,48 @@ class VercelPreview(unittest.TestCase):
 class Seed(unittest.TestCase):
     def test_the_coin_seed_runs_the_federation_for_real(self):
         from seed import seed_if_empty
-        ex = CoinExchange(":memory:", test_credits=25_000_000, reserve_micros=50_000)
+        ex = CoinExchange(":memory:", test_credits=30_000_000, reserve_msats=50_000)
         seed_if_empty(ex)
+        self.assertTrue(all(json.loads(b)["royalty"].get("per_call_msats") is not None
+                            for (b,) in ex.db.execute("SELECT body FROM learnings").fetchall()))   # priced in msats
         c = ex.coin_stats()
         self.assertEqual(c["learnings"], {"accepted": 1, "inconclusive": 1})   # LoRA v2 proven; 3 emails are not proof
         self.assertEqual((ex.epoch, c["validators"]), (3, 3))
         self.assertGreater(c["burned_units"], 0)
         self.assertGreater(c["vesting_units"], 0)                             # the host's usage, minted to its traces
-        self.assertEqual(c["licence_escrow_micros"], 0)                       # every buyer named what it used
+        self.assertEqual(c["licence_escrow_msats"], 0)                       # every buyer named what it used
         self.assertEqual([b["status"] for b in ex.bounties()["bounties"]], ["open", "open"])
-        self.assertAlmostEqual(ex.price() / 10_000, 1, delta=0.05)           # opens near $0.01
+        self.assertAlmostEqual(ex.price() / 10_000, 1, delta=0.05)           # opens near 10 sats
         self.assertTrue(ex.audit()["balanced"])
+
+
+class Versions(unittest.TestCase):
+    def test_v05_refuses_an_older_database(self):
+        import sqlite3
+        import tempfile
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = os.path.join(folder.name, "v04.db")
+        CoinExchange(path, test_credits=30_000_000).db.close()
+        con = sqlite3.connect(path)
+        con.execute("UPDATE meta SET v='0.4' WHERE k='coin_version'")        # a v0.4 (dollar-priced) testnet
+        con.commit()
+        con.close()
+        with self.assertRaisesRegex(ValueError, r"v0\.4 coin economy \(priced in dollars\); v0\.5 prices everything in sats"):
+            CoinExchange(path, test_credits=30_000_000)
+
+    def test_a_coin_node_takes_no_dollar_amounts(self):
+        with self.assertRaisesRegex(ValueError, "prices everything in sats"):
+            CoinExchange(":memory:", reserve_micros=50_000)
+        ex, _ = make_ex(validators=0, quorum=0)
+        tid = ex.submit_trace(dict(trace()))["id"]
+        L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": "d", "hash": None},
+                           parents=[(tid, 1)], trainer=TRAINER, per_call_micros=200,
+                           attestation=attest(V(0), "sha256:c", "pass@1", .6, .7))
+        with self.assertRaisesRegex(ValueError, "per_call_msats"):
+            ex.register_learning(L)
+        with self.assertRaisesRegex(ValueError, "prices everything in bitcoin"):
+            ex.bid({"lot": ex.lots()["lots"][0]["lot"], "bidder": CONSUMER, "price_micros": 5_000})
 
 
 if __name__ == "__main__":

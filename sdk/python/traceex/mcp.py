@@ -1,7 +1,7 @@
 """traceX as an MCP server, so any agent can use the exchange on its own.
 
 Two ways to connect:
-  local (recommended)   python -m traceex.mcp --node https://<node> --address 0xYourWallet [--max-spend-micros N]
+  local (recommended)   python -m traceex.mcp --node https://<node> --address 0xYourWallet [--max-spend-msats N]
                         e.g.  claude mcp add tracex -- python -m traceex.mcp --node https://<node> --address 0x…
                         Runs on the agent's machine (stdio). Fixes are turned into skeletons HERE, before anything is
                         sent, and coin purchases are capped by the owner's budget (default 0: no spending).
@@ -74,8 +74,11 @@ TOOLS = [
     {"name": "traceex_back_bounty",
      "description": "Back a bounty by buying its coin (early is cheaper). Coin holders earn 20% of the winning "
                     "solution's revenue; unsolved bounties refund. Spends money: only within your owner's budget.",
-     "inputSchema": {"type": "object", "required": ["bounty_id", "micros"],
-                     "properties": {"bounty_id": N("bounty id"), "micros": N("amount in USDC micros (1e6 = $1)")}}},
+     "inputSchema": {"type": "object", "required": ["bounty_id"],
+                     "properties": {"bounty_id": N("bounty id"),
+                                    "msats": N("amount in millisatoshis (1,000 = 1 sat); traceX prices everything in "
+                                               "bitcoin"),
+                                    "micros": N("only on a retired v0.1 dollar node: micro-dollars")}}},
     {"name": "traceex_submit_fix",
      "description": "Call after your checker verifies a fix to a model's mistake. Builds the trace on this machine "
                     "(privacy 'skeleton' replaces every personal value; 'open' keeps code/maths/public text) and "
@@ -102,8 +105,10 @@ TOOLS = [
 class ClientBackend:
     """Local server: talks to a node over HTTP; builds traces here; enforces the owner's spending budget."""
 
-    def __init__(self, client: Client, max_spend_micros=0):
-        self.c, self.budget, self.spent = client, int(max_spend_micros), 0
+    def __init__(self, client: Client, max_spend_micros=0, max_spend_msats=0):
+        self.c, self.spent = client, 0
+        self.unit = "msats" if max_spend_msats else "micros"
+        self.budget = int(max_spend_msats or max_spend_micros)
 
     def call(self, name, a):
         c = self.c
@@ -121,11 +126,13 @@ class ClientBackend:
                                  failure=a.get("failure", ""), base_model=a.get("base_model", ""),
                                  epochs=int(a.get("epochs", 4)))
         if name == "traceex_back_bounty":
-            m = int(a["micros"])
+            m = int(a.get(self.unit) or 0)
+            if m <= 0:
+                raise ValueError(f"send {self.unit}: this agent's budget is in {self.unit}")
             if self.spent + m > self.budget:
-                raise PermissionError(f"over budget: this agent may spend {self.budget - self.spent} more micros "
-                                      f"(owner sets --max-spend-micros)")
-            out = c.buy_coins(int(a["bounty_id"]), m)
+                raise PermissionError(f"over budget: this agent may spend {self.budget - self.spent} more {self.unit} "
+                                      f"(owner sets --max-spend-{self.unit})")
+            out = c.buy_coins(int(a["bounty_id"]), msats=m) if self.unit == "msats" else c.buy_coins(int(a["bounty_id"]), m)
             self.spent += m
             return out
         if name == "traceex_submit_fix":
@@ -161,6 +168,9 @@ class NodeBackend:
         if name == "traceex_post_bounty":
             return ex.post_bounty(dict(a, poster=_need(a, "address")))
         if name == "traceex_back_bounty":
+            if getattr(ex, "money", "micros") == "msats":
+                return ex.buy_coins(int(a["bounty_id"]), _need(a, "address"),
+                                    msats=int(a.get("msats") or 0) or int(a.get("sats") or 0) * 1000)
             return ex.buy_coins(int(a["bounty_id"]), _need(a, "address"), int(a["micros"]))
         if name == "traceex_submit_fix":
             if a.get("trace"):
@@ -259,9 +269,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m traceex.mcp", description="traceX MCP server (stdio)")
     ap.add_argument("--node", required=True, help="exchange node URL")
     ap.add_argument("--address", required=True, help="your wallet address: where royalties go")
-    ap.add_argument("--max-spend-micros", type=int, default=0, help="budget for backing bounties (default 0: none)")
+    ap.add_argument("--max-spend-msats", type=int, default=0,
+                    help="budget for backing bounties, in millisatoshis (default 0: none)")
+    ap.add_argument("--max-spend-micros", type=int, default=0, help="the same on a retired v0.1 dollar node")
     a = ap.parse_args(argv)
-    serve_stdio(ClientBackend(Client(a.node, a.address), a.max_spend_micros))
+    serve_stdio(ClientBackend(Client(a.node, a.address), a.max_spend_micros, a.max_spend_msats))
 
 
 if __name__ == "__main__":

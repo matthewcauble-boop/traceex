@@ -78,19 +78,26 @@ class Learning(dict):
     KINDS = ("routing", "rule", "prompt_patch", "decoding", "lora", "full_finetune", "checker", "package")
 
     @classmethod
-    def build(cls, *, kind, task, base_model, artifact, parents, trainer, attestation, per_call_micros, split=None,
-              release=None):
-        """release: None (licensed: buyers get the artifact, every metered use pays royalties) or "open" (the artifact
+    def build(cls, *, kind, task, base_model, artifact, parents, trainer, attestation, per_call_msats=None,
+              per_call_micros=None, split=None, release=None):
+        """per_call_msats: the price of one metered call in millisatoshis (a coin node: everything is priced in sats).
+        per_call_micros: the same in micro-dollars, for the retired v0.1 dollar node. Give one.
+        release: None (licensed: buyers get the artifact, every metered use pays royalties) or "open" (the artifact
         is published for anyone, e.g. open weights; it can't be metered once public, so it is funded up front by a
         bounty and earns only from uses that are metered, such as hosted inference)."""
         if kind not in cls.KINDS:
             raise ValueError(f"kind must be one of {cls.KINDS}")
+        if (per_call_msats is None) == (per_call_micros is None):
+            raise ValueError("price a call with per_call_msats (sats-priced nodes) or per_call_micros (the v0.1 dollar "
+                             "node): one of them")
+        price = {"per_call_msats": int(per_call_msats)} if per_call_msats is not None \
+            else {"per_call_micros": per_call_micros}
         total = sum(w for _, w in parents) or 1.0
         L = cls({
             "v": "learning/0.1", "kind": kind, "task": task, "base_model": _model(base_model), "artifact": artifact,
             "parents": [{"trace": t, "weight": round(w / total, 9)} for t, w in parents],
             "trainer": trainer, "attestation": attestation,
-            "royalty": {"per_call_micros": per_call_micros, "split": split or dict(cls.DEFAULT_SPLIT)},
+            "royalty": dict(price, split=split or dict(cls.DEFAULT_SPLIT)),
         })
         if release:
             L["release"] = release

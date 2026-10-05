@@ -1,6 +1,7 @@
 """What one transaction costs in electricity on the reference node, and so the standard transaction fee.
 
-    python examples/fees/measure.py
+    python examples/fees/measure.py                   # bitcoin at $85,962 (Coinbase spot, 2026-10-05)
+    python examples/fees/measure.py --btc-usd 120000  # the same measurement at another bitcoin price
 
 Runs each kind of transaction many times on a real coin node (an on-disk SQLite database, as hosted) and measures the
 CPU time it takes, the bytes it moves over the network and the bytes it leaves on disk. Then it prices the energy:
@@ -13,8 +14,11 @@ CPU time it takes, the bytes it moves over the network and the bytes it leaves o
 Time kept follows the node's storage rule (SPEC 4e): traces and learnings are kept for good (priced here as ten years);
 everything else is per-transaction detail, kept only through the challenge window (`keep_epochs`, a day each on the
 hosted node) and then folded into balances and one Merkle root per epoch. The assumptions are printed with the result:
-change them and run it again. The standard fee (exchange.TX_FEE_NANOS) is set at about 125 times the dearest
-transaction here, so it funds the network and prices out spam at machine scale, not just the electricity.
+change them and run it again. Electricity is bought in dollars, so it is priced in dollars and converted to sats at
+the bitcoin price given (--btc-usd). The standard fee (exchange.TX_FEE_MSATS, 58 msats) was set at about 125 times the
+dearest transaction here at $85,962 a bitcoin, so it funds the network and prices out spam at machine scale, not just
+the electricity. It is fixed in sats, so the multiple floats with bitcoin: about 62x if bitcoin halves, 250x if it
+doubles. A coin node can re-peg it to a dollar target every N epochs (coin.Params.fee_repeg_epochs; off by default).
 """
 import json
 import os
@@ -28,7 +32,8 @@ ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [os.path.join(ROOT, "sdk", "python"), os.path.join(ROOT, "node")]
 from traceex import Trace, Learning, attest  # noqa: E402
 from coin import CoinExchange, Params, UNIT, attestation_digest  # noqa: E402
-from exchange import TX_FEE_NANOS  # noqa: E402
+from exchange import TX_FEE_MSATS  # noqa: E402
+from coin import BTC_USD, MSATS_PER_BTC  # noqa: E402
 
 KWH_USD = 0.15              # $ per kWh: the US commercial average is about $0.13-0.14 (EIA); data centres often pay less
 WATTS_PER_CORE = 10         # a busy server core with its share of memory, board and fans
@@ -53,7 +58,7 @@ def db_bytes(ex):
 
 
 def node(path):
-    ex = CoinExchange(path, test_credits=25_000_000, beacon_delay=0, params=Params(quorum=3))
+    ex = CoinExchange(path, test_credits=30_000_000, beacon_delay=0, params=Params(quorum=3))
     for who in [A(c) for c in "0123456789abcdef"]:
         ex.db.execute("INSERT OR REPLACE INTO grants VALUES (?,?,?,?)", (who, 10**12, "measure", "measure"))
     vals = [A(c) for c in "abc"]
@@ -97,15 +102,19 @@ def price(row):
                 parts={"cpu": cpu_j / joules, "network": net_j / joules, "storage": disk_j / joules})
 
 
-def main():
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="the electricity of each transaction, and the standard fee against it")
+    ap.add_argument("--btc-usd", type=float, default=BTC_USD, help="dollars a bitcoin (default: $85,962)")
+    a = ap.parse_args(argv)
     folder = tempfile.mkdtemp(prefix="tracex-fees-")
     try:
-        return _main(folder)
+        return _main(folder, a.btc_usd)
     finally:
         shutil.rmtree(folder, ignore_errors=True)            # leave nothing behind
 
 
-def _main(folder):
+def _main(folder, btc_usd=BTC_USD):
     ex, vals = node(os.path.join(folder, "exchange.db"))
     rows, ids = [], []
 
@@ -114,14 +123,14 @@ def _main(folder):
         ids.append(r["id"])
         return r
     rows.append(measure(ex, "file a trace (about 1 KB)", lambda i: dict(trace(i)), submit, kept="for good"))
-    rows.append(measure(ex, "swap dollars for TXC", lambda i: ("buy", 10_000), lambda b: ex.swap(A("2"), *b)))
-    rows.append(measure(ex, "buy credits (TXC burned)", lambda i: 10_000, lambda m: ex.buy_credits(A("7"), micros=m)))
+    rows.append(measure(ex, "swap sats for TXC", lambda i: ("buy", 10_000), lambda b: ex.swap(A("2"), *b)))
+    rows.append(measure(ex, "buy credits (TXC burned)", lambda i: 10_000, lambda m: ex.buy_credits(A("7"), msats=m)))
     bounty = ex.post_bounty({"poster": A("3"), "path": "code/generate", "eval_set": "sha256:x", "target": 0.5,
                              "title": "measure"})["id"]
     ex.swap(A("3"), "buy", 100_000_000)
     rows.append(measure(ex, "back a bounty", lambda i: UNIT, lambda u: ex.buy_coins(bounty, A("3"), units=u)))
     lot = ex.lots()["lots"][0]["lot"]
-    rows.append(measure(ex, "bid on a lot", lambda i: {"lot": lot, "bidder": A("4"), "price_micros": 1_000 + i},
+    rows.append(measure(ex, "bid on a lot", lambda i: {"lot": lot, "bidder": A("4"), "price_msats": 1_000 + i},
                         ex.bid))
     ex.db.execute("DELETE FROM bids")
     learning_ids = []
@@ -136,7 +145,7 @@ def _main(folder):
                                                  artifact={"uri": f"weights-{i}", "hash": None},
                                                  parents=[(t, 1) for t in ids[i % 200:i % 200 + 20]], trainer=A("5"),
                                                  attestation=attest(vals[0], "sha256:c", "pass@1", .3, .4),
-                                                 per_call_micros=50),
+                                                 per_call_msats=50),
                         register, kept="for good"))
 
     def commit(lid):
@@ -160,9 +169,17 @@ def _main(folder):
         print(f"{r['transaction']:32} {r['kept']:>8} {r['cpu_s'] * 1e3:6.2f}ms {r['wire_bytes'] / 1e3:6.1f}KB "
               f"{r['disk_bytes'] / 1e3:6.1f}KB {r['joules']:7.2f} J  ${r['nanos'] / 1e9:.9f}   {parts}")
     top, low = max(r["nanos"] for r in rows), min(r["nanos"] for r in rows)
-    print(f"\ndearest: {top:.0f} nano-dollars (${top / 1e9:.9f}); cheapest: {low:.0f}")
-    print(f"the standard fee: {TX_FEE_NANOS:,} nano-dollars (${TX_FEE_NANOS / 1e9:.5f}), {TX_FEE_NANOS / top:,.0f}x the "
-          f"dearest transaction's electricity and {TX_FEE_NANOS / low:,.0f}x the cheapest's")
+    to_msats = lambda nanos: nanos / 1e9 / btc_usd * MSATS_PER_BTC
+    fee_nanos = TX_FEE_MSATS / MSATS_PER_BTC * btc_usd * 1e9
+    for r in rows:
+        r["msats"] = to_msats(r["nanos"])
+    print(f"\ndearest: {top:.0f} nano-dollars (${top / 1e9:.9f}, {to_msats(top):.3f} msats at ${btc_usd:,.0f} a "
+          f"bitcoin); cheapest: {low:.0f} nano-dollars ({to_msats(low):.4f} msats)")
+    print(f"the standard fee: {TX_FEE_MSATS} msats (${fee_nanos / 1e9:.7f} at ${btc_usd:,.0f} a bitcoin), "
+          f"{fee_nanos / top:,.0f}x the dearest transaction's electricity and {fee_nanos / low:,.0f}x the cheapest's")
+    print(f"the fee is fixed in sats, so the multiple floats with bitcoin: {fee_nanos / 2 / top:,.0f}x if bitcoin "
+          f"halves, {fee_nanos * 2 / top:,.0f}x if it doubles; coin.Params.fee_repeg_epochs re-pegs it to $0.00005 "
+          "(off by default)")
     ex.db.close()
     return rows
 

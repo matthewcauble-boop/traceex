@@ -1,7 +1,7 @@
 """Reference exchange node (spec section 7). Standard library only: http.server + sqlite3.
 
     python node/exchange.py --port 8787 --db exchange.db                 # local
-    python node/exchange.py --host 0.0.0.0 --public --seed --test-credits 25000000 --epoch-hours 24   # hosted
+    python node/exchange.py --host 0.0.0.0 --public --seed --economy coin --test-credits 30000000 --epoch-hours 24
 
 One process plays the off-chain half of the protocol: it accepts skeleton traces, groups them into lots, takes sealed
 bids, clears each epoch, registers learnings with validator attestations, meters usage, and at settlement computes
@@ -35,13 +35,18 @@ from traceex import bountycoin as coin  # noqa: E402
 
 # A bounty's pool, when a learning claims it: the solver is paid most, the traces it was built from still earn.
 BOUNTY_SPLIT = {"trainer": 0.70, "traces": 0.20, "checkers": 0.05, "validators": 0.05}
-# The standard transaction fee, in nano-dollars: $0.00005, about 125 times the electricity of the dearest transaction
-# examples/fees/measure.py finds (registering a learning, its 5.5 KB kept in three copies for ten years: about
-# $0.0000004), and far more than any other. The margin is the point: the fee funds the network (on a coin node it is
-# paid in credits and burned, and it is the operator's claim on 10% of each epoch's emission) and prices out spam at
-# machine scale, where a billion junk transactions cost $50,000 instead of $400. This is the one setting; 100x to 200x
-# the measured electricity (40,000 to 80,000) keeps both jobs. Fees accrue per account and are billed each epoch in
-# whole micro-dollars (credits), the smallest amount USDC can move; the fraction carries over.
+# The standard transaction fee: 58 millisatoshis (TX_FEE_MSATS), about $0.00005 with bitcoin at $85,962 (Coinbase
+# spot, 2026-10-05) and about 125 times the electricity of the dearest transaction examples/fees/measure.py finds
+# (registering a learning, its 5.5 KB kept in three copies for ten years: about $0.0000004), far more than any other.
+# The margin is the point: the fee funds the network (on a coin node it is paid in msat credits and burned, and it is
+# the operator's claim on 10% of each epoch's emission) and prices out spam at machine scale, where a billion junk
+# transactions cost 58 million sats (about $50,000) instead of about $400. This is the one setting; 100x to 200x the
+# measured electricity keeps both jobs. It is fixed in sats, so its dollar value floats with bitcoin; a coin node can
+# re-peg it to a dollar target every N epochs (coin.Params.fee_repeg_epochs, off by default). A millisatoshi is the
+# smallest amount Lightning moves, so the fee is a whole number of them and nothing carries over.
+TX_FEE_MSATS = 58
+# Retired with the v0.1 dollar node (USDC settlement is no longer the mainnet path; see SPEC 5): its fee in
+# nano-dollars, $0.00005, billed in whole micro-dollars.
 TX_FEE_NANOS = 50_000
 SAFE_INT = 2 ** 53                 # JavaScript loses integers above this
 
@@ -90,6 +95,36 @@ def snippet(text, n=160):
 
 class Full(Exception):
     """The node's disk budget is used up: reads keep working, new writes wait for the operator."""
+
+
+class PaymentRequired(ValueError):
+    """An account can't cover a payment. Over HTTP this is 402 Payment Required with an L402 challenge (a Lightning
+    invoice for what is missing and a macaroon); on the testnet the invoice is a placeholder and the faucet pays."""
+
+    def __init__(self, message, account="", msats=0):
+        super().__init__(message)
+        self.account, self.msats = account, max(int(msats or 0), 0)
+
+
+def msats_in(body, key="", required=False):
+    """An amount sent to a sats-priced node: `{key}_msats` (integer millisatoshis) or `{key}_sats` (integer sats), or
+    `msats` / `sats` when key is empty. Dollar amounts (`_micros`) are refused, so nobody pays in sats believing they
+    paid dollars. Returns msats (0 when absent, unless required)."""
+    pre = f"{key}_" if key else ""
+    for name, scale in ((pre + "msats", 1), (pre + "sats", 1000)):
+        v = body.get(name)
+        if v not in (None, "", 0, "0"):
+            try:
+                n = int(str(v))
+            except ValueError:
+                raise ValueError(f"{name} is a whole number (millisatoshis or satoshis), not {v!r}")
+            return n * scale
+    if body.get(pre + "micros") not in (None, "", 0, "0"):
+        raise ValueError(f"this node prices everything in bitcoin: send {pre}msats (millisatoshis) or {pre}sats, "
+                         f"not {pre}micros")
+    if required:
+        raise ValueError(f"send {pre}msats (millisatoshis) or {pre}sats")
+    return 0
 
 
 def need_address(a, what):
@@ -159,11 +194,20 @@ class SafeDB:
 
 
 class Exchange:
+    """The v0.1 reference node: contributors paid in dollars (micros). Retired as a mainnet path (USDC settlement and
+    x402 gave way to bitcoin over Lightning, SPEC 5); kept as the library's default for its tests and examples. The coin
+    economy (node/coin.py) prices everything in sats."""
+    money = "micros"                              # the unit every amount key ends in: micros here, msats on a coin node
+
+    def _fmt(self, amount):
+        """An amount for people, in this node's money."""
+        return f"${amount / 1e6:,.2f}"
+
     def __init__(self, path=":memory:", *, k=10, reserve_micros=1_000, validators=("0x" + "5" * 40,),
                  tx_fee_nanos=None, fee_to=None, engine=None, test_credits=0, max_db_bytes=0):
-        """test_credits: run as a testnet. Each new wallet can take this many micros of test credits once, and every
-        spend (coins, bids, metered usage, the transaction fee) must be covered by the wallet's balance. 0 = settlement
-        is external (x402 / USDC), the reference behaviour. A node that keeps wallets charges every transaction the
+        """test_credits: run as a testnet. Each new wallet can take this much test money once (micros here; msats on a
+        coin node), and every spend (coins, bids, metered usage, the transaction fee) must be covered by the wallet's
+        balance. 0 = settlement is external, the reference behaviour. A node that keeps wallets charges every transaction the
         standard fee (TX_FEE_NANOS unless `tx_fee_nanos` says otherwise) and pays it to `fee_to`, whoever runs it and
         so pays its electricity ("network" until the operator names an address)."""
         self.path, self.max_db_bytes = path, int(max_db_bytes)
@@ -221,8 +265,8 @@ class Exchange:
 
     def _need_funds(self, account, micros, pending=0):
         if self.test_credits and self._funds(account) - pending < micros:
-            raise ValueError(f"not enough test credits: {account[:10]}… has ${(self._funds(account) - pending) / 1e6:,.2f}"
-                             f", this needs ${micros / 1e6:,.2f} (POST /v0/faucet opens a wallet)")
+            raise ValueError(f"not enough test credits: {account[:10]}… has {self._fmt(self._funds(account) - pending)}"
+                             f", this needs {self._fmt(micros)} (POST /v0/faucet opens a wallet)")
 
     def _tx_fee(self, account):
         """Charge one transaction its standard fee: accrued in nano-dollars, billed at settlement (see TX_FEE_NANOS).
@@ -256,7 +300,7 @@ class Exchange:
     def faucet(self, account, source=""):
         """Open a testnet wallet: test credits once per address, a few addresses per source (hashed IP) per day."""
         if not self.test_credits:
-            raise ValueError("this node settles in USDC; it has no test credits")
+            raise ValueError("this node has no test wallets (it is not a testnet)")
         if not ADDRESS.fullmatch(str(account or "")):
             raise ValueError("address must be 0x followed by 40 hex characters")
         src = hashlib.sha256(f"tracex:{source}".encode()).hexdigest()[:16] if source else ""
@@ -270,7 +314,7 @@ class Exchange:
                     raise PermissionError("this network already opened its test wallets for today")
             now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             self.db.execute("INSERT INTO grants VALUES (?,?,?,?)", (account, self.test_credits, now, src))
-            self._event(f"a new wallet joined with ${self.test_credits / 1e6:,.0f} of test credits")
+            self._event(f"a new wallet joined with {self._fmt(self.test_credits)} of test credits")
             self.db.commit()
         return self.wallet(account)
 
@@ -278,8 +322,8 @@ class Exchange:
         g = self.db.execute("SELECT micros FROM grants WHERE account=?", (account,)).fetchone()
         coins = {str(b): round(c, 6) for b, c in self.db.execute(
             "SELECT bounty, coins FROM holdings WHERE holder=? AND coins > 1e-9", (account,))}
-        return {"account": account, "opened": bool(g), "grant_micros": g[0] if g else 0,
-                "balance_micros": self._funds(account), "coins": coins, "testnet": bool(self.test_credits)}
+        return {"account": account, "opened": bool(g), f"grant_{self.money}": g[0] if g else 0,
+                f"balance_{self.money}": self._funds(account), "coins": coins, "testnet": bool(self.test_credits)}
 
     def events(self, limit=30):
         rows = self.db.execute("SELECT at, text FROM events ORDER BY id DESC LIMIT ?", (min(int(limit), 200),)).fetchall()
@@ -293,9 +337,9 @@ class Exchange:
                 "learnings": one("SELECT COUNT(*) FROM learnings"),
                 "bounties_open": one("SELECT COUNT(*) FROM bounties WHERE status='open'"),
                 "bounties_solved": one("SELECT COUNT(*) FROM bounties WHERE status='solved'"),
-                "pools_open_micros": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='open'"),
-                "pools_paid_micros": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='solved'"),
-                "last_root": {"epoch": r[0], "root": r[1], "total_micros": r[2]} if r else None,
+                f"pools_open_{self.money}": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='open'"),
+                f"pools_paid_{self.money}": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='solved'"),
+                "last_root": {"epoch": r[0], "root": r[1], f"total_{self.money}": r[2]} if r else None,
                 "testnet": bool(self.test_credits), "epoch_hours": getattr(self, "epoch_hours", 0),
                 "fees": self.fees(),
                 "classifier": {"engine": self.engine.name,
@@ -447,7 +491,7 @@ class Exchange:
         if failure:
             rows = [r for r in rows if failure in modes_of(r[3])]
         open_all = self.bounties(status="open")["bounties"]
-        pool = lambda r: max([b.get("pool_micros", b.get("pool_units", 0)) for b in open_all
+        pool = lambda r: max([b.get(f"pool_{self.money}", b.get("pool_units", 0)) for b in open_all
                               if self._feeds(b, r[1], r[2], modes_of(r[3]))] or [0])
         if sort == "relevant":
             rows.sort(key=lambda r: (r[5], -r[4]))
@@ -471,7 +515,7 @@ class Exchange:
                 hit["score"] = round(-rank, 3)
             feeds = pool(r) if open_all else 0
             if feeds:
-                hit["bounty_pool_micros"] = feeds
+                hit[f"bounty_pool_{self.money}"] = feeds
             hits.append(hit)
         out = {"results": hits, "count": len(hits), "total": len(rows), "sort": sort, "offset": offset,
                "bounties": [b for b in open_all if not path or path == b["path"] or path.startswith(b["path"] + "/")
@@ -553,7 +597,7 @@ class Exchange:
             bid = cur.lastrowid
             self._event(f"bounty #{bid} posted free on {path}: {b.get('title') or 'untitled'}")
             self.db.commit()
-        out = {"id": bid, "status": "open", "deadline_epoch": self.epoch + epochs, "price_micros": coin.price(0)}
+        out = {"id": bid, "status": "open", "deadline_epoch": self.epoch + epochs, f"price_{self.money}": coin.price(0)}
         if seed > 0:
             out["seed"] = self.buy_coins(bid, b["poster"], seed)
         return out
@@ -658,17 +702,17 @@ class Exchange:
         status, pool, supply = self._bounty(bounty_id)
         rows = self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=? AND coins > 1e-9 ORDER BY coins DESC",
                                (bounty_id,)).fetchall()
-        return {"bounty": bounty_id, "status": status, "pool_micros": pool, "supply": round(supply, 6),
-                "price_micros": round(coin.price(supply)), "holders": {h: round(c, 6) for h, c in rows}}
+        return {"bounty": bounty_id, "status": status, f"pool_{self.money}": pool, "supply": round(supply, 6),
+                f"price_{self.money}": round(coin.price(supply)), "holders": {h: round(c, 6) for h, c in rows}}
 
     def bounties(self, path="", status=""):
         rows = self.db.execute("SELECT id,poster,title,path,failure,base_model,eval_set,target,pool,supply,deadline,"
                                "status,winner,learning FROM bounties WHERE status != 'removed' ORDER BY id").fetchall()
-        keys = ["id", "poster", "title", "path", "failure", "base_model", "eval_set", "target", "pool_micros", "supply",
-                "deadline_epoch", "status", "winner", "learning"]
+        keys = ["id", "poster", "title", "path", "failure", "base_model", "eval_set", "target", f"pool_{self.money}",
+                "supply", "deadline_epoch", "status", "winner", "learning"]
         out = [dict(zip(keys, r)) for r in rows]
         for b in out:
-            b["price_micros"] = round(coin.price(b["supply"]))
+            b[f"price_{self.money}"] = round(coin.price(b["supply"]))
         if status:
             out = [b for b in out if b["status"] == status]
         if path:
@@ -759,7 +803,7 @@ class Exchange:
 
     def lots(self):
         rows = self.db.execute("SELECT lot, COUNT(*), COUNT(DISTINCT producer) FROM traces GROUP BY lot").fetchall()
-        return {"epoch": self.epoch, "k": self.k, "reserve_micros": self.reserve,
+        return {"epoch": self.epoch, "k": self.k, f"reserve_{self.money}": self.reserve,
                 "lots": [{"lot": l, "traces": n, "producers": p} for l, n, p in rows]}
 
     def bid(self, b):
@@ -897,7 +941,7 @@ class Exchange:
                 for acct, m in split_usage(amount, L, trace_info, self.validators, learnings).items():
                     self._credit(acct, m, f"royalty {lid[:19]}")
             self._bill_fees()
-            # debits were collected up front (x402 / payment channel); the root pays out every credit, gross
+            # debits were collected up front (a payment channel); the root pays out every credit, gross
             payouts = {a: m for a, m in self.db.execute(
                 "SELECT account, SUM(micros) FROM ledger WHERE epoch=? AND micros > 0 GROUP BY account", (e,))
                 if ADDRESS.fullmatch(str(a))}
@@ -952,7 +996,7 @@ class Exchange:
                         "metric": a.get("metric"), "before": a.get("before"), "after": a.get("after"),
                         "p_value": a.get("p_value"), "n": a.get("n"), "first_try": a.get("first_try"),
                         "gain": round(gain, 4), "eval_set": a.get("eval_set"), "release": L.get("release", "licensed"),
-                        "per_call_micros": L["royalty"]["per_call_micros"], "artifact": L["artifact"],
+                        f"per_call_{self.money}": L["royalty"].get(f"per_call_{self.money}"), "artifact": L["artifact"],
                         "traces": len(L["parents"]), "solved_bounty": solved.get(lid)})
         out.sort(key=lambda x: (-x["gain"], x["id"]))
         return {"learnings": out[:int(limit)], "count": len(out)}
@@ -966,7 +1010,8 @@ class Exchange:
     def describe(self):
         """/.well-known/trace-exchange.json: how an agent that finds this node can use it."""
         settlement = ({"asset": "test credits", "network": "testnet", "faucet": "POST /v0/faucet",
-                       "credits_micros": self.test_credits} if self.test_credits else {"asset": "USDC", "chain": "base"})
+                       "credits_micros": self.test_credits} if self.test_credits
+                      else {"asset": "dollars (v0.1 reference node, retired: mainnet settles in bitcoin, SPEC 5)"})
         return {"protocol": "trace-exchange/0.1", "name": "traceX", "api": "/v0", "mcp": "/mcp",
                 "taxonomy": TAXONOMY_VERSION, "classifier": self.engine.name, "epoch": self.epoch,
                 "settlement": settlement, "privacy": ["skeleton", "open"],
@@ -999,7 +1044,8 @@ MAX_BODY = 64 * 1024
 # On a public node these stay with the operator: attestations and settlement are not signed yet, so whoever could call
 # them could mint payouts. Coin transfers wait for signed wallets for the same reason.
 ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove",
-                "/v0/admin/reclassify", "/v0/validators", "/v0/decoys", "/v0/decoys/unseal", "/v0/licences/direct"}
+                "/v0/admin/reclassify", "/v0/validators", "/v0/decoys", "/v0/decoys/unseal", "/v0/licences/direct",
+                "/v0/admin/btc-price"}
 ADMIN_LEARNING_ACTIONS = {"commits", "reveals"}   # validator messages: operator-relayed until they are signed
 ADMIN_ACTIONS = {"claims", "transfer"}
 
@@ -1148,7 +1194,9 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                 if u.path == "/v0/validators" and coin_mode:
                     return self._send(200, ex.validators_list())
                 if u.path == "/v0/quote" and coin_mode:
-                    return self._send(200, ex.quote(q.get("side", "buy"), int(q.get("amount", 0))))
+                    side = q.get("side", "buy")
+                    amount = msats_in(q) if side == "buy" else int(q.get("units") or 0)
+                    return self._send(200, ex.quote(side, amount))
                 if u.path == "/v0/learnings":
                     extra = {"include_pending": q.get("all") in ("1", "true")} if coin_mode else {}
                     return self._send(200, ex.find_learnings(q.get("path", ""), q.get("model", ""), q.get("kind", ""),
@@ -1208,9 +1256,12 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                                                                                   int(b.get("limit") or 0)),
                           "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
                 if coin_mode:
-                    routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"), int(b.get("amount") or 0)),
-                                   "/v0/credits": lambda b: ex.buy_credits(b.get("account"), int(b.get("micros") or 0),
+                    routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"),
+                                                                 msats_in(b) if b.get("side") == "buy"
+                                                                 else int(b.get("units") or 0)),
+                                   "/v0/credits": lambda b: ex.buy_credits(b.get("account"), msats_in(b),
                                                                            int(b.get("units") or 0)),
+                                   "/v0/admin/btc-price": lambda b: ex.set_btc_usd(b.get("usd_per_btc")),
                                    "/v0/validators": lambda b: ex.register_validator(b.get("address"),
                                                                                      int(b.get("stake_units") or 0)),
                                    "/v0/decoys": lambda b: ex.register_decoy(b["learning"], b["digest"], b["funder"]),
@@ -1233,7 +1284,7 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     admin = act in ADMIN_ACTIONS
                     fn = {"claims": (lambda b: ex.claim_bounty(i, b["learning"], b.get("attestation"))) if coin_mode
                           else (lambda b: ex.claim_bounty(i, b["learning"])),
-                          "buy": (lambda b: ex.buy_coins(i, b["buyer"], int(b.get("micros") or 0),
+                          "buy": (lambda b: ex.buy_coins(i, b["buyer"], msats_in(b),
                                                          units=int(b.get("units") or 0) or to_units(b.get("coins") or 0)))
                           if coin_mode else (lambda b: ex.buy_coins(i, b["buyer"], b["micros"])),
                           "sell": lambda b: ex.sell_coins(i, b["seller"], b["coins"]),
@@ -1244,6 +1295,11 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     return self._send(403, {"error": "on this public node that call is kept to the operator "
                                                      "(attestations and transfers are not signed yet)"})
                 self._send(200, fn(self._body()))
+            except PaymentRequired as e:                 # L402: a Lightning invoice for what is missing, and a macaroon
+                challenge = ex.l402(e.account, e.msats) if hasattr(ex, "l402") else {}
+                head = {"WWW-Authenticate": f'L402 macaroon="{challenge["macaroon"]}", invoice="{challenge["invoice"]}"'} \
+                    if challenge else {}
+                self._send(402, {"error": str(e), "l402": challenge} if challenge else {"error": str(e)}, head)
             except PermissionError as e:
                 self._send(403, {"error": str(e)})
             except Full as e:
@@ -1291,7 +1347,8 @@ def run_epochs(ex, hours):
             try:
                 ex.clear()
                 s = ex.settle()
-                print(f"epoch {s['epoch']} settled: root {s['root'][:18]}… total {s['total_micros']} micros", flush=True)
+                total = next((f"{v} {k.split('_', 1)[1]}" for k, v in s.items() if k.startswith("total_")), "")
+                print(f"epoch {s['epoch']} settled: root {s['root'][:18]}… total {total}", flush=True)
             except Exception as e:                       # keep the clock running; the next epoch retries
                 print(f"epoch run failed: {type(e).__name__}: {e}", flush=True)
     threading.Thread(target=loop, daemon=True, name="epochs").start()
@@ -1307,15 +1364,22 @@ if __name__ == "__main__":
     ap.add_argument("--db", default=env("TRACEX_DB", "exchange.db"))
     ap.add_argument("--k", type=int, default=int(env("TRACEX_K", 10)))
     ap.add_argument("--reserve-micros", type=int, default=int(env("TRACEX_RESERVE_MICROS", 1_000)),
-                    help="reserve price per licence in a lot auction")
+                    help="dollar node (v0.1, retired): reserve price per licence in a lot auction")
+    ap.add_argument("--reserve-msats", type=int, default=int(env("TRACEX_RESERVE_MSATS", 50_000)),
+                    help="coin node: reserve price per licence in a lot auction, in millisatoshis (50,000 = 50 sats)")
+    ap.add_argument("--btc-usd", type=int, default=int(env("TRACEX_BTC_USD", 0) or 0),
+                    help="coin node: dollars per bitcoin, for the approximate dollar figures shown beside sats (and the "
+                         "fee re-peg, if on); never used in any amount")
     ap.add_argument("--public", action="store_true", default=env("TRACEX_PUBLIC") == "1",
                     help="rate limits on; settle, clear, checkers, learnings, claims and transfers need TRACEX_ADMIN_TOKEN")
     ap.add_argument("--seed", action="store_true", default=env("TRACEX_SEED") == "1",
                     help="on an empty database, load the example traces, bounties and learnings")
     ap.add_argument("--test-credits", type=int, default=int(env("TRACEX_TEST_CREDITS", 0)),
-                    help="testnet: micros of test credits each new wallet can take once (0 = off)")
+                    help="testnet: test money each new wallet can take once, in the node's unit: msats on a coin node "
+                         "(30000000 = 30,000 test sats), micros on the dollar node (0 = off)")
     ap.add_argument("--economy", choices=("usdc", "coin"), default=env("TRACEX_ECONOMY", "usdc"),
-                    help="usdc: contributors are paid in dollars (v0.1). coin: they earn TXC, payments buy and burn it")
+                    help="coin: everything priced in sats; contributors earn TXC, payments buy and burn it (SPEC 4e). "
+                         "usdc: the v0.1 dollar node, retired as a mainnet path, kept for the library's tests")
     ap.add_argument("--max-db-mb", type=int, default=int(env("TRACEX_MAX_DB_MB", 0)),
                     help="stop taking new traces and bounties when the database file passes this size (0 = no limit)")
     ap.add_argument("--epoch-hours", type=float, default=float(env("TRACEX_EPOCH_HOURS", 0)),
@@ -1327,9 +1391,10 @@ if __name__ == "__main__":
     if a.public and not token:
         print("warning: --public without TRACEX_ADMIN_TOKEN: operator calls are switched off", flush=True)
     os.makedirs(os.path.dirname(os.path.abspath(a.db)), exist_ok=True)
+    money = ({"reserve_msats": a.reserve_msats, **({"btc_usd": a.btc_usd} if a.btc_usd else {})}
+             if a.economy == "coin" else {"reserve_micros": a.reserve_micros})
     ex, srv = serve(a.port, a.db, host=a.host, public=a.public, admin_token=token, k=a.k, economy=a.economy,
-                    reserve_micros=a.reserve_micros, test_credits=a.test_credits, max_db_bytes=a.max_db_mb * 1024 * 1024,
-                    fee_to=a.fee_to)
+                    test_credits=a.test_credits, max_db_bytes=a.max_db_mb * 1024 * 1024, fee_to=a.fee_to, **money)
     if a.seed:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from seed import seed_if_empty
@@ -1340,5 +1405,5 @@ if __name__ == "__main__":
         print("re-filing keyword-classified traces with", ex.engine.name, refile_in_background(ex), flush=True)
     mode = "public" if a.public else "local"
     print(f"traceX node on http://{a.host}:{a.port}  (db {a.db}, {mode}, {a.economy} economy, "
-          f"{'testnet' if a.test_credits else 'USDC settlement'}, epochs {a.epoch_hours or 'manual'}h)", flush=True)
+          f"{'testnet' if a.test_credits else 'no test wallets'}, epochs {a.epoch_hours or 'manual'}h)", flush=True)
     srv.serve_forever()

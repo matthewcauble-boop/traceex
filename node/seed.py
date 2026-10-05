@@ -53,14 +53,15 @@ def _load(*parts):
         return json.load(f) if path.endswith(".json") else [json.loads(line) for line in f]
 
 
-def _grant(ex, accounts, micros=25_000_000):
-    """On a testnet node every spend needs test credits; the demo accounts get theirs the way anyone does."""
+def _grant(ex, accounts, amount=None):
+    """On a testnet node every spend needs test money; the demo accounts get theirs the way anyone does (the node's
+    faucet amount: 30,000 test sats on a coin node)."""
     if not ex.test_credits:
         return
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with ex.lock:
         for a in accounts:
-            ex.db.execute("INSERT OR IGNORE INTO grants VALUES (?,?,?,?)", (a, micros, now, "seed"))
+            ex.db.execute("INSERT OR IGNORE INTO grants VALUES (?,?,?,?)", (a, amount or ex.test_credits, now, "seed"))
         ex.db.commit()
 
 
@@ -97,6 +98,14 @@ def seed(ex, url):
     import tasks
 
     coin_mode = getattr(ex, "economy", "") == "coin"
+    # The demo's amounts are the same numbers on both nodes: msats on a coin node (everything priced in sats), micros
+    # on the v0.1 dollar node. 10,000 msats is 10 sats, and $0.01 on the dollar node.
+    amt = (lambda m: {"msats": m}) if coin_mode else (lambda m: {"micros": m})
+    bid_at = (lambda m: {"price_msats": m}) if coin_mode else (lambda m: {"price_micros": m})
+    per_call = (lambda m: {"per_call_msats": m}) if coin_mode else (lambda m: {"per_call_micros": m})
+    budget = (lambda m: {"back_msats": m, "budget_msats": m}) if coin_mode else \
+        (lambda m: {"back_micros": m, "budget_micros": m})
+    money = (lambda m: f"{m / 1000:,.0f} sats") if coin_mode else (lambda m: f"${m / 1e6:,.2f}")
     _grant(ex, [KIM, RAJ, LEE, CONSUMER, AUTO, HOST, TRAINER, MAINTAINER, BIDDER2, BIDDER3, BIDDER4, BIDDER5,
                 *CODE_PRODUCERS, *SEED_VALIDATORS])
     if coin_mode:                                # three validators stake; the trainer buys TXC for two bonds
@@ -123,8 +132,8 @@ def seed(ex, url):
     fb = Client(url, CONSUMER).post_bounty(title="Flight extraction: 70% first-pass on unseen airlines",
                                            path="extract/travel/flight", eval_set=eval_hash, target=0.70,
                                            base_model=Model.name, epochs=EPOCHS)
-    k = Client(url, KIM).buy_coins(fb["id"], 2_000_000)
-    Client(url, RAJ).buy_coins(fb["id"], 3_000_000)
+    k = Client(url, KIM).buy_coins(fb["id"], **amt(2_000_000))
+    Client(url, RAJ).buy_coins(fb["id"], **amt(3_000_000))
     Client(url, KIM).transfer_coins(fb["id"], LEE, k["coins"] / 2)
     traces = []
     for who, emails in ((A("a"), ["southwest", "united"]), (A("b"), ["delta"])):
@@ -135,7 +144,7 @@ def seed(ex, url):
             traces.append(t)
     lot = next(x["lot"] for x in node.lots()["lots"] if x["lot"].startswith(flight.TASK + "|"))
     for who, price in ((TRAINER, 900_000), (BIDDER2, 600_000), (HOST, 250_000)):
-        Client(url, who).bid(lot, price)
+        Client(url, who).bid(lot, **bid_at(price))
     node.clear()
     if coin_mode:                   # licence money waits for the traces each buyer used: these two name theirs, the
         _direct(ex, lot, (BIDDER2, HOST))         # trainer's learnings do it for the trainer
@@ -146,7 +155,7 @@ def seed(ex, url):
                                 fields=flight.FIELDS, clean=flight.clean)
     att = attest(VALIDATOR, flight.EVAL, "first-pass field accuracy, 3 unseen airlines", before, after)
     L = Learning.build(kind="routing", task=flight.TASK, base_model=Model.name, artifact=artifact, parents=parents,
-                       trainer=TRAINER, attestation=att, per_call_micros=200)
+                       trainer=TRAINER, attestation=att, **per_call(200))
     lid = Client(url, TRAINER).register_learning(L)["id"]
     story += [f"{len(traces)} skeleton traces filed under extract/travel/flight by 2 agents: no names, codes, dates "
               "or prices left their devices"]
@@ -164,13 +173,12 @@ def seed(ex, url):
                                              path="code/generate", base_model=QWEN, eval_set=base["eval_set"],
                                              target=rule["target"], epochs=EPOCHS)
     for who, spend in ((KIM, 4_000_000), (RAJ, 3_000_000), (LEE, 3_000_000)):
-        Client(url, who).buy_coins(cb["id"], spend)
+        Client(url, who).buy_coins(cb["id"], **amt(spend))
     for t in lot1:
         Client(url, t["producer"]).submit(t)
     prompts = {t["task_id"]: tasks.prompt(t) for t in tasks.load("train")}
     pilots = {p: Autopilot(Client(url, p), task=tasks.TASK, base_model=QWEN, checker=tasks.CHECKER, engine=RulesEngine(),
-                           policy=Policy(privacy="open", bounty_after=3, back_micros=500_000, budget_micros=500_000,
-                                         bounty_epochs=EPOCHS))
+                           policy=Policy(privacy="open", bounty_after=3, bounty_epochs=EPOCHS, **budget(500_000)))
               for p in CODE_PRODUCERS}
     acts = Counter()
     for u in (p for p in prod1 if p["how"] == "unsolved"):
@@ -179,7 +187,7 @@ def seed(ex, url):
             acts[a["action"]] += 1
     code_lot = next(x["lot"] for x in node.lots()["lots"] if x["lot"].startswith(tasks.TASK + "|"))
     for who, price in ((TRAINER, 2_000_000), (BIDDER4, 1_200_000), (BIDDER3, 900_000)):
-        Client(url, who).bid(code_lot, price)
+        Client(url, who).bid(code_lot, **bid_at(price))
     node.clear()
     if coin_mode:
         _direct(ex, code_lot, (BIDDER4, BIDDER3))
@@ -194,14 +202,14 @@ def seed(ex, url):
                 "hash": ev["adapter"], "body": {"kind": "lora", "rank": info["config"]["rank"], "base_model": QWEN}}
     L = Learning.build(kind="lora", task=tasks.TASK, base_model=QWEN, artifact=artifact,
                        parents=[(json_id(t), 1) for t in lot1 + lot2], trainer=TRAINER, attestation=att,
-                       per_call_micros=50, release="open")
+                       release="open", **per_call(50))
     lid2 = Client(url, TRAINER).register_learning(L)["id"]
     if not coin_mode:
         Client(url, HOST).report_usage(lid2, 400_000)
 
     # --- an agent on autopilot meets a failure nobody has fixed, and posts a bounty for it ---------------------------
     pilot = Autopilot(Client(url, AUTO), task=flight.TASK, base_model=Model.name, checker=flight.CHECKER,
-                      engine=RulesEngine(), policy=Policy(bounty_after=2, back_micros=1_000_000, budget_micros=1_000_000, bounty_epochs=EPOCHS))
+                      engine=RulesEngine(), policy=Policy(bounty_after=2, bounty_epochs=EPOCHS, **budget(1_000_000)))
     auto = agent(AUTO)
     auto.autopilot = pilot
     posted, joined = [], []
@@ -214,7 +222,8 @@ def seed(ex, url):
                 joined.append(a["bounty"])
 
     backed = acts.get("backed_existing_bounty", 0)
-    story += [f"bounty #{cb['id']} posted free: +3 points first-try pass@1 for {QWEN}; kim, raj and lee back it with $10",
+    story += [f"bounty #{cb['id']} posted free: +3 points first-try pass@1 for {QWEN}; kim, raj and lee back it with "
+              f"{money(10_000_000)}",
               f"{len(lot1)} open traces filed under code/generate by 3 agents' unit tests (round 1)"
               + (f"; their autopilots back bounty #{cb['id']} {backed} times for the failures nobody fixed" if backed else ""),
               f"{len(lot2)} more traces from the adapted model's own failures (round 2)",
@@ -225,10 +234,10 @@ def seed(ex, url):
         story.append("a host serves the open weights: 400,000 calls metered at $0.00005")
     if posted:
         story.append(f"an agent on autopilot hit the same flight failure twice and posted bounty #{posted[0]} free, "
-                     "backed with $1 of its budget")
+                     f"backed with {money(1_000_000)} of its budget")
     elif joined:
         story.append(f"an agent on autopilot hit the same flight failure twice; bounty #{joined[0]} already covers it, "
-                     "so it backed that one with $1 of its budget")
+                     f"so it backed that one with {money(1_000_000)} of its budget")
     if coin_mode:
         story += federate(ex, url, flight, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
     return story
@@ -294,8 +303,9 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
                  f"median {vc['median_gain'] * 100:+.1f}, {vc['status']}: it may now earn, as people use it")
     if vc["status"] == "accepted":
         Client(url, HOST).report_usage(lid2, 400_000)
-        story.append("a host serves the open weights: 400,000 calls ($20) buy TXC from the pool; half is burned, and the "
-                     "protocol mints half of that burn back to LoRA v2's traces, trainer and validators, vesting")
+        story.append("a host serves the open weights: 400,000 calls at 0.05 sat (20,000 sats, about $17) buy TXC from "
+                     "the pool and burn it; the epoch's emission is minted to LoRA v2's traces, trainer and validators "
+                     "for that work, never more than the burn was worth")
     story.append("licence money waits for the traces each buyer used: the trainer's learnings name its traces, the "
                  "other buyers named theirs")
     return story

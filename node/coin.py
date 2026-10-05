@@ -1,32 +1,35 @@
-"""The coin economy (testnet v0.4): two units and a burn-and-mint equilibrium, so every robot and model can pay for
-what it uses, at any scale, for as long as the network runs.
+"""The coin economy (testnet v0.5): everything priced in bitcoin. Two units and a burn-and-mint equilibrium, so every
+robot and model can pay for what it uses, at any scale, for as long as the network runs.
 
     python node/exchange.py --economy coin ...        # or TRACEX_ECONOMY=coin
 
 Two units
-  * TXC is the asset: rewards, stakes, bonds and bounty pools are TXC, priced by an open constant-product pool. It
-    has 18 decimals (UNIT = 10**18). Credits are millionths of a dollar, so a credit's worth of TXC at
-    $1,000,000,000 a TXC is 10**-15 TXC: 15 decimals is the least that pays every credit there, and 18 leaves a
+  * TXC is the asset: rewards, stakes, bonds and bounty pools are TXC, priced in sats by an open constant-product pool
+    that pairs it with bitcoin. It has 18 decimals (UNIT = 10**18). A credit is a millisatoshi, so a credit's worth of
+    TXC at 10**12 sats a TXC is 10**-15 TXC: 15 decimals is the least that pays every credit there, and 18 leaves a
     thousand times headroom for rounding and higher prices.
-  * Credits are what everything is paid in: 1 credit = $0.000001, whole numbers only, the same at every TXC price, so
-    a machine always knows what a call costs. They are made only by burning TXC: dollars buy TXC from the pool and
-    burn it in the same step (one credit per micro-dollar), or a holder burns TXC at the lower of the pool's spot and
-    reference prices. Credits can't be moved between accounts and never turn back into TXC or dollars. Metered usage,
-    licences and the standard transaction fee are all paid in credits, and spent credits are gone.
+  * Credits are what everything is paid in: 1 credit = 1 millisatoshi (msat), whole numbers only, the same at every
+    TXC price, so a machine always knows what a call costs. They are made only by burning TXC: sats buy TXC from the
+    pool and burn it in the same step (one credit per msat), or a holder burns TXC at the lower of the pool's spot and
+    reference prices. Credits can't be moved between accounts and never turn back into TXC or sats. Metered usage,
+    licences, trace fees and the standard transaction fee are all paid in credits, and spent credits are gone.
+  * Sats arrive over Lightning: L402 (HTTP 402 Payment Required with a Lightning invoice and a macaroon; pay, then
+    retry with the macaroon and the payment's preimage) is the mainnet path. On the testnet each wallet takes 30,000
+    test sats once from the faucet, and a 402's invoice is a placeholder.
 
-Burn and mint
+Burn and mint (unchanged from v0.4, now valued in sats)
   * Each epoch mints at most a fixed emission: 50,000 TXC, halving every 180 epochs five times, then 1,562.5 TXC an
     epoch for good. 90% goes to the people whose work was paid for that epoch (traces 60, trainer 25, checkers 10,
     validators 5, down the family tree; a solved bounty's coin holders first take 20% of its learning's usage), 10% to
     the node operator for the transactions it served, each by its share of the credits burned on its work.
   * The anti-farming cap: nobody is ever minted more TXC than the credits burned on their own work were worth, valued
-    at the epoch's time-weighted pool price (never the spot), and never more than the TXC those credits burned at the
-    pool's price before its spread. Emission nobody earned is never minted and never rolls over. Nothing is minted for
-    a verdict, a submission or a stake, and the parents' share vests, so an audit can still claw it back.
-  * So burning pushes the price up to where an epoch's burns match its emission (P* = credits burned / emission) and
-    then mints exactly what is burned: TXC follows the network's usage rate and the halvings, not the sum of all that
-    was ever paid. The protocol never pushes the price down (that would take minting TXC nobody earned, which is what
-    farming wants); only holders selling does. examples/scaling shows both, against v0.3.
+    at the epoch's time-weighted pool price in sats (never the spot), and never more than the TXC those credits burned
+    at the pool's price before its spread. Emission nobody earned is never minted and never rolls over. Nothing is
+    minted for a verdict, a submission or a stake, and the parents' share vests, so an audit can still claw it back.
+  * So burning pushes the price up to where an epoch's burns match its emission (P* = credits burned / emission, in
+    msats per TXC) and then mints exactly what is burned: TXC follows the network's usage rate and the halvings, not
+    the sum of all that was ever paid. The protocol never pushes the price down (that would take minting TXC nobody
+    earned, which is what farming wants); only holders selling does. examples/scaling shows both.
 
 Why farming loses (each rule is a test in tests/test_coin.py and an attack in examples/farming/attacks.py)
   1. Only payments pay, and whoever pays judges: users pay for a learning after measuring it on their own data, a
@@ -40,20 +43,26 @@ Why farming loses (each rule is a test in tests/test_coin.py and an attack in ex
      more than twice what they measured, beyond the noise, forfeits the bond.
   4. Forfeits burn: a lost bond, stake or challenge stake goes to nobody.
   5. Validators earn only their share of what the learnings they vouched for go on to earn. Stake is slashed for not
-     showing up, for vouching for a gain a fresh round refuted, or for scoring a decoy without measuring it.
+     showing up, for vouching for a gain a fresh round refuted, or for scoring a decoy without measuring it; a
+     validator slashed under the minimum loses its seat at once.
   6. Copies and padding earn nothing: copies pay the original's producer; junk no buyer uses gets no licence money;
      the split is the protocol's, equal per distinct parent; a wrapper around someone's traces takes nothing.
-  7. Every transaction pays one standard fee in credits, $0.00005 (exchange.TX_FEE_NANOS), about 125 times the
-     electricity of the dearest transaction (examples/fees/measure.py). It is burned like any payment and is the
-     operator's claim on its 10% of the emission. Bonds, stakes, challenge stakes and the bounty curve are priced in
-     dollars at the reference price, so they keep their real cost whatever TXC does.
+  7. Every transaction pays one standard fee in credits, 58 msats (exchange.TX_FEE_MSATS; about $0.00005 at $85,962 a
+     bitcoin), about 125 times the electricity of the dearest transaction (examples/fees/measure.py). It is burned like
+     any payment and is the operator's claim on its 10% of the emission. It is fixed in sats, so its dollar value
+     floats with bitcoin; Params.fee_repeg_epochs re-pegs it to a dollar target every N epochs (off by default).
+     Bonds (5,000 sats), the validator minimum stake (10,000 sats), challenge stakes (2,000 sats) and the bounty curve
+     (first coin 10 sats, each one sold adds 0.1 sat) are priced in sats at the reference price, so they keep their
+     cost in bitcoin whatever TXC does.
 
-Units: dollars and credits in micros (1e-6 $); TXC in base units (1e-18 TXC); prices in micro-dollars per TXC, kept
-internally times PQ so they stay exact from a billionth of a dollar to beyond a trillion dollars a TXC. Every TXC
-amount is stored as TEXT (SQLite integers stop at 2**63) and travels in JSON as a decimal string (keys ending _units).
-Per-transaction detail is kept through the challenge window (`keep_epochs`); balances, roots, traces and learnings are
-kept for good.
+Units: sats and credits in msats (1e-3 sat; integer msats everywhere); TXC in base units (1e-18 TXC); prices in msats
+per TXC, kept internally times PQ so they stay exact from a billionth of a sat to beyond a trillion sats a TXC. Every
+amount key in the API says its unit: `_msats` or `_sats` (integers), `_units` (TXC base units, as decimal strings:
+SQLite integers stop at 2**63). Dollars appear only as labelled approximations (`_usd_approx`), at the operator's
+reference bitcoin price, and are never used in any amount. Per-transaction detail is kept through the challenge window
+(`keep_epochs`); balances, roots, traces and learnings are kept for good.
 """
+import base64
 import decimal
 import hashlib
 import json
@@ -63,25 +72,46 @@ import statistics
 import time
 from dataclasses import dataclass
 
-from exchange import (ADDRESS, BOUNTY_SPLIT, MAX_DEPTH, Exchange, coin, need_address, split_trace_sale, split_usage,
-                      leaf, build_tree, proof, canonical, object_id, clear_shared, Bid)
+from exchange import (ADDRESS, BOUNTY_SPLIT, MAX_DEPTH, TX_FEE_MSATS, Exchange, PaymentRequired, coin, need_address,
+                      msats_in, split_trace_sale, split_usage, leaf, build_tree, proof, canonical, object_id,
+                      clear_shared, Bid)
 from traceex.trace import Learning
 
-VERSION = "0.4"
+VERSION = "0.5"
 DECIMALS = 18
 UNIT = 10 ** DECIMALS          # base units in one TXC
-PQ = 10 ** 12                  # prices: micro-dollars per TXC, times PQ
+PQ = 10 ** 12                  # prices: msats per TXC, times PQ
 BPS = 10_000
+MSATS_PER_BTC = 100_000_000_000
+BTC_USD = 85_962               # Coinbase spot, 2026-10-05: only for the approximate dollar figures shown beside sats
 
 
 def units_for(credits, price_q):
-    """The TXC (base units) that `credits` micro-dollars are worth at price_q."""
+    """The TXC (base units) that `credits` msats are worth at price_q."""
     return int(credits) * UNIT * PQ // max(int(price_q), 1)
 
 
 def credits_for(units, price_q):
-    """The credits (micro-dollars) that `units` of TXC are worth at price_q, rounded down."""
+    """The credits (msats) that `units` of TXC are worth at price_q, rounded down."""
     return int(units) * int(price_q) // (UNIT * PQ)
+
+
+def fmt_sats(msats):
+    """msats for people: '30,000 sats', '0.058 sats', '1.5 sats'."""
+    sats = decimal.Decimal(int(msats)) / 1000
+    if sats == sats.to_integral_value():
+        return f"{int(sats):,} sats"
+    return f"{sats.normalize():,f} sats"
+
+
+def usd_approx(msats, btc_usd=BTC_USD):
+    """A dollar figure for people, labelled approximate wherever it is shown: msats at `btc_usd` dollars a bitcoin."""
+    usd = decimal.Decimal(int(msats)) * int(btc_usd) / MSATS_PER_BTC
+    if abs(usd) >= 100:
+        return f"${usd:,.0f}"
+    if abs(usd) >= decimal.Decimal("0.01"):
+        return f"${usd:,.2f}"
+    return f"${usd:.2g}" if usd else "$0"
 
 
 def to_units(amount):
@@ -99,13 +129,13 @@ def fmt_txc(units, places=4):
 
 
 def fmt_price(price_q):
-    """A price for people: '$0.0100', '$22,222', '$0.000000123'."""
-    usd = decimal.Decimal(int(price_q)) / PQ / 1_000_000
-    if usd >= 100:
-        return f"${usd:,.0f}"
-    if usd >= decimal.Decimal("0.0001"):
-        return f"${usd:,.4f}"
-    return f"${usd:.3g}"
+    """A price for people, in sats a TXC: '10 sats', '22,222 sats', '0.000123 sats'."""
+    sats = decimal.Decimal(int(price_q)) / PQ / 1000
+    if sats >= 100:
+        return f"{sats:,.0f} sats"
+    if sats >= decimal.Decimal("0.01"):
+        return f"{sats:,.3f}".rstrip("0").rstrip(".") + " sats"
+    return f"{sats:.3g} sats"
 
 
 def _frac(amount, f):
@@ -133,7 +163,7 @@ def _pro_rata(amount, weights):
 class Params:
     symbol: str = "TXC"
     genesis_coins: int = 1_000_000 * UNIT      # protocol-owned liquidity at genesis...
-    genesis_usd: int = 10_000 * 1_000_000      # ...beside $10,000: TXC opens at $0.01
+    genesis_msats: int = 10_000_000 * 1000     # ...beside 10,000,000 sats (0.1 BTC, about $8,600): TXC opens at 10 sats
     amm_fee_bps: int = 30                      # the pool's spread: 0.3% of a swap stays in the pool, nobody collects it
     emission: int = 50_000 * UNIT              # the most an epoch can mint...
     halving_epochs: int = 180                  # ...halving every 180 epochs...
@@ -152,15 +182,18 @@ class Params:
     audit_min: int = 10                        # every reveal audits at least this many parents (or all of them)
     audit_max_bad: float = 0.10
     pad_burn: float = 0.50                     # parents found padded: their share is withheld and half the bond burns
-    learning_bond_micros: int = 5_000_000      # $5 of TXC at the reference price
-    validator_min_stake_micros: int = 10_000_000   # $10 of TXC
-    challenge_stake_micros: int = 2_000_000    # $2 of TXC
+    learning_bond_msats: int = 5_000_000       # 5,000 sats of TXC at the reference price (about $4.30; v0.4: $5)
+    validator_min_stake_msats: int = 10_000_000    # 10,000 sats of TXC (about $8.60; v0.4: $10)
+    challenge_stake_msats: int = 2_000_000     # 2,000 sats of TXC (about $1.72; v0.4: $2)
     stake_grace_epochs: int = 4                # a validator the price pushed under the minimum keeps its seat this long
     noshow_slash: float = 0.05
     fake_slash: float = 0.25                   # vouched for a gain a fresh round refuted, or scored a decoy unmeasured
     near_dup: float = 0.3                      # the same distinctive fix, inputs sharing 30% of their words: one trace
-    bounty_base: int = coin.BASE               # bounty coins are priced in dollars: the first costs $0.01...
-    bounty_slope: int = coin.SLOPE             # ...and each one sold adds $0.0001 (the dollar node's curve)
+    bounty_base: int = 10_000                  # bounty coins are priced in sats: the first costs 10 sats (10,000 msats)...
+    bounty_slope: int = 100                    # ...and each one sold adds 0.1 sat (100 msats)
+    btc_usd: int = BTC_USD                     # dollars a bitcoin: only for approximate dollar figures (and the re-peg)
+    fee_repeg_epochs: int = 0                  # re-peg the fee to fee_target_usd_nanos every N epochs (0: never)
+    fee_target_usd_nanos: int = 50_000         # the re-peg's target: $0.00005, at the operator's btc_usd
 
 
 COIN_SCHEMA = """
@@ -193,7 +226,8 @@ CREATE TABLE IF NOT EXISTS credits   (account TEXT PRIMARY KEY, credits INT, bas
 CREATE TABLE IF NOT EXISTS paid      (epoch INT, learning TEXT, credits INT, basis TEXT, PRIMARY KEY (epoch, learning));
 CREATE TABLE IF NOT EXISTS work      (epoch INT, account TEXT, role TEXT, ref TEXT, credits INT, basis TEXT);
 CREATE INDEX IF NOT EXISTS work_epoch ON work(epoch);
-CREATE TABLE IF NOT EXISTS coin_bases(bounty INT, holder TEXT, units TEXT, micros INT, PRIMARY KEY (bounty, holder));
+CREATE TABLE IF NOT EXISTS coin_bases(bounty INT, holder TEXT, units TEXT, msats INT, PRIMARY KEY (bounty, holder));
+CREATE TABLE IF NOT EXISTS tx_fees   (account TEXT PRIMARY KEY, msats INT);
 CREATE TABLE IF NOT EXISTS coin_roots(epoch INT PRIMARY KEY, root TEXT, total TEXT, claims TEXT);
 CREATE TABLE IF NOT EXISTS mints     (epoch INT PRIMARY KEY, body TEXT);
 """
@@ -276,23 +310,41 @@ def tolerance(att, z, floor):
 
 class CoinExchange(Exchange):
     economy = "coin"
+    money = "msats"
 
-    def __init__(self, path=":memory:", *, params=None, beacon_delay=1, clock=None, **kw):
+    def _fmt(self, msats):
+        return f"{fmt_sats(msats)} (about {usd_approx(msats, self.btc_usd)})"
+
+    def __init__(self, path=":memory:", *, params=None, beacon_delay=1, clock=None, reserve_msats=None,
+                 tx_fee_msats=None, btc_usd=None, **kw):
         """beacon_delay=1: validators for a learning are drawn from the beacon published at the settlement after it was
         submitted, so nobody can grind a learning's content for friendly validators. 0 assigns at once (tests).
-        clock: seconds, for the time-weighted price (time.time by default; simulations pass their own)."""
-        super().__init__(path, **kw)
+        clock: seconds, for the time-weighted price (time.time by default; simulations pass their own).
+        test_credits: test msats each new wallet takes once (30,000,000 = 30,000 sats). reserve_msats: a lot's reserve
+        price per licence. tx_fee_msats: the standard fee (TX_FEE_MSATS on a testnet, unless set). btc_usd: dollars a
+        bitcoin for the approximate dollar figures (and the fee re-peg); never used in any amount."""
+        if "reserve_micros" in kw or "tx_fee_nanos" in kw:
+            raise ValueError("a coin node prices everything in sats: reserve_msats and tx_fee_msats, not micros or nanos")
+        if reserve_msats is not None:
+            kw["reserve_micros"] = int(reserve_msats)          # the base node's reserve, in this node's money
+        super().__init__(path, tx_fee_nanos=0, **kw)
         self.p, self.beacon_delay = params or Params(), int(beacon_delay)
         self.clock = clock or time.time
         self.db.conn.create_aggregate("BIGSUM", 1, _BigSum)
         if self._meta("pool_coin") is not None and self._meta("coin_version") != VERSION:
-            raise ValueError("this database holds a testnet v0.3 coin economy (6-decimal TXC, burn and match); v0.4 "
-                             "opens a fresh testnet: start it on an empty database")
+            was = self._meta("coin_version") or "0.3"
+            self.db.close()
+            raise ValueError(f"this database holds a testnet v{was} coin economy (priced in dollars); v{VERSION} prices "
+                             "everything in sats and opens a fresh testnet: start it on an empty database")
         self.db.executescript(COIN_SCHEMA)
+        self.tx_fee_msats = int(TX_FEE_MSATS if tx_fee_msats is None and self.test_credits else tx_fee_msats or 0)
+        if self._meta("tx_fee_msats") is not None:              # a re-pegged fee outlives a restart
+            self.tx_fee_msats = int(self._meta("tx_fee_msats"))
+        self.btc_usd = int(self._meta("btc_usd") or btc_usd or self.p.btc_usd)
         if self._meta("pool_coin") is None:                     # genesis
-            q0 = self.p.genesis_usd * UNIT * PQ // self.p.genesis_coins
+            q0 = self.p.genesis_msats * UNIT * PQ // self.p.genesis_coins
             now = self._now()
-            for k, v in (("pool_usd", self.p.genesis_usd), ("pool_coin", self.p.genesis_coins),
+            for k, v in (("pool_msats", self.p.genesis_msats), ("pool_coin", self.p.genesis_coins),
                          ("minted", self.p.genesis_coins), ("burned", 0), ("coin_version", VERSION),
                          ("twap_t", now), ("twap_cum", 0), ("twap_last", q0), ("mark_t", now), ("mark_cum", 0),
                          ("mark_q", q0), ("ref_q", q0), ("burned_mark", 0), ("credits_made", 0), ("credits_spent", 0)):
@@ -331,17 +383,17 @@ class CoinExchange(Exchange):
         have = self._coins(account)
         if have < units:
             raise ValueError(f"not enough {self.p.symbol}: {account[:10]}… has {fmt_txc(have)}, this needs "
-                             f"{fmt_txc(units)} (POST /v0/swap buys {self.p.symbol} with test dollars)")
+                             f"{fmt_txc(units)} (POST /v0/swap buys {self.p.symbol} with sats)")
 
     def supply(self):
         return self._m("minted") - self._m("burned")
 
     # --- the pool, and its time-weighted price ------------------------------------------------------------------------
     def _price_q(self):
-        return self._m("pool_usd") * UNIT * PQ // max(self._m("pool_coin"), 1)
+        return self._m("pool_msats") * UNIT * PQ // max(self._m("pool_coin"), 1)
 
     def price(self):
-        """Micro-dollars per whole TXC at the pool's spot (for display; amounts use the exact internal price)."""
+        """msats per whole TXC at the pool's spot (for display; amounts use the exact internal price)."""
         return self._price_q() // PQ
 
     def _now(self):
@@ -370,68 +422,69 @@ class CoinExchange(Exchange):
             self._set_meta(k, v)
 
     def ref_q(self):
-        """The reference price for everything priced in dollars (bonds, stakes, the bounty curve, burning held TXC for
+        """The reference price for everything priced in sats (bonds, stakes, the bounty curve, burning held TXC for
         credits): the time-weighted price of the last settled epoch."""
         return self._m("ref_q")
 
-    def _amm_buy(self, micros):
-        """Dollars into the pool, TXC out. Returns (TXC out, TXC the dollars would have bought before the spread)."""
+    def _amm_buy(self, msats):
+        """Sats into the pool, TXC out. Returns (TXC out, TXC the sats would have bought before the spread)."""
         self._observe()
-        x, y = self._m("pool_usd"), self._m("pool_coin")
-        dx = micros * (BPS - self.p.amm_fee_bps) // BPS
+        x, y = self._m("pool_msats"), self._m("pool_coin")
+        dx = msats * (BPS - self.p.amm_fee_bps) // BPS
         dy = y * dx // (x + dx)
-        gross = y * micros // (x + micros)
-        self._set_meta("pool_usd", x + micros)
+        gross = y * msats // (x + msats)
+        self._set_meta("pool_msats", x + msats)
         self._set_meta("pool_coin", y - dy)
         self._observed()
         return dy, gross
 
     def _amm_sell(self, units):
         self._observe()
-        x, y = self._m("pool_usd"), self._m("pool_coin")
+        x, y = self._m("pool_msats"), self._m("pool_coin")
         dy = units * (BPS - self.p.amm_fee_bps) // BPS
         dx = x * dy // (y + dy)
-        self._set_meta("pool_usd", x - dx)
+        self._set_meta("pool_msats", x - dx)
         self._set_meta("pool_coin", y + units)
         self._observed()
         return dx
 
     def quote(self, side, amount):
-        x, y = self._m("pool_usd"), self._m("pool_coin")
+        """What a swap would get now: `amount` is msats for a buy, TXC base units for a sell."""
+        x, y = self._m("pool_msats"), self._m("pool_coin")
         if side == "buy":
             dx = int(amount) * (BPS - self.p.amm_fee_bps) // BPS
-            return {"side": "buy", "pay_micros": int(amount), "get_units": y * dx // (x + dx)}
+            return {"side": "buy", "pay_msats": int(amount), "get_units": y * dx // (x + dx)}
         dy = int(amount) * (BPS - self.p.amm_fee_bps) // BPS
-        return {"side": "sell", "pay_units": int(amount), "get_micros": x * dy // (y + dy)}
+        return {"side": "sell", "pay_units": int(amount), "get_msats": x * dy // (y + dy)}
 
     def swap(self, account, side, amount):
-        """Test dollars for TXC or back, at the pool's price; the pool keeps its 0.3% spread. Like every transaction it
-        pays the standard fee (TX_FEE_NANOS), in credits."""
+        """Sats for TXC or back, at the pool's price; the pool keeps its 0.3% spread. `amount` is msats for a buy, TXC
+        base units for a sell. Like every transaction it pays the standard fee (TX_FEE_MSATS), in credits."""
         need_address(account, "account")
         amount = int(amount)
         if amount <= 0 or side not in ("buy", "sell"):
-            raise ValueError("side is 'buy' (amount in dollar micros) or 'sell' (amount in TXC units), amount > 0")
+            raise ValueError("side is 'buy' (msats or sats) or 'sell' (units of TXC), the amount more than 0")
         with self.lock:
             if side == "buy":
-                self._need_dollars(account, amount)
+                self._need_sats(account, amount)
                 self._tx_fee(account)
                 self._credit(account, -amount, f"swap: buy {self.p.symbol}")
                 out, _ = self._amm_buy(amount)
                 self._coin(account, out, "swap: bought")
                 got = {"bought_units": out}
-                self._event(f"${amount / 1e6:,.2f} bought {fmt_txc(out)} {self.p.symbol}; price "
+                self._event(f"{fmt_sats(amount)} bought {fmt_txc(out)} {self.p.symbol}; price "
                             f"{fmt_price(self._price_q())}")
             else:
                 self._need_coins(account, amount)
                 self._tx_fee(account)
                 self._coin(account, -amount, "swap: sold")
-                usd = self._amm_sell(amount)
-                self._credit(account, usd, f"swap: sold {self.p.symbol}")
-                got = {"paid_micros": usd}
-                self._event(f"{fmt_txc(amount)} {self.p.symbol} sold for ${usd / 1e6:,.2f}; price "
+                got_msats = self._amm_sell(amount)
+                self._credit(account, got_msats, f"swap: sold {self.p.symbol}")
+                got = {"paid_msats": got_msats}
+                self._event(f"{fmt_txc(amount)} {self.p.symbol} sold for {fmt_sats(got_msats)}; price "
                             f"{fmt_price(self._price_q())}")
             self.db.commit()
-        return dict(got, price_micros=self.price(), symbol=self.p.symbol)
+        return dict(got, price_msats=self.price(), symbol=self.p.symbol)
 
     # --- credits: the payment unit -------------------------------------------------------------------------------------
     def _credit_row(self, account):
@@ -446,29 +499,30 @@ class CoinExchange(Exchange):
         self._set_credits(account, c + credits, b + basis)
         self._add("credits_made", credits)
 
-    def _onramp(self, account, micros, memo):
-        """Dollars in, credits out: the dollars buy TXC from the pool and it is burned in the same step, one credit per
-        micro-dollar. The credits remember the TXC their dollars bought before the pool's spread (their basis): nobody
-        is ever minted more than that for them."""
-        self._credit(account, -micros, memo)
-        burned, gross = self._amm_buy(micros)
+    def _onramp(self, account, msats, memo):
+        """Sats in, credits out: the sats buy TXC from the pool and it is burned in the same step, one credit per msat.
+        The credits remember the TXC their sats bought before the pool's spread (their basis): nobody is ever minted
+        more than that for them."""
+        self._credit(account, -msats, memo)
+        burned, gross = self._amm_buy(msats)
         self._burn(burned, "credits", account)
-        self._make_credits(account, micros, gross)
+        self._make_credits(account, msats, gross)
         return burned
 
-    def buy_credits(self, account, micros=0, units=0):
-        """Make credits (1 credit = $0.000001). With `micros`: test dollars buy TXC from the pool and it is burned, one
-        credit per micro-dollar. With `units`: burn TXC you hold, at the lower of the pool's spot and reference prices.
-        Credits pay for everything on the network; they can't be moved, and never turn back into TXC or dollars."""
+    def buy_credits(self, account, msats=0, units=0):
+        """Make credits (1 credit = 1 msat). With `msats`: sats (test sats here, Lightning on mainnet) buy TXC from the
+        pool and it is burned, one credit per msat. With `units`: burn TXC you hold, at the lower of the pool's spot
+        and reference prices. Credits pay for everything on the network; they can't be moved, and never turn back into
+        TXC or sats."""
         need_address(account, "account")
-        micros, units = int(micros or 0), int(units or 0)
-        if (micros > 0) == (units > 0):
-            raise ValueError("pay with dollars (micros) or burn TXC (units): one of them, more than 0")
+        msats, units = int(msats or 0), int(units or 0)
+        if (msats > 0) == (units > 0):
+            raise ValueError("pay with sats (msats or sats) or burn TXC (units): one of them, more than 0")
         with self.lock:
-            if micros:
-                self._need_dollars(account, micros, spends_cover=False)
+            if msats:
+                self._need_sats(account, msats, spends_cover=False)
                 self._tx_fee(account)
-                burned, made = self._onramp(account, micros, "credits"), micros
+                burned, made = self._onramp(account, msats, "credits"), msats
             else:
                 self._need_coins(account, units)
                 made = credits_for(units, min(self._price_q(), self.ref_q()))
@@ -479,13 +533,13 @@ class CoinExchange(Exchange):
                 self._burn(units, "credits", account)
                 self._make_credits(account, made, units)
                 burned = units
-            self._event(f"{made:,} credits made: {fmt_txc(burned)} {self.p.symbol} burned")
+            self._event(f"{fmt_sats(made)} of credits made: {fmt_txc(burned)} {self.p.symbol} burned")
             self.db.commit()
-        return {"account": account, "credits_micros": made, "burned_units": burned,
-                "balance_micros": self._credit_row(account)[0]}
+        return {"account": account, "credits_msats": made, "burned_units": burned,
+                "balance_msats": self._credit_row(account)[0]}
 
     def _pay_credits(self, account, credits, memo):
-        """Spend credits; dollars top them up through the on-ramp. Returns (credits paid, their TXC basis)."""
+        """Spend credits; sats top them up through the on-ramp. Returns (credits paid, their TXC basis)."""
         c, b = self._credit_row(account)
         if c < credits:
             short = credits - c
@@ -500,10 +554,10 @@ class CoinExchange(Exchange):
         self._add("credits_spent", pay)
         return pay, basis
 
-    # --- what an account can spend: credits plus the dollars that top them up, less what it already owes ----------------
+    # --- what an account can spend: credits plus the sats that top them up, less what it already owes ------------------
     def _owed_credits(self, account):
-        r = self.db.execute("SELECT nanos FROM fees WHERE account=?", (account,)).fetchone()
-        return -(-(r[0] if r else 0) // 1000)
+        r = self.db.execute("SELECT msats FROM tx_fees WHERE account=?", (account,)).fetchone()
+        return r[0] if r else 0
 
     def _obligations(self, account):
         bids = self.db.execute("SELECT COALESCE(SUM(price), 0) FROM bids WHERE bidder=? AND epoch=?",
@@ -514,49 +568,49 @@ class CoinExchange(Exchange):
         return self._credit_row(account)[0] + self._funds(account)
 
     def _fee_credits(self):
-        return -(-self.tx_fee_nanos // 1000)
+        return self.tx_fee_msats
 
-    def _short(self, account, micros):
-        return self._cover(account) - self._obligations(account) - self._fee_credits() < micros
+    def _short(self, account, msats):
+        return self._cover(account) - self._obligations(account) - self._fee_credits() < msats
 
-    def _need_funds(self, account, micros, pending=0):
-        """A payment in credits (dollars top them up): the account must cover it, the fees and bids it already owes, and
+    def _need_funds(self, account, msats, pending=0):
+        """A payment in credits (sats top them up): the account must cover it, the fees and bids it already owes, and
         this transaction's own fee, so nobody can spend first and leave its fees unpaid at settlement."""
-        if self.test_credits and self._short(account, micros):
+        if self.test_credits and self._short(account, msats):
             room = self._cover(account) - self._obligations(account) - self._fee_credits()
-            raise ValueError(f"not enough test credits: {account[:10]}… can pay ${max(room, 0) / 1e6:,.2f}, this "
-                             f"needs ${micros / 1e6:,.2f} (POST /v0/faucet opens a wallet)")
+            raise PaymentRequired(f"not enough test sats: {account[:10]}… can pay {fmt_sats(max(room, 0))}, this needs "
+                                  f"{fmt_sats(msats)} (POST /v0/faucet opens a wallet)", account, msats - max(room, 0))
 
-    def _need_dollars(self, account, micros, spends_cover=True):
-        """Dollars themselves (a swap, backing a bounty, the on-ramp). Turning dollars into credits keeps what an account
-        can pay with; buying TXC with them doesn't, so it must leave what the account owes covered."""
+    def _need_sats(self, account, msats, spends_cover=True):
+        """Sats themselves (a swap, backing a bounty, the on-ramp). Turning sats into credits keeps what an account can
+        pay with; buying TXC with them doesn't, so it must leave what the account owes covered."""
         if not self.test_credits:
             return
-        if self._funds(account) < micros or (spends_cover and self._short(account, micros)):
-            raise ValueError(f"not enough test credits: {account[:10]}… has ${max(self._funds(account), 0) / 1e6:,.2f} "
-                             f"of dollars free, this needs ${micros / 1e6:,.2f} (POST /v0/faucet opens a wallet)")
+        if self._funds(account) < msats or (spends_cover and self._short(account, msats)):
+            free = max(self._funds(account), 0)
+            raise PaymentRequired(f"not enough test sats: {account[:10]}… has {fmt_sats(free)} free, this needs "
+                                  f"{fmt_sats(msats)} (POST /v0/faucet opens a wallet)", account, msats - free)
 
     def _tx_fee(self, account):
-        """Charge one transaction its standard fee: accrued in nano-dollars, billed at settlement in whole credits and
-        burned. The account must be able to cover all it owes."""
-        if not self.tx_fee_nanos or not account:
+        """Charge one transaction its standard fee, in msats: accrued, billed at settlement in credits and burned. The
+        account must be able to cover all it owes."""
+        if not self.tx_fee_msats or not account:
             return
-        r = self.db.execute("SELECT nanos FROM fees WHERE account=?", (account,)).fetchone()
-        owed = (r[0] if r else 0) + self.tx_fee_nanos
+        owed = self._owed_credits(account) + self.tx_fee_msats
         if self.test_credits:
             bids = self._obligations(account) - self._owed_credits(account)
-            if self._cover(account) - bids < -(-owed // 1000):
-                raise ValueError(f"not enough test credits: {account[:10]}… can't cover the transaction fee "
-                                 "(POST /v0/faucet opens a wallet)")
-        self.db.execute("INSERT OR REPLACE INTO fees VALUES (?,?)", (account, owed))
+            if self._cover(account) - bids < owed:
+                raise PaymentRequired(f"not enough test sats: {account[:10]}… can't cover the transaction fee "
+                                      "(POST /v0/faucet opens a wallet)", account, owed - self._cover(account) + bids)
+        self.db.execute("INSERT OR REPLACE INTO tx_fees VALUES (?,?)", (account, owed))
 
     def _bill_fees(self):
-        """At settlement: every account pays its whole credits of transaction fees; they are burned, and they are the
-        operator's claim on its share of the emission (the fraction of a credit carries over)."""
+        """At settlement: every account pays the transaction fees it owes, in credits; they are burned, and they are the
+        operator's claim on its share of the emission."""
         total = basis = 0
-        for account, nanos in self.db.execute("SELECT account, nanos FROM fees WHERE nanos >= 1000").fetchall():
-            paid, b = self._pay_credits(account, nanos // 1000, "transaction fees")
-            self.db.execute("UPDATE fees SET nanos = nanos - ? WHERE account=?", (paid * 1000, account))
+        for account, owed in self.db.execute("SELECT account, msats FROM tx_fees WHERE msats > 0").fetchall():
+            paid, b = self._pay_credits(account, owed, "transaction fees")
+            self.db.execute("UPDATE tx_fees SET msats = msats - ? WHERE account=?", (paid, account))
             total, basis = total + paid, basis + b
         if total:
             self._work(self.fee_to, "operator", "fees", total, basis)
@@ -565,13 +619,56 @@ class CoinExchange(Exchange):
 
     def fees(self):
         """The standard fee, and what it has collected."""
-        accrued = self.db.execute("SELECT COALESCE(SUM(nanos), 0) FROM fees").fetchone()[0]
-        return {"per_transaction_nanos": self.tx_fee_nanos, "per_transaction_usd": f"{self.tx_fee_nanos / 1e9:.5f}",
-                "per_transaction_credits": self.tx_fee_nanos / 1000, "paid_in": "credits, burned",
-                "billed": "each epoch, in whole credits", "operator": self.fee_to,
-                "operator_share": self.p.operator_share, "burned_micros": self._m("fee_credits"),
-                "accrued_nanos": accrued, "how_it_was_set": "examples/fees/measure.py: about 125x the electricity of "
-                                                            "the dearest transaction"}
+        accrued = self.db.execute("SELECT COALESCE(SUM(msats), 0) FROM tx_fees").fetchone()[0]
+        return {"per_transaction_msats": self.tx_fee_msats,
+                "per_transaction_usd_approx": usd_approx(self.tx_fee_msats, self.btc_usd),
+                "usd_per_btc": self.btc_usd, "paid_in": "credits (1 credit = 1 msat), burned",
+                "billed": "each epoch", "operator": self.fee_to, "operator_share": self.p.operator_share,
+                "burned_msats": self._m("fee_credits"), "accrued_msats": accrued,
+                "repeg": {"every_epochs": self.p.fee_repeg_epochs, "target_usd": f"{self.p.fee_target_usd_nanos / 1e9:.5f}"}
+                if self.p.fee_repeg_epochs else "off: fixed in sats, so its dollar value floats with bitcoin",
+                "how_it_was_set": "examples/fees/measure.py: about 125x the electricity of the dearest transaction, "
+                                  "converted at $85,962 a bitcoin"}
+
+    def set_btc_usd(self, usd_per_btc):
+        """Operator: the dollars-per-bitcoin reference for the approximate dollar figures and, if it is on, the fee
+        re-peg. No amount on the node is ever computed from it otherwise."""
+        usd = int(usd_per_btc or 0)
+        if usd <= 0:
+            raise ValueError("usd_per_btc is a whole number of dollars, more than 0")
+        with self.lock:
+            self.btc_usd = usd
+            self._set_meta("btc_usd", usd)
+            self.db.commit()
+        return {"usd_per_btc": usd, "fee": self.fees()}
+
+    def _repeg_fee(self, e):
+        """Every fee_repeg_epochs epochs (if on): set the fee back to fee_target_usd_nanos at the operator's btc_usd."""
+        n = self.p.fee_repeg_epochs
+        if not n or not self.tx_fee_msats or e % n:
+            return
+        fee = max(1, (self.p.fee_target_usd_nanos * 100 + self.btc_usd // 2) // self.btc_usd)   # nanos -> msats
+        if fee != self.tx_fee_msats:
+            self._event(f"standard fee re-pegged: {self.tx_fee_msats} → {fee} msats (${self.p.fee_target_usd_nanos / 1e9:.5f}"
+                        f" at ${self.btc_usd:,} a bitcoin)", force=True)
+            self.tx_fee_msats = fee
+            self._set_meta("tx_fee_msats", fee)
+
+    def l402(self, account, msats):
+        """The 402 challenge for a payment an account can't cover: an invoice for what is missing and a macaroon bound
+        to the account and amount. Mainnet: a Lightning invoice; the client pays it and retries with
+        `Authorization: L402 <macaroon>:<preimage>`, and the node credits the sats to the account. Testnet: a
+        placeholder invoice nobody can pay; the faucet gives test sats instead."""
+        msats = max(int(msats or 0), 1)
+        nonce = hashlib.sha256(f"{self._meta('beacon')}|{account}|{msats}|{self._now()}".encode()).hexdigest()
+        caveats = {"account": account, "amount_msats": msats, "node": "traceX testnet", "payment_hash": nonce}
+        mac = base64.urlsafe_b64encode(json.dumps(caveats, sort_keys=True).encode()).decode().rstrip("=")
+        testnet = bool(self.test_credits)
+        return {"scheme": "L402", "amount_msats": msats, "amount_sats": -(-msats // 1000),
+                "invoice": f"lntbs{-(-msats // 1000)}n1testnetplaceholder{nonce[:24]}" if testnet else None,
+                "invoice_is_placeholder": testnet, "payment_hash": nonce, "macaroon": mac,
+                "then": "pay the invoice, retry with Authorization: L402 <macaroon>:<preimage>" if not testnet
+                else "testnet: no Lightning yet; POST /v0/faucet gives each wallet 30,000 test sats once"}
 
     # --- traces: copies earn nothing extra -----------------------------------------------------------------------------
     def submit_trace(self, t):
@@ -599,7 +696,7 @@ class CoinExchange(Exchange):
         r = self.db.execute("SELECT canonical FROM dups WHERE trace=?", (tid,)).fetchone()
         return r[0] if r else tid
 
-    # --- bounties: a dollar curve, a TXC pool --------------------------------------------------------------------------
+    # --- bounties: a sats curve, a TXC pool ----------------------------------------------------------------------------
     def _curve(self):
         return {"base": self.p.bounty_base, "slope": self.p.bounty_slope}
 
@@ -607,12 +704,12 @@ class CoinExchange(Exchange):
         return self._coins(f"escrow:bounty:{bounty_id}")
 
     def _cbasis(self, bounty_id, holder):
-        r = self.db.execute("SELECT units, micros FROM coin_bases WHERE bounty=? AND holder=?", (bounty_id, holder)).fetchone()
+        r = self.db.execute("SELECT units, msats FROM coin_bases WHERE bounty=? AND holder=?", (bounty_id, holder)).fetchone()
         return (int(r[0]), r[1]) if r else (0, 0)
 
-    def _set_cbasis(self, bounty_id, holder, units, micros):
+    def _set_cbasis(self, bounty_id, holder, units, msats):
         self.db.execute("INSERT OR REPLACE INTO coin_bases VALUES (?,?,?,?)",
-                        (bounty_id, holder, str(max(int(units), 0)), max(int(micros), 0)))
+                        (bounty_id, holder, str(max(int(units), 0)), max(int(msats), 0)))
 
     def _refund_weights(self, bounty_id):
         """Refunds go back by the TXC each holder put in, never by coin count."""
@@ -622,36 +719,38 @@ class CoinExchange(Exchange):
 
     def post_bounty(self, b):
         b = dict(b)
-        seed_micros = int(b.pop("seed_micros", 0) or b.pop("reward_micros", 0) or 0)
+        seed_msats = msats_in(b, "seed") or msats_in(b, "reward")
+        for k in ("seed_msats", "seed_sats", "reward_msats", "reward_sats"):
+            b.pop(k, None)
         seed_units = to_units(b.pop("seed_coins", 0) or 0)
-        if seed_micros and b.get("poster"):
+        if seed_msats and b.get("poster"):
             with self.lock:
-                self._need_dollars(need_address(b["poster"], "poster"), seed_micros)
+                self._need_sats(need_address(b["poster"], "poster"), seed_msats)
         out = super().post_bounty(b)
-        out["price_micros"] = int(coin.price(0, **self._curve()))
-        if seed_micros or seed_units:
-            out["seed"] = self.buy_coins(out["id"], b["poster"], micros=seed_micros, units=seed_units)
+        out["price_msats"] = int(coin.price(0, **self._curve()))
+        if seed_msats or seed_units:
+            out["seed"] = self.buy_coins(out["id"], b["poster"], msats=seed_msats, units=seed_units)
         return out
 
-    def buy_coins(self, bounty_id, buyer, micros=0, units=0):
-        """Back a bounty. The curve is priced in dollars, so a dollar buys the same coins whatever TXC is worth; the
-        pool holds TXC. With `micros`, the dollars buy TXC from the pool on the way in (nothing burns) and count for no
-        more than that TXC is worth at the reference price, so pushing the pool up first buys no extra coins; with
-        `units`, your TXC counts at the lower of the pool's spot and reference prices."""
+    def buy_coins(self, bounty_id, buyer, msats=0, units=0):
+        """Back a bounty. The curve is priced in sats, so a sat buys the same coins whatever TXC is worth; the pool
+        holds TXC. With `msats`, the sats buy TXC from the pool on the way in (nothing burns) and count for no more than
+        that TXC is worth at the reference price, so pushing the pool up first buys no extra coins; with `units`, your
+        TXC counts at the lower of the pool's spot and reference prices."""
         need_address(buyer, "buyer")
-        micros, units = int(micros or 0), int(units or 0)
-        if (micros > 0) == (units > 0):
-            raise ValueError("back with dollars (micros) or with TXC (units or coins): one of them, more than 0")
+        msats, units = int(msats or 0), int(units or 0)
+        if (msats > 0) == (units > 0):
+            raise ValueError("back with sats (msats or sats) or with TXC (units or coins): one of them, more than 0")
         with self.lock:
             status, pool, supply = self._bounty(bounty_id)
             if status != "open":
                 raise ValueError(f"bounty {bounty_id} is {status}; buy its coins from a holder")
-            if micros:
-                self._need_dollars(buyer, micros)
+            if msats:
+                self._need_sats(buyer, msats)
                 self._tx_fee(buyer)
-                self._credit(buyer, -micros, f"bounty {bounty_id} backing")
-                units, _ = self._amm_buy(micros)
-                value = min(micros, credits_for(units, self.ref_q()))
+                self._credit(buyer, -msats, f"bounty {bounty_id} backing")
+                units, _ = self._amm_buy(msats)
+                value = min(msats, credits_for(units, self.ref_q()))
             else:
                 self._need_coins(buyer, units)
                 value = credits_for(units, min(self._price_q(), self.ref_q()))
@@ -665,12 +764,12 @@ class CoinExchange(Exchange):
             bu, bm = self._cbasis(bounty_id, buyer)
             self._set_cbasis(bounty_id, buyer, bu + units, bm + value)
             self.db.execute("UPDATE bounties SET pool=pool+?, supply=supply+? WHERE id=?", (value, n, bounty_id))
-            self._event(f"bounty #{bounty_id} backed with ${value / 1e6:,.2f} ({fmt_txc(units)} {self.p.symbol}): "
-                        f"{n:,.1f} coins at ${value / n / 1e6:.4f}; pool ${(pool + value) / 1e6:,.2f}")
+            self._event(f"bounty #{bounty_id} backed with {fmt_sats(value)} ({fmt_txc(units)} {self.p.symbol}): "
+                        f"{n:,.1f} coins at {value / n / 1000:,.2f} sats; pool {fmt_sats(pool + value)}")
             self.db.commit()
-        return {"bounty": bounty_id, "coins": round(n, 6), "spent_units": units, "spent_micros": value,
-                "avg_price_micros": round(value / n), "pool_micros": pool + value,
-                "pool_units": self._escrow(bounty_id), "next_price_micros": round(coin.price(supply + n, **self._curve()))}
+        return {"bounty": bounty_id, "coins": round(n, 6), "spent_units": units, "spent_msats": value,
+                "avg_price_msats": round(value / n), "pool_msats": pool + value,
+                "pool_units": self._escrow(bounty_id), "next_price_msats": round(coin.price(supply + n, **self._curve()))}
 
     def sell_coins(self, bounty_id, seller, coins):
         """Sell back while the bounty is open, for the TXC the coins cost and never more: a later backer's money stays
@@ -698,7 +797,7 @@ class CoinExchange(Exchange):
                         f"{fmt_txc(value)} {self.p.symbol}")
             self.db.commit()
         return {"bounty": bounty_id, "sold": round(coins, 6), "paid_units": value,
-                "next_price_micros": round(coin.price(supply - coins, **self._curve()))}
+                "next_price_msats": round(coin.price(supply - coins, **self._curve()))}
 
     def transfer_coins(self, bounty_id, sender, to, coins):
         """Move coins between holders, any time; they carry what they cost. (A live network checks the sender's
@@ -726,14 +825,14 @@ class CoinExchange(Exchange):
     def holders(self, bounty_id):
         out = super().holders(bounty_id)
         out["pool_units"] = self._escrow(bounty_id)
-        out["price_micros"] = round(coin.price(out["supply"], **self._curve()))
+        out["price_msats"] = round(coin.price(out["supply"], **self._curve()))
         return out
 
     def bounties(self, path="", status=""):
         out = super().bounties(path, status)
         for b in out["bounties"]:
             b["pool_units"] = self._escrow(b["id"])
-            b["price_micros"] = round(coin.price(b["supply"], **self._curve()))
+            b["price_msats"] = round(coin.price(b["supply"], **self._curve()))
         return out
 
     def _refund_pool(self, bounty_id, units, memo):
@@ -758,6 +857,12 @@ class CoinExchange(Exchange):
         return super().remove(kind, oid)
 
     # --- licences: paid in credits and burned; the buyer's own learnings say which traces earned them -------------------
+    def bid(self, b):
+        """A sealed bid for a shared licence on a lot, in sats: `price_msats` or `price_sats`."""
+        b = dict(b)
+        b["price_micros"] = msats_in(b, "price", required=True)    # the base node's field: this node's money is msats
+        return super().bid(b)
+
     def clear(self):
         out = []
         with self.lock:
@@ -775,9 +880,9 @@ class CoinExchange(Exchange):
                     paid, basis = self._pay_credits(w, price, f"licence {lot}")
                     self.db.execute("INSERT INTO licence_escrow (lot, buyer, credits, basis, epoch, traces) "
                                     "VALUES (?,?,?,?,?,?)", (lot, w, paid, str(basis), e, json.dumps(traces)))
-                out.append({"lot": lot, "winners": winners, "price_micros": price, "traces": len(traces)})
+                out.append({"lot": lot, "winners": winners, "price_msats": price, "traces": len(traces)})
                 self._event(f"lot {lot.split('|')[0]} cleared: {len(winners)} licence{'s' if len(winners) != 1 else ''} at "
-                            f"${price / 1e6:,.2f}, paid in credits and burned; the traces each buyer uses earn them")
+                            f"{fmt_sats(price)}, paid in credits and burned; the traces each buyer uses earn them")
             self.db.execute("DELETE FROM bids WHERE epoch=?", (e,))        # cleared once: a second call charges nobody
             self.db.commit()
         return {"epoch": e, "cleared": out}
@@ -800,7 +905,7 @@ class CoinExchange(Exchange):
                 if used:
                     paid += self._pay_licence(rid, used, trace_info)
             self.db.commit()
-        return {"lot": lot, "buyer": buyer, "paid_micros": paid}
+        return {"lot": lot, "buyer": buyer, "paid_msats": paid}
 
     def _pay_licence(self, rid, used, trace_info):
         lot, credits, basis = self.db.execute("SELECT lot, credits, basis FROM licence_escrow WHERE id=?", (rid,)).fetchone()
@@ -812,7 +917,7 @@ class CoinExchange(Exchange):
             for acct, cc in split_trace_sale(c, info["producer"], info["checker_author"], vals).items():
                 self._work(acct, "licence", tid, cc, basis * cc // credits if credits else 0)
         self.db.execute("UPDATE licence_escrow SET paid=1 WHERE id=?", (rid,))
-        self._event(f"licence money for lot {lot.split('|')[0]}: ${credits / 1e6:,.2f} of credits counts for the "
+        self._event(f"licence money for lot {lot.split('|')[0]}: {fmt_sats(credits)} of credits counts for the "
                     f"{len(used)} trace{'s' if len(used) != 1 else ''} its buyer used")
         return credits
 
@@ -836,13 +941,13 @@ class CoinExchange(Exchange):
 
     # --- validators ---------------------------------------------------------------------------------------------------
     def min_stake_units(self):
-        return units_for(self.p.validator_min_stake_micros, self.ref_q())
+        return units_for(self.p.validator_min_stake_msats, self.ref_q())
 
     def learning_bond_units(self):
-        return units_for(self.p.learning_bond_micros, self.ref_q()) if self.p.quorum > 0 else 0
+        return units_for(self.p.learning_bond_msats, self.ref_q()) if self.p.quorum > 0 else 0
 
     def challenge_stake_units(self):
-        return units_for(self.p.challenge_stake_micros, self.ref_q())
+        return units_for(self.p.challenge_stake_msats, self.ref_q())
 
     def _stake(self, address):
         r = self.db.execute("SELECT stake FROM validators WHERE address=?", (address,)).fetchone()
@@ -852,7 +957,7 @@ class CoinExchange(Exchange):
         return [(a, int(s)) for a, s in self.db.execute("SELECT address, stake FROM validators ORDER BY address").fetchall()]
 
     def _active(self):
-        """Validators whose stake is worth the dollar minimum at the reference price, and those the price pushed under
+        """Validators whose stake is worth the sats minimum at the reference price, and those the price pushed under
         it less than `stake_grace_epochs` ago (they have that long to top up): a dump can't empty the federation and
         hand every seat to whoever stakes right after it."""
         floor, e = self.min_stake_units(), self.epoch
@@ -861,7 +966,7 @@ class CoinExchange(Exchange):
                 if int(s) > 0 and (int(s) >= floor or (since is not None and e - since < self.p.stake_grace_epochs))]
 
     def _check_floor(self):
-        """At settlement, once the new reference price is set: note who fell under the dollar minimum, and when."""
+        """At settlement, once the new reference price is set: note who fell under the sats minimum, and when."""
         floor = self.min_stake_units()
         for a, s, since in self.db.execute("SELECT address, stake, below_since FROM validators").fetchall():
             if int(s) >= floor and since is not None:
@@ -870,14 +975,14 @@ class CoinExchange(Exchange):
                 self.db.execute("UPDATE validators SET below_since=? WHERE address=?", (self.epoch + 1, a))
 
     def register_validator(self, address, stake_units):
-        """Stake TXC to join the validator federation: at least $10 of it at the reference price. More stake: drawn more
-        often, earns more, loses more."""
+        """Stake TXC to join the validator federation: at least 10,000 sats of it at the reference price. More stake:
+        drawn more often, earns more, loses more."""
         need_address(address, "validator")
         stake = int(stake_units)
         with self.lock:
             have = self._stake(address)
             if stake <= 0 or have + stake < self.min_stake_units():
-                raise ValueError(f"validators stake at least ${self.p.validator_min_stake_micros / 1e6:,.2f} of "
+                raise ValueError(f"validators stake at least {fmt_sats(self.p.validator_min_stake_msats)} of "
                                  f"{self.p.symbol}: {fmt_txc(self.min_stake_units())} at the reference price")
             self._need_coins(address, stake)
             self._tx_fee(address)
@@ -901,7 +1006,7 @@ class CoinExchange(Exchange):
     def validators_list(self):
         rows = sorted(self._stakes(), key=lambda v: -v[1])
         return {"validators": [self.validator(a) for a, _ in rows], "quorum": self.p.quorum,
-                "min_stake_units": self.min_stake_units(), "min_stake_micros": self.p.validator_min_stake_micros}
+                "min_stake_units": self.min_stake_units(), "min_stake_msats": self.p.validator_min_stake_msats}
 
     def _validator_set(self):
         return [a for a, _ in self._active()] or list(self.validators)
@@ -936,6 +1041,10 @@ class CoinExchange(Exchange):
                 raise ValueError(f"rejected: unknown parent {p['trace']}")
         if self._too_deep(l["parents"]):
             raise ValueError(f"rejected: learnings nest at most {MAX_DEPTH} deep")
+        per_call = (l.get("royalty") or {}).get("per_call_msats")
+        if not isinstance(per_call, int) or isinstance(per_call, bool) or per_call < 0:
+            raise ValueError("rejected: a coin node prices calls in sats: royalty.per_call_msats, a whole number of "
+                             "millisatoshis (Learning.build(per_call_msats=...))")
         lid = object_id(l)
         weights = (l.get("artifact") or {}).get("hash")
         payer = bond_from or l["trainer"]
@@ -965,12 +1074,12 @@ class CoinExchange(Exchange):
                 self._assign(lid, 0)
             self._event(f"learning submitted for validation: {l['kind']} for {l['base_model']['name']}"
                         + (f", claims {float(a['before']):.1%} → {float(a['after']):.1%}" if a else "")
-                        + (f"; bond ${self.p.learning_bond_micros / 1e6:,.2f} ({fmt_txc(bond)} {self.p.symbol})" if bond else ""))
+                        + (f"; bond {fmt_sats(self.p.learning_bond_msats)} ({fmt_txc(bond)} {self.p.symbol})" if bond else ""))
             self.db.commit()
         return dict(self.verdict(lid), id=lid)
 
     def _eligible(self, exclude=()):
-        """Who can be drawn: validators staked at the dollar minimum, not excluded; if a price crash left fewer than a
+        """Who can be drawn: validators staked at the sats minimum, not excluded; if a price crash left fewer than a
         quorum at the minimum, every staked validator (a crash must not stall the federation)."""
         act = self._active()
         vals = [(a, s) for a, s in act if a not in exclude]
@@ -1186,7 +1295,7 @@ class CoinExchange(Exchange):
 
     # --- challenges: fraud proofs, any time; they take back whatever hasn't vested yet -----------------------------------
     def challenge(self, lid, challenger):
-        """Anyone can challenge an accepted learning at any time by staking $2 of TXC. Fresh validators re-measure it on
+        """Anyone can challenge an accepted learning at any time by staking 2,000 sats of TXC. Fresh validators re-measure it on
         new eval sets (and look at its parents); what it earns while challenged waits, and the parents' share vests, so
         an upheld challenge always has something to take back."""
         need_address(challenger, "challenger")
@@ -1278,7 +1387,7 @@ class CoinExchange(Exchange):
                                   (bounty_id,)).fetchone()
             if not row:
                 raise KeyError(f"bounty {bounty_id}")
-            status, eval_set, target, pool_micros, base_model, poster = row
+            status, eval_set, target, pool_msats, base_model, poster = row
             if status != "open":
                 raise ValueError(f"bounty {bounty_id} is {status}")
             v = self.db.execute("SELECT status, audit_bad FROM verdicts WHERE learning=?", (learning_id,)).fetchone()
@@ -1305,12 +1414,12 @@ class CoinExchange(Exchange):
                 self._refund_pool(bounty_id, rest, f"bounty {bounty_id} refund")
             self.db.execute("UPDATE bounties SET status='solved', winner=?, learning=? WHERE id=?",
                             (L["trainer"], learning_id, bounty_id))
-            self._event(f"bounty #{bounty_id} solved on its poster's own eval: ${pool_micros / 1e6:,.2f} "
+            self._event(f"bounty #{bounty_id} solved on its poster's own eval: {fmt_sats(pool_msats)} "
                         f"({fmt_txc(pool)} {self.p.symbol}) vests to the solver and the traces over {self.p.vest_epochs} "
                         f"epochs; its coins now earn {coin.HOLDER_CUT:.0%} of every use")
             self.db.commit()
         return {"bounty": bounty_id, "status": "solved", "winner": L["trainer"], "pool_units": pool,
-                "pool_micros": pool_micros, "vesting_units": payout}
+                "pool_msats": pool_msats, "vesting_units": payout}
 
     def _agreed(self, lid):
         return [v for (v,) in self.db.execute(
@@ -1461,7 +1570,7 @@ class CoinExchange(Exchange):
         self.db.execute("INSERT OR REPLACE INTO paid VALUES (?,?,?,?)", (self.epoch, lid, c + credits, str(b + basis)))
 
     def usage(self, u):
-        """A consumer pays for calls of an accepted learning, in credits, now: dollars top them up through the on-ramp
+        """A consumer pays for calls of an accepted learning, in credits, now: sats top them up through the on-ramp
         (their TXC is bought and burned). At settlement the credits count as burned on the work of its family tree."""
         calls = int(u["calls"])
         if calls <= 0:
@@ -1475,14 +1584,14 @@ class CoinExchange(Exchange):
             if not st or st[0] != "accepted":
                 raise ValueError("only a learning the validator federation accepted can be paid for; this one is "
                                  f"{st[0] if st else 'unknown'}")
-            credits = calls * json.loads(r[0])["royalty"]["per_call_micros"]
+            credits = calls * json.loads(r[0])["royalty"]["per_call_msats"]
             self._need_funds(consumer, credits)
             self._tx_fee(consumer)
             paid, basis = self._pay_credits(consumer, credits, f"usage {lid[:19]}")
             self.db.execute("INSERT INTO usage VALUES (?,?,?,?)", (lid, consumer, calls, self.epoch))
             self._paid(lid, paid, basis)
             self.db.commit()
-        return {"metered": calls, "paid_micros": paid}
+        return {"metered": calls, "paid_msats": paid}
 
     def _attribute(self, tree):
         """At settlement: the credits each learning's users burned this epoch, down its family tree (a solved bounty's
@@ -1585,23 +1694,24 @@ class CoinExchange(Exchange):
                 self._assign(lid, rnd, exclude=self.assigned(lid, rnd - 1))
             burned = self._m("burned") - self._m("burned_mark")
             work_credits = m["credits_burned"]["work"]
-            summary = dict(m, epoch=e, twap_micros=twap // PQ, twap_q=twap, burned_units=burned, fee_credits=fees,
-                           equilibrium_micros=work_credits * UNIT // max(m["emission_units"] - m["emission_units"]
-                                                                          * round(self.p.operator_share * BPS) // BPS, 1))
+            summary = dict(m, epoch=e, twap_msats=twap // PQ, twap_q=twap, burned_units=burned, fee_credits=fees,
+                           equilibrium_msats=work_credits * UNIT // max(m["emission_units"] - m["emission_units"]
+                                                                         * round(self.p.operator_share * BPS) // BPS, 1))
             self.db.execute("INSERT OR REPLACE INTO mints VALUES (?,?)", (e, json.dumps(summary)))
             self._set_meta("burned_mark", self._m("burned"))
             self._set_meta("ref_q", twap)
             self._check_floor()
             self._mark()
+            self._repeg_fee(e)
             minted = m["minted_units"]["work"] + m["minted_units"]["operator"]
-            self._event(f"epoch {e} settled: ${(work_credits + fees) / 1e6:,.2f} of credits burned ({fmt_txc(burned)} "
+            self._event(f"epoch {e} settled: {fmt_sats(work_credits + fees)} of credits burned ({fmt_txc(burned)} "
                         f"{self.p.symbol}); {fmt_txc(minted)} {self.p.symbol} minted to the work it paid for, of "
                         f"{fmt_txc(m['emission_units'])} on offer; time-weighted price {fmt_price(twap)}", force=True)
             self._prune(e)
             self._set_meta("epoch", e + 1)
             self.db.commit()
         return {"epoch": e, "root": root, "total_units": sum(payouts.values()), "claims": claims, "mint": m,
-                "price_micros": self.price(), "twap_micros": twap // PQ, "supply_units": self.supply()}
+                "price_msats": self.price(), "twap_msats": twap // PQ, "supply_units": self.supply()}
 
     def _prune(self, e):
         """Settlement and storage at machine scale: per-transaction detail is kept through the challenge window
@@ -1636,10 +1746,10 @@ class CoinExchange(Exchange):
 
     def wallet(self, account):
         w = super().wallet(account)
-        r = self.db.execute("SELECT nanos FROM fees WHERE account=?", (account,)).fetchone()
-        return dict(w, credits_micros=self._credit_row(account)[0], coin_units=self._coins(account),
+        return dict(w, credits_msats=self._credit_row(account)[0], coin_units=self._coins(account),
                     vesting_units=self._vesting_of(account), stake_units=self._stake(account),
-                    owed_fee_nanos=r[0] if r else 0, symbol=self.p.symbol, decimals=DECIMALS, price_micros=self.price())
+                    owed_fee_msats=self._owed_credits(account), symbol=self.p.symbol, decimals=DECIMALS,
+                    price_msats=self.price())
 
     def balance(self, account):
         """TXC paid to an account by epoch, with Merkle proofs for the epochs still inside the challenge window."""
@@ -1659,33 +1769,37 @@ class CoinExchange(Exchange):
         q, ref = self._price_q(), self.ref_q()
         stakes = self._stakes()
         last = self.last_mint()
-        return {"symbol": self.p.symbol, "decimals": DECIMALS, "price_micros": self.price(), "price_usd": fmt_price(q)[1:],
-                "reference_price_micros": ref // PQ, "smallest_unit_usd": f"{q / PQ / 1e6 / UNIT:.3g}",
+        return {"symbol": self.p.symbol, "decimals": DECIMALS, "priced_in": "sats", "price_msats": self.price(),
+                "price": fmt_price(q), "price_usd_approx": usd_approx(q // PQ, self.btc_usd),
+                "usd_per_btc": self.btc_usd, "reference_price_msats": ref // PQ,
+                "smallest_unit_sats": f"{q / PQ / 1000 / UNIT:.3g}",
                 "supply_units": self.supply(), "minted_units": self._m("minted"), "burned_units": self._m("burned"),
-                "pool": {"usd_micros": self._m("pool_usd"), "coin_units": self._m("pool_coin")},
+                "pool": {"msats": self._m("pool_msats"), "sats": self._m("pool_msats") // 1000,
+                         "coin_units": self._m("pool_coin")},
                 "emission_units": self.emission(), "halving_epochs": self.p.halving_epochs,
                 "max_halvings": self.p.max_halvings, "operator_share": self.p.operator_share,
-                "credits": {"made_micros": self._m("credits_made"), "spent_micros": self._m("credits_spent"),
-                            "fees_micros": self._m("fee_credits")},
-                "last_epoch": last and {"epoch": last["epoch"], "credits_burned_micros": sum(last["credits_burned"].values()),
+                "credits": {"made_msats": self._m("credits_made"), "spent_msats": self._m("credits_spent"),
+                            "fees_msats": self._m("fee_credits")},
+                "last_epoch": last and {"epoch": last["epoch"], "credits_burned_msats": sum(last["credits_burned"].values()),
                                         "burned_units": last["burned_units"],
                                         "minted_units": sum(last["minted_units"].values()),
-                                        "emission_units": last["emission_units"], "twap_micros": last["twap_micros"],
-                                        "equilibrium_price_micros": last["equilibrium_micros"]},
+                                        "emission_units": last["emission_units"], "twap_msats": last["twap_msats"],
+                                        "equilibrium_price_msats": last["equilibrium_msats"]},
                 "vesting_units": self._vesting_of(),
-                "licence_escrow_micros": self.db.execute("SELECT COALESCE(SUM(credits),0) FROM licence_escrow WHERE paid=0").fetchone()[0],
+                "licence_escrow_msats": self.db.execute("SELECT COALESCE(SUM(credits),0) FROM licence_escrow WHERE paid=0").fetchone()[0],
                 "validators": len(self._active()),
                 "staked_units": sum(s for _, s in stakes),
                 "learnings": dict(self.db.execute("SELECT status, COUNT(*) FROM verdicts WHERE status != 'decoy' "
                                                   "GROUP BY status")),
-                "rules": {"tx_fee_nanos": self.tx_fee_nanos, "amm_fee_bps": self.p.amm_fee_bps, "quorum": self.p.quorum,
-                          "vest_epochs": self.p.vest_epochs, "keep_epochs": self.p.keep_epochs,
-                          "overclaim": self.p.overclaim, "learning_bond_micros": self.p.learning_bond_micros,
-                          "validator_min_stake_micros": self.p.validator_min_stake_micros,
-                          "challenge_stake_micros": self.p.challenge_stake_micros,
+                "rules": {"tx_fee_msats": self.tx_fee_msats, "tx_fee_usd_approx": usd_approx(self.tx_fee_msats, self.btc_usd),
+                          "fee_repeg_epochs": self.p.fee_repeg_epochs, "amm_fee_bps": self.p.amm_fee_bps,
+                          "quorum": self.p.quorum, "vest_epochs": self.p.vest_epochs, "keep_epochs": self.p.keep_epochs,
+                          "overclaim": self.p.overclaim, "learning_bond_msats": self.p.learning_bond_msats,
+                          "validator_min_stake_msats": self.p.validator_min_stake_msats,
+                          "challenge_stake_msats": self.p.challenge_stake_msats,
                           "learning_bond_units": self.learning_bond_units(), "min_stake_units": self.min_stake_units(),
                           "challenge_stake_units": self.challenge_stake_units(),
-                          "bounty_curve_micros": {"first_coin": self.p.bounty_base, "each_coin_adds": self.p.bounty_slope}}}
+                          "bounty_curve_msats": {"first_coin": self.p.bounty_base, "each_coin_adds": self.p.bounty_slope}}}
 
     def stats(self):
         s = super().stats()
@@ -1696,11 +1810,18 @@ class CoinExchange(Exchange):
 
     def describe(self):
         d = super().describe()
-        d["settlement"] = {"asset": self.p.symbol, "decimals": DECIMALS, "network": "testnet",
-                           "pay_in": "credits (1 credit = $0.000001), made by burning TXC; test dollars top them up "
-                                     "(USDC on mainnet)",
+        d["settlement"] = {"asset": self.p.symbol, "decimals": DECIMALS, "network": "testnet", "priced_in": "sats",
+                           "pay_in": "credits (1 credit = 1 msat), made by burning TXC; sats top them up (test sats "
+                                     "here, Lightning on mainnet)",
                            "credits": "POST /v0/credits", "faucet": "POST /v0/faucet", "swap": "POST /v0/swap",
-                           "credits_micros": self.test_credits}
+                           "test_msats_per_wallet": self.test_credits}
+        d["payments"] = {"rail": "bitcoin over Lightning", "protocol": "L402",
+                         "how": "a payment the account can't cover answers 402 Payment Required with "
+                                "WWW-Authenticate: L402 macaroon=..., invoice=...; pay the invoice, retry with "
+                                "Authorization: L402 <macaroon>:<preimage>",
+                         "testnet": "the invoice is a placeholder; POST /v0/faucet gives 30,000 test sats once"}
+        d["fee_per_transaction_msats"] = self.tx_fee_msats
+        d.pop("fee_per_transaction_nanos", None)
         d["validation"] = {"quorum": self.p.quorum, "commit": "POST /v0/learnings/{id}/commits",
                            "reveal": "POST /v0/learnings/{id}/reveals", "challenge": "POST /v0/learnings/{id}/challenges"}
         return d

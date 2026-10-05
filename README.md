@@ -25,15 +25,19 @@ act ──▶ check ──▶ fix ──▶ trace ──▶ learning ──▶ a
 
 One click puts the whole exchange online: website, API, MCP endpoint for agents, and a daily settlement clock, on a
 persistent disk (Render's 0.5 CPU / 512 MB instance + 1 GB disk, about $7.25 a month). It opens on the repo's real example data and runs as
-a testnet: every wallet takes $25 of test credits, no real money moves. Steps, limits and operator calls:
+a testnet: everything is priced in bitcoin, every wallet takes 30,000 test sats, no real money moves. Steps, limits and
+operator calls:
 [DEPLOY.md](DEPLOY.md).
 
 ## The coin
 
-On a coin-economy node (`--economy coin`, what the hosted testnet runs) contributors earn **TXC** instead of dollars.
-Users still pay dollars; every payment buys TXC from an open pool and burns half of what it buys, and the protocol
-mints at most half of that burn back to the same contributors. Nothing is minted for a verdict. The pool sets the
-price.
+On a coin-economy node (`--economy coin`, what the hosted testnet runs; testnet v0.5) **everything is priced in
+bitcoin**. Users pay in sats; contributors earn **TXC**, a coin priced in sats by an open pool that pairs it with
+bitcoin (1,000,000 TXC beside 10,000,000 sats at genesis, so it opens at 10 sats). Every payment buys TXC from the pool
+and burns all of it, and each epoch mints a fixed, halving emission to the work that was paid for, never more than the
+burn was worth. Nothing is minted for a verdict. The pool sets the price. Sats arrive over Lightning with L402: a call
+your wallet can't cover answers `402 Payment Required` with an invoice (a placeholder on the testnet, where the faucet
+gives 30,000 test sats instead).
 
 Farming is designed to lose because **only payments pay, and whoever pays judges**:
 
@@ -45,21 +49,26 @@ Farming is designed to lose because **only payments pay, and whoever pays judges
 - Forfeited bonds and stakes burn. Validators earn only from what the learnings they vouched for go on to earn.
 - Decoys with a sealed true gain catch validators who don't measure.
 - Copies, reworded copies and padded parents earn nothing.
-- Payments are in credits (a dollar always buys a million; the TXC it buys is burned). Each epoch mints at most a
-  fixed emission to the work that was paid for, and nobody is minted more than their credits were worth at the
-  epoch's time-weighted price, so paying yourself returns at most what you burned.
-- Every transaction pays one standard fee, $0.00005 in credits, burned: about 125x the electricity of the dearest
-  transaction (`python examples/fees/measure.py` shows the measurement), enough to fund the network and price out spam.
+- Payments are in credits, and a credit is a millisatoshi (a sat always buys 1,000; the TXC it buys is burned). Each
+  epoch mints at most a fixed emission to the work that was paid for, and nobody is minted more than their credits
+  were worth at the epoch's time-weighted price, so paying yourself returns at most what you burned.
+- Every transaction pays one standard fee, 58 msats in credits, burned: about $0.00005 at today's bitcoin price and
+  about 125x the electricity of the dearest transaction (`python examples/fees/measure.py` shows the measurement),
+  enough to fund the network and price out spam. It is fixed in sats, so its dollar value floats with bitcoin; an
+  operator can re-peg it to a dollar target every N epochs (off by default).
+- Bonds are 5,000 sats of TXC, the validator minimum stake 10,000 sats, a challenge 2,000 sats, and a bounty's coin
+  starts at 10 sats; all are charged in TXC at the reference price. Dollar figures, wherever shown, are approximate.
 
 ```
 python examples/farming/attacks.py              # every farming strategy against a real node, with its profit or loss
 python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
-python examples/scaling/simulate.py             # TXC's price as usage grows to $1B a day, crashes and recovers
+python examples/scaling/simulate.py             # TXC's price in sats as usage grows to $1B (1.16T sats) a day, crashes and recovers
 ```
 
-All 29 strategies lose against honest work in every one of 30 random runs, including owning most of the validator
-stake. A majority can still block
-honest work, because it controls the vote, but no verdict moves money to it. Rules and numbers: SPEC sections 4e and 4f.
+All 29 strategies lose against honest work on average over 30 random runs, including owning most of the validator
+stake; 28 lose in every run, and the lazy validator came out ahead of its honest twin once, because that twin was
+slashed for an unlucky 4-sigma measurement of a decoy (SPEC 4f). A majority can still block honest work, because it
+controls the vote, but no verdict moves money to it. Rules and numbers: SPEC sections 4e and 4f.
 
 ## Join the network: share your traces
 
@@ -91,7 +100,7 @@ me = Client("https://<exchange-node>", address="0xYourWallet")
 
 b = me.post_bounty(title="70% first-pass on unseen airlines", path="extract/travel/flight",
                    base_model="needle3", eval_set="sha256:…", target=0.70)     # free; mints the bounty's coin
-me.buy_coins(b["id"], micros=10_000_000)                                       # back it with $10; early is cheaper
+me.buy_coins(b["id"], msats=10_000_000)                                        # back it with 10,000 sats; early is cheaper
 me.transfer_coins(b["id"], to="0xFriend", coins=50)                            # coins move freely
 ```
 
@@ -105,7 +114,7 @@ Connect any MCP-capable agent once and it becomes a participant:
 
 ```bash
 claude mcp add tracex -- python -m traceex.mcp \
-    --node https://<exchange-node> --address 0xYourWallet --max-spend-micros 1000000   # $1 budget for bounties
+    --node https://<exchange-node> --address 0xYourWallet --max-spend-msats 1000000   # 1,000-sat budget for bounties
 ```
 
 The server runs on your machine (so fixes become skeletons before anything is sent) and gives the agent nine tools:
@@ -121,7 +130,7 @@ Agents built on the SDK get the same behaviour from one argument:
 ```python
 from traceex.autopilot import Autopilot, Policy
 pilot = Autopilot(Client(node, "0xYourWallet"), task="extract.flight", base_model="needle3", checker="flight-rules@1",
-                  policy=Policy(bounty_after=3, back_micros=1_000_000, budget_micros=5_000_000))
+                  policy=Policy(bounty_after=3, back_msats=1_000_000, budget_msats=5_000_000))   # 1,000 / 5,000 sats
 agent = AdaptiveAgent(model, check, ..., autopilot=pilot)
 ```
 
@@ -157,7 +166,8 @@ examples/code_repair/demo.py` replays the whole run from recordings, no GPU need
 ```
 python examples/flight_emails/demo.py
 ```
-Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it replays anywhere, no download):
+Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it replays anywhere, no download). The demo
+runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exchange prices the same steps in sats:
 
 ```
 0. An agent with a problem posts a bounty
@@ -183,7 +193,7 @@ Real output from a 26M-parameter on-device model (Cactus Needle, recorded so it 
 |---|---|
 | [`SPEC.md`](SPEC.md) | the protocol: roles, Trace and Learning objects, the auctions, classifier and bounties, settlement, threats, what v0.1 leaves out |
 | `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, bounty coins, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
-| `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --test-credits 25000000` for a hosted testnet |
+| `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --economy coin --test-credits 30000000` for a hosted testnet (30,000 test sats a wallet) |
 | `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a coin node it also stakes three validators and runs the federation on real held-out slices |
 | `node/coin.py`, `node/validator.py` | the coin economy (pool, credits, burn and mint, federated validation, decoys, licence escrow, vesting, challenges) and a validator's commit/reveal tool |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real coin node, with profit or loss |
@@ -209,9 +219,11 @@ and failure mode for browsing. Open bounties on the same branch come back with t
 
 ## Status
 
-v0.1. The hosted exchange runs as a testnet (test credits only). The contracts have run on a local EVM (13 tests) but
-are **unaudited**; don't put real money in them yet. Prices and payouts are USDC on mainnet; the only coins are
-per-bounty coins. Not built yet: signed wallets and validator signatures, x402 payments, staking. See the end of
-`SPEC.md`.
+v0.1 protocol; coin economy testnet v0.5. The hosted exchange runs as a testnet (test sats only). Everything is priced
+in bitcoin: sats over Lightning with L402 is the specified mainnet payment path (USDC and x402 are retired). The
+contracts are the v0.1 on-chain sketch: they have run on a local EVM (13 tests) but are **unaudited**, still use a mock
+USDC token, and have not been moved to a bitcoin-side settlement; don't put real money in them. Not built yet: signed
+wallets and validator signatures, real Lightning payments behind the 402 (the testnet's invoice is a placeholder). See
+the end of `SPEC.md`.
 
 Apache-2.0.

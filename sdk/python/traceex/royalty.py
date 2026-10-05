@@ -1,4 +1,5 @@
-"""Who gets paid what (spec sections 3-4). All amounts are integer micros; rounding dust goes to the first payee so
+"""Who gets paid what (spec sections 3-4). All amounts are integers in the node's money (msats on a coin
+node; micros on the retired dollar node); rounding dust goes to the first payee so
 every split sums exactly to the amount paid."""
 from collections import defaultdict
 

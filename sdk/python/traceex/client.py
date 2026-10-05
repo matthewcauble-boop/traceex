@@ -33,8 +33,8 @@ class Client:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
-            if e.code == 402:   # x402: the node names a price; a wallet-backed client pays and retries
-                raise PaymentRequired(json.loads(e.read() or b"{}"))
+            if e.code == 402:   # L402: a Lightning invoice and a macaroon; a Lightning-backed client pays and retries
+                raise PaymentRequired(json.loads(e.read() or b"{}"), e.headers.get("WWW-Authenticate", ""))
             raise RuntimeError(f"{e.code}: {e.read().decode()[:300]}")
 
     def submit(self, trace):
@@ -46,8 +46,10 @@ class Client:
     def lots(self):
         return self._call("GET", "/v0/lots")
 
-    def bid(self, lot, price_micros, license="shared"):
-        return self._call("POST", "/v0/bids", {"lot": lot, "bidder": self.address, "price_micros": price_micros, "license": license})
+    def bid(self, lot, price_micros=0, license="shared", *, price_msats=0):
+        """A sealed bid: price_msats on a sats-priced (coin) node, price_micros on the v0.1 dollar node."""
+        price = {"price_msats": int(price_msats)} if price_msats else {"price_micros": price_micros}
+        return self._call("POST", "/v0/bids", dict(price, lot=lot, bidder=self.address, license=license))
 
     def clear(self):
         return self._call("POST", "/v0/epochs/clear", {})
@@ -70,14 +72,19 @@ class Client:
                                                            sort=sort, offset=offset, facets=int(facets)).items() if v})
         return self._call("GET", f"/v0/search?{qs}")
 
-    def post_bounty(self, *, title, path, eval_set, target, seed_micros=0, failure="", base_model="", epochs=4):
-        """Free to post; mints the bounty's coin. seed_micros optionally buys the first coins."""
-        return self._call("POST", "/v0/bounties", {"poster": self.address, "title": title, "path": path,
-                                                   "eval_set": eval_set, "target": target, "seed_micros": seed_micros,
-                                                   "failure": failure, "base_model": base_model, "epochs": epochs})
+    def post_bounty(self, *, title, path, eval_set, target, seed_micros=0, failure="", base_model="", epochs=4,
+                    seed_msats=0):
+        """Free to post; mints the bounty's coin. seed_msats (a coin node) or seed_micros (the dollar node) optionally
+        buys the first coins."""
+        seed = {"seed_msats": int(seed_msats)} if seed_msats else ({"seed_micros": seed_micros} if seed_micros else {})
+        return self._call("POST", "/v0/bounties", dict(seed, poster=self.address, title=title, path=path,
+                                                       eval_set=eval_set, target=target, failure=failure,
+                                                       base_model=base_model, epochs=epochs))
 
-    def buy_coins(self, bounty_id, micros):
-        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", {"buyer": self.address, "micros": micros})
+    def buy_coins(self, bounty_id, micros=0, *, msats=0):
+        """Back a bounty: msats on a sats-priced (coin) node, micros on the v0.1 dollar node."""
+        amount = {"msats": int(msats)} if msats else {"micros": micros}
+        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", dict(amount, buyer=self.address))
 
     def sell_coins(self, bounty_id, coins):
         return self._call("POST", f"/v0/bounties/{bounty_id}/sell", {"seller": self.address, "coins": coins})
@@ -122,13 +129,14 @@ class Client:
         return self._call("GET", "/v0/coin")
 
     def swap(self, side, amount):
-        """side "buy": spend `amount` dollar micros on TXC; side "sell": sell `amount` TXC units for dollars."""
-        return self._call("POST", "/v0/swap", {"account": self.address, "side": side, "amount": str(int(amount))})
+        """side "buy": spend `amount` msats on TXC; side "sell": sell `amount` TXC base units for sats."""
+        body = {"msats": int(amount)} if side == "buy" else {"units": str(int(amount))}
+        return self._call("POST", "/v0/swap", dict(body, account=self.address, side=side))
 
-    def buy_credits(self, micros=0, units=0):
-        """Make credits (1 credit = $0.000001): `micros` of dollars buy TXC that is burned, or burn `units` of TXC you
-        hold. Credits pay for everything; they can't be moved or turned back. TXC amounts travel as decimal strings."""
-        return self._call("POST", "/v0/credits", {"account": self.address, "micros": int(micros), "units": str(int(units))})
+    def buy_credits(self, msats=0, units=0):
+        """Make credits (1 credit = 1 msat): `msats` of sats buy TXC that is burned, or burn `units` of TXC you hold.
+        Credits pay for everything; they can't be moved or turned back. TXC amounts travel as decimal strings."""
+        return self._call("POST", "/v0/credits", {"account": self.address, "msats": int(msats), "units": str(int(units))})
 
     def back_with_coins(self, bounty_id, coins):
         """Back a bounty with TXC you hold: `coins` is an amount of TXC ("12.5"), sent exactly as a string."""
@@ -166,7 +174,7 @@ class Client:
         return self._call("POST", "/v0/decoys/unseal", {"learning": learning_id, "gain": gain, "salt": salt})
 
     def faucet(self, address=None):
-        """On a testnet node: open a wallet with test credits (no real money)."""
+        """On a testnet node: open a wallet with test money (30,000 test sats on a coin node; no real money)."""
         return self._call("POST", "/v0/faucet", {"address": address or self.address})
 
     def wallet(self, address=None):
@@ -180,6 +188,10 @@ class Client:
 
 
 class PaymentRequired(Exception):
-    def __init__(self, terms):
+    """402 from a node: `terms["l402"]` holds the Lightning invoice (a placeholder on the testnet), the amount in msats
+    and the macaroon. Pay the invoice, then retry the call with `Authorization: L402 <macaroon>:<preimage>`."""
+
+    def __init__(self, terms, challenge=""):
         super().__init__(f"payment required: {terms}")
-        self.terms = terms
+        self.terms, self.challenge = terms, challenge
+        self.l402 = (terms or {}).get("l402") or {}

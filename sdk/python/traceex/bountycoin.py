@@ -6,15 +6,16 @@ learning claims the bounty, the pool pays the solver and the coin becomes a shar
 every metered use of that learning is paid to whoever holds coins at settlement. That share is the early backers'
 reward.
 
-Price of the next coin at supply s:  p(s) = BASE + SLOPE * s     (micros of USDC per coin; a coin-economy node
-                                                               prices the curve in its network coin instead)
+Price of the next coin at supply s:  p(s) = BASE + SLOPE * s     (in the node's money: msats on a coin node, whose
+                                                               curve is 10 sats + 0.1 sat a coin; micro-dollars on
+                                                               the retired v0.1 dollar node)
 Cost of n coins from supply s:       BASE*n + SLOPE*(s*n + n*n/2)
 Same maths as contracts/BountyMarket.sol.
 """
 import math
 
-BASE = 10_000          # the first coin costs $0.01
-SLOPE = 100            # each coin sold raises the price by $0.0001
+BASE = 10_000          # the first coin costs 10,000 of the node's units: 10 sats on a coin node ($0.01 on the dollar node)
+SLOPE = 100            # each coin sold raises the price by 100 units: 0.1 sat ($0.0001)
 HOLDER_CUT = 0.20      # share of a winning learning's metered revenue paid to coin holders, forever
 
 
@@ -23,7 +24,7 @@ def price(s, base=BASE, slope=SLOPE):
 
 
 def cost(s, n, base=BASE, slope=SLOPE):
-    """Amount to buy n coins starting at supply s (micros of USDC, or coin units on a coin-economy node)."""
+    """Amount to buy n coins starting at supply s (in the node's money: msats, or micro-dollars on the dollar node)."""
     return base * n + slope * (s * n + n * n / 2)
 
 

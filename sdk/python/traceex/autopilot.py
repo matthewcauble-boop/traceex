@@ -30,8 +30,10 @@ class Policy:
     bounty_after: int = 3            # unresolved failures of the same kind before acting on a bounty
     bounty_target: float = 0.6       # a solution must fix this share of the hidden failing cases
     bounty_epochs: int = 4
-    back_micros: int = 0             # back each bounty it posts or joins with this much
-    budget_micros: int = 0           # never spend more than this in total
+    back_msats: int = 0              # back each bounty it posts or joins with this much (a sats-priced coin node)...
+    budget_msats: int = 0            # ...and never spend more than this in total
+    back_micros: int = 0             # the same on the v0.1 dollar node
+    budget_micros: int = 0
 
 
 class Autopilot:
@@ -138,9 +140,11 @@ class Autopilot:
             bid, act = r["id"], {"action": "posted_bounty", "eval_set": eval_set, "target": self.policy.bounty_target}
         for k in due:
             self.bounties[k] = bid
-        back = min(self.policy.back_micros, self.policy.budget_micros - self.spent)
+        sats = bool(self.policy.back_msats)
+        back = (min(self.policy.back_msats, self.policy.budget_msats - self.spent) if sats
+                else min(self.policy.back_micros, self.policy.budget_micros - self.spent))
         if back > 0:
-            self.c.buy_coins(bid, back)
+            self.c.buy_coins(bid, msats=back) if sats else self.c.buy_coins(bid, back)
             self.spent += back
-            act["backed_micros"] = back
+            act["backed_msats" if sats else "backed_micros"] = back
         return dict(act, bounty=bid, path=path, failure=failure, cases=len(cases))

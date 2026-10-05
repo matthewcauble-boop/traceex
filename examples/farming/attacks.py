@@ -1,20 +1,22 @@
-"""Farming attacks against the coin economy (v0.4), each run on a real node (node/coin.py), with its profit or loss.
+"""Farming attacks against the coin economy (v0.5, everything priced in sats), each run on a real node (node/coin.py),
+with its profit or loss.
 
     python examples/farming/attacks.py              # every attack once, with what happened
     python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
 
-Setup per attack: a fresh testnet node with 7 staked validators ($15 of TXC each), quorum 3, validators drawn from the
+Setup per attack: a fresh testnet node with 7 staked validators (15,000 sats of TXC each), quorum 3, validators drawn from the
 beacon published after each submission, an honest operator collecting the fees, and honest neighbours: a producer whose
-traces real learnings use; a user who tries every accepted learning on its own traffic and pays for one ($10 of calls)
+traces real learnings use; a user who tries every accepted learning on its own traffic and pays for one (10,000 sats of calls)
 only when the gain clears its own noise; a watchdog that re-measures accepted learnings, looks at their parents, and
 challenges what it can show is fake; bounty posters who measure claims on their own hidden evals; licence buyers whose
 learnings name the traces they used. Honest validators report the true gain plus sampling noise (600-problem eval sets,
-paired standard error 0.026), audit 20 parents and spend $0.05 of GPU time a measurement; bribed ones report whatever
-the attacker says. P&L counts the dollars, credits (at face value, though they can only be spent here) and TXC (liquid,
+paired standard error 0.026), audit 20 parents and spend 50 sats of GPU time a measurement; bribed ones report whatever
+the attacker says. P&L counts the sats, credits (at face value, though they can only be spent here) and TXC (liquid,
 vesting, staked) the attack moved, TXC at the price when the run began, less GPU time, so nobody shows a profit just
 because someone else bought TXC. "vs honest" compares with the same trainer doing honest work (or, for a validator or
 an operator, with the same one behaving). The node's clock is simulated: an epoch is a day where an attack needs time
-to pass (the time-weighted price), and otherwise stands still.
+to pass (the time-weighted price), and otherwise stands still. Results are in sats, with a dollar equivalent at
+$85,962 a bitcoin (Coinbase spot, 2026-10-05) that is only approximate.
 """
 import json
 import os
@@ -25,16 +27,32 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [os.path.join(ROOT, "sdk", "python"), os.path.join(ROOT, "node")]
 from traceex import Trace, Learning, attest  # noqa: E402
-from coin import CoinExchange, Params, UNIT, PQ, attestation_digest, decoy_digest, fmt_txc, units_for  # noqa: E402
+from coin import CoinExchange, Params, UNIT, PQ, attestation_digest, decoy_digest, fmt_price, fmt_txc, units_for  # noqa: E402
 
 A = lambda c: "0x" + c * 40
 V = lambda i: "0x" + f"{0xa0 + i:02x}" * 20
 ATTACKER, HONEST, WATCHDOG, BACKER, USER, POSTER, BUYER, OPERATOR = (A(c) for c in "6bd89743")
 INVESTOR, FEES = A("1"), "0x" + "0f" * 20                 # someone buying TXC; the honest node operator
-N_VALIDATORS, TRUE_GAIN, GPU = 7, 0.08, 50_000            # $0.05 of GPU time per honest measurement
+N_VALIDATORS, TRUE_GAIN, GPU = 7, 0.08, 50_000            # 50 sats (about $0.04) of GPU time per honest measurement
 DAY = 86_400
 TASK = "Write a function number {} that adds two numbers."
-usd = lambda m: f"{'-' if m < 0 else '+'}${abs(m) / 1e6:,.{6 if 0 < abs(m) < 10_000 else 2}f}"   # sub-cent: 6 places
+BTC_USD = 85_962                                           # dollars a bitcoin, for the approximate dollar column
+
+
+def sats(m):
+    """msats as signed sats: '+58 sats', '-0.116 sats', '-720,530 sats'."""
+    v = abs(m) / 1000
+    body = f"{v:,.0f}" if v >= 100 else (f"{v:,.2f}" if v >= 1 else f"{v:.3f}")
+    return f"{'-' if m < 0 else '+'}{body} sats"
+
+
+def usd(m):
+    """msats as approximate signed dollars at BTC_USD (sub-cent: 6 places)."""
+    d = abs(m) * BTC_USD / 1e11
+    return f"{'-' if m < 0 else '+'}${d:,.{6 if 0 < d < 0.01 else 2}f}"
+
+
+both = lambda m: f"{sats(m)} ({usd(m)})"
 
 
 class Clock:
@@ -50,16 +68,16 @@ class Clock:
         self.t += seconds
 
 
-def fund(ex, who, micros):
-    ex.db.execute("INSERT OR REPLACE INTO grants VALUES (?,?,?,?)", (who, micros, "sim", "sim"))
+def fund(ex, who, msats):
+    ex.db.execute("INSERT OR REPLACE INTO grants VALUES (?,?,?,?)", (who, msats, "sim", "sim"))
     ex.db.commit()
 
 
 def node(seed=7, attacker_validators=0, lazy=(), operator=FEES):
     """A node with 7 validators: the first `attacker_validators` answer to the attacker; `lazy` ones never measure.
-    Licences clear at no less than $2."""
+    Licences clear at no less than 2,000 sats."""
     clock = Clock()
-    ex = CoinExchange(":memory:", test_credits=25_000_000, beacon_delay=1, reserve_micros=2_000_000,
+    ex = CoinExchange(":memory:", test_credits=30_000_000, beacon_delay=1, reserve_msats=2_000_000,
                       params=Params(quorum=3), clock=clock, fee_to=operator)
     ex.seed, ex.time = seed, clock
     vals = [V(i) for i in range(N_VALIDATORS)]
@@ -94,15 +112,15 @@ def parents_of(ex, producer=HONEST, n=20, checker="unit-tests@1"):
 
 
 def submit(ex, trainer, parents, claim, name, eval_set="sha256:claim", by=None):
-    ex.swap(trainer, "buy", 6_000_000)                    # enough TXC for the $5 bond
+    ex.swap(trainer, "buy", 6_000_000)                    # enough TXC for the 5,000 sats bond
     att = attest(by or V(0), eval_set, "pass@1", 0.30, round(0.30 + claim, 4))
     L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": name, "hash": None},
-                       parents=[(p, 1) for p in parents], trainer=trainer, attestation=att, per_call_micros=200)
+                       parents=[(p, 1) for p in parents], trainer=trainer, attestation=att, per_call_msats=200)
     return ex.register_learning(L)["id"]
 
 
 def validate(ex, lid, true_gain, claim, rnd=0, audit_bad=0.0):
-    """Assigned validators commit, then reveal. Honest ones measure (the truth plus noise, a real parent audit, $0.05 of
+    """Assigned validators commit, then reveal. Honest ones measure (the truth plus noise, a real parent audit, 50 sats of
     GPU); bribed ones report the attacker's number with a clean audit; lazy ones repeat the trainer's claim unmeasured."""
     reports, rng = {}, stream(ex, lid, f"round {rnd}")
     for v in ex.verdict(lid)["assigned"]:
@@ -124,7 +142,7 @@ def validate(ex, lid, true_gain, claim, rnd=0, audit_bad=0.0):
 
 def watch(ex, lid, true_gain, junk=0.0):
     """The honest watchdog: if an accepted learning shows no gain when it measures it, or its parents are padding, it
-    stakes $2 of TXC on a challenge; fresh validators are drawn from the next beacon."""
+    stakes 2,000 sats of TXC on a challenge; fresh validators are drawn from the next beacon."""
     v = ex.verdict(lid)
     fake = true_gain < ex.p.min_gain
     padded = junk > ex.p.audit_max_bad and (v["audit_bad"] or 0) <= ex.p.audit_max_bad
@@ -137,7 +155,7 @@ def watch(ex, lid, true_gain, junk=0.0):
 
 def use(ex, lid, true_gain, calls=50_000):
     """An honest user tries an accepted learning on its own traffic first (its own standard error: 0.015) and pays for
-    $10 of calls only when the gain clears twice its noise."""
+    10,000 sats of calls only when the gain clears twice its noise."""
     if ex.verdict(lid)["status"] == "accepted" and true_gain + stream(ex, lid, "user").gauss(0, 0.015) - 0.03 >= ex.p.min_gain:
         ex.usage({"learning": lid, "consumer": USER, "calls": calls})
         return True
@@ -155,12 +173,12 @@ def worth(ex, accounts, price):
     total = 0
     for a in accounts:
         w = ex.wallet(a)
-        total += w["balance_micros"] + w["credits_micros"] + (w["coin_units"] + w["vesting_units"] + w["stake_units"]) * price // UNIT
+        total += w["balance_msats"] + w["credits_msats"] + (w["coin_units"] + w["vesting_units"] + w["stake_units"]) * price // UNIT
     return total
 
 
 def top_up(ex):
-    """Honest validators the price pushed under the dollar minimum top their stake up (they have stake_grace_epochs)."""
+    """Honest validators the price pushed under the sats minimum top their stake up (they have stake_grace_epochs)."""
     floor = ex.min_stake_units()
     for v in (V(i) for i in range(N_VALIDATORS)):
         short = floor - ex._stake(v)
@@ -209,7 +227,7 @@ def run(attack, attacker_validators=0, seed=7, lazy=(), mine=None, operator=FEES
 def trace_spam(ex):
     for i in range(1_000):
         ex.submit_trace(dict(trace(ATTACKER, f"junk task {i} that no model fails on", "attacker-tests@1")))
-    return "1,000 junk traces; no learning uses them, nobody pays for them; each paid the $0.00005 fee"
+    return "1,000 junk traces; no learning uses them, nobody pays for them; each paid the 58-msat fee"
 
 
 def stuff_lot(ex):
@@ -218,13 +236,13 @@ def stuff_lot(ex):
         ex.submit_trace(dict(trace(ATTACKER, f"Write a function number {i} that returns its input.")))
     lot = next(x["lot"] for x in ex.lots()["lots"] if x["lot"].endswith("|unit-tests@1"))
     for who in (BUYER, BACKER):
-        ex.bid({"lot": lot, "bidder": who, "price_micros": 2_000_000})
+        ex.bid({"lot": lot, "bidder": who, "price_msats": 2_000_000})
     ex.clear()
     lid = submit(ex, BUYER, real, TRUE_GAIN, "built-on-the-lot")        # one buyer's learning uses the 20 real traces
     ex.settle()
     validate(ex, lid, TRUE_GAIN, TRUE_GAIN)
     ex.direct_licence(lot, BACKER, real)                                 # the other names the traces it used
-    return "1,000 junk traces stuffed into an honest lot; two $2 licences count for the 20 traces the buyers used"
+    return "1,000 junk traces stuffed into an honest lot; two 2,000-sat licences count for the 20 traces the buyers used"
 
 
 def copies(reworded):
@@ -269,11 +287,11 @@ def wash_usage(ex):
     lid = real_learning(ex)
     price = ex.price()
     before = worth(ex, [ATTACKER], price)
-    ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})       # $100 of usage paid to itself
+    ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})       # 100,000 sats of usage paid to itself
     for _ in range(ex.p.vest_epochs + 1):
         ex.settle()
-    return f"price above equilibrium (the cap binds): $100 of usage of its own real learning (its traces, its " \
-           f"checker); that money alone: {usd(worth(ex, [ATTACKER], price) - before)}"
+    return f"price above equilibrium (the cap binds): 100,000 sats of usage of its own real learning (its traces, its " \
+           f"checker); that money alone: {both(worth(ex, [ATTACKER], price) - before)}"
 
 
 def self_bounty(ex):
@@ -285,7 +303,7 @@ def self_bounty(ex):
     use(ex, lid, TRUE_GAIN)
     if ex.verdict(lid)["status"] == "accepted":              # as poster, it confirms its own solution
         ex.claim_bounty(b["id"], lid, attest(ATTACKER, "sha256:mine", "pass@1", 0.30, 0.38))
-    return "posts and backs its own bounty with $50, solves it with a real learning, confirms it as the poster"
+    return "posts and backs its own bounty with 50,000 sats, solves it with a real learning, confirms it as the poster"
 
 
 def dilution(audit_bad):
@@ -311,7 +329,7 @@ def wrap_traces(ex):
     greedy = {"trainer": 1.0, "traces": 0.0, "checkers": 0.0, "validators": 0.0}
     ex.swap(ATTACKER, "buy", 6_000_000)
     L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": "wrapper", "hash": None},
-                       parents=[(p, 1) for p in parents_of(ex)], trainer=ATTACKER, per_call_micros=200, split=greedy,
+                       parents=[(p, 1) for p in parents_of(ex)], trainer=ATTACKER, per_call_msats=200, split=greedy,
                        attestation=attest(V(0), "sha256:claim", "pass@1", 0.30, 0.38))
     wrapper = ex.register_learning(L)["id"]
     ex.settle()
@@ -329,7 +347,7 @@ def pump_and_dump(ex):
     early = ex.buy_coins(b["id"], ATTACKER, 3_000_000)["coins"]               # the first, cheapest coins
     ex.buy_coins(b["id"], BACKER, 60_000_000)                                 # an honest backer buys dearer ones
     ex.sell_coins(b["id"], ATTACKER, early)                                   # and the attacker sells into it
-    return "backs its own bounty first with $3, waits for an honest backer's $60, sells back into the raised price: " \
+    return "backs its own bounty first with 3,000 sats, waits for an honest backer's 60,000 sats, sells back into the raised price: " \
            "a sale returns at most what the coins cost"
 
 
@@ -338,7 +356,7 @@ def honest_trainer(ex):
     ex.settle()
     validate(ex, lid, TRUE_GAIN, TRUE_GAIN)
     use(ex, lid, TRUE_GAIN)
-    return "for comparison: the same trainer, real learning, real parents, one real user paying $10"
+    return "for comparison: the same trainer, real learning, real parents, one real user paying 10,000 sats"
 
 
 def validator_work(ex):
@@ -351,7 +369,7 @@ def validator_work(ex):
             att = attest(V(0), "sha256:claim", "pass@1", 0.30, 0.45)
             L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": f"d{k}", "hash": None},
                                parents=[(p, 1) for p in parents], trainer="0x" + f"{0xd0 + k:02x}" * 20,
-                               attestation=att, per_call_micros=200)
+                               attestation=att, per_call_msats=200)
             lid = ex.register_decoy(L, decoy_digest(0.0, f"salt{k}"), OPERATOR)["id"]
             ex.settle()
             validate(ex, lid, 0.0, claim=0.15)
@@ -361,7 +379,7 @@ def validator_work(ex):
             ex.settle()
             validate(ex, lid, TRUE_GAIN, TRUE_GAIN)
             use(ex, lid, TRUE_GAIN)
-    return (f"repeats each claim instead of measuring it (saves $0.05 a time) over 18 real learnings and 6 sealed "
+    return (f"repeats each claim instead of measuring it (saves 50 sats a time) over 18 real learnings and 6 sealed "
             f"decoys; caught on {caught}" if V(6) in ex.lazy else f"measures every learning; caught on {caught}")
 
 
@@ -388,8 +406,8 @@ def majority_wash(ex):
         if ex.verdict(lid)["status"] == "accepted":
             break
     if ex.verdict(lid)["status"] == "accepted":
-        ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})   # $100 of usage of its own accepted fake
-    return "gets its own fake accepted, then pays $100 of usage of it to collect the mint that usage earns"
+        ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})   # 100,000 sats of usage of its own accepted fake
+    return "gets its own fake accepted, then pays 100,000 sats of usage of it to collect the mint that usage earns"
 
 
 def majority_bounty(ex):
@@ -407,9 +425,9 @@ def majority_bounty(ex):
         got = "paid"
     except ValueError:
         got = "refused: only the poster's own measurement on its hidden eval counts"
-    tries = "first try" if k == 0 else f"{k + 1} tries"
-    return f"its fake, attested on the bounty's eval by its own validator, is accepted on the {tries}; the claim on an " \
-           f"honest $50 bounty: {got}"
+    tries = "on the first try" if k == 0 else f"after {k + 1} tries"
+    return f"its fake, attested on the bounty's eval by its own validator, is accepted {tries}; the claim on an " \
+           f"honest 50,000 sats bounty: {got}"
 
 
 def majority_grief(ex):
@@ -427,39 +445,39 @@ def majority_grief(ex):
         outcomes.append(ex.verdict(lid)["status"])
     lost = worth(ex, [HONEST], ex.price()) - bonds
     return ("blocks 4 honest learnings (" + ", ".join(f"{outcomes.count(s)} {s}" for s in sorted(set(outcomes)))
-            + f"): the honest trainer is down {usd(lost)[1:]}, and none of it reaches the attacker")
+            + f"): the honest trainer is down {sats(lost)[1:]}, and none of it reaches the attacker")
 
 
 # --- attacks the v0.4 design invites -----------------------------------------------------------------------------------
 def wash_below_equilibrium(ex):
-    """Honest users pay $2,000 an epoch for an honest learning: more than the emission is worth at the pool's price,
-    so the emission is over-subscribed and shared out below the cap. The attacker adds $100 of usage of its own."""
+    """Honest users pay 2,000,000 sats an epoch for an honest learning: more than the emission is worth at the pool's price,
+    so the emission is over-subscribed and shared out below the cap. The attacker adds 100,000 sats of usage of its own."""
     honest = accepted(ex, HONEST, parents_of(ex), "busy")
     lid = real_learning(ex, "real")
     price = ex.price()
     before = worth(ex, [ATTACKER], price)
     fund(ex, USER, 10_000_000_000)
-    ex.usage({"learning": honest, "consumer": USER, "calls": 10_000_000})     # $2,000 of honest usage
-    ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})       # $100 to itself
+    ex.usage({"learning": honest, "consumer": USER, "calls": 10_000_000})     # 2,000,000 sats of honest usage
+    ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})       # 100,000 sats to itself
     ex.settle()
     m = ex.last_mint()
     rate = m["minted_units"]["work"] * ex.ref_q() // UNIT // PQ / max(m["credits_burned"]["work"], 1)
     for _ in range(ex.p.vest_epochs):
         ex.settle()
-    return (f"price below equilibrium: $2,100 of usage against an emission worth ${m['emission_units'] * price // UNIT / 1e6:,.0f} "
-            f"at the pool's price, so each $1 burned earned {rate:.2f} of TXC; its $100 to itself, that money alone: "
-            f"{usd(worth(ex, [ATTACKER], price) - before)}")
+    return (f"price below equilibrium: 2,100,000 sats of usage against an emission worth {m['emission_units'] * price // UNIT // 1000:,} sats "
+            f"at the pool's price, so each 1,000 sats burned earned {rate:.2f} of TXC; its 100,000 sats to itself, that money alone: "
+            f"{both(worth(ex, [ATTACKER], price) - before)}")
 
 
 def twap_lag(ex):
     """The price climbs through the epoch (an investor buys TXC hour after hour), so the time-weighted price lags the
-    spot. At the end the attacker pays $100 to its own learning at the high spot: credits valued at the lagging TWAP
-    are worth more TXC than its dollars burned. Valued at the price when it acts, against doing nothing."""
+    spot. At the end the attacker pays 100,000 sats to its own learning at the high spot: credits valued at the lagging TWAP
+    are worth more TXC than its sats burned. Valued at the price when it acts, against doing nothing."""
     lid = real_learning(ex)
     fund(ex, INVESTOR, 5_000_000_000)
     for _ in range(24):
         ex.time.advance(DAY / 24)
-        ex.swap(INVESTOR, "buy", 100_000_000)                     # $2,400 over the day: the price climbs about 50%
+        ex.swap(INVESTOR, "buy", 100_000_000)                     # 2,400,000 sats over the day: the price climbs about 50%
     price = ex.price()
     before = worth(ex, [ATTACKER], price)
     burned0 = ex._m("burned")
@@ -473,9 +491,9 @@ def twap_lag(ex):
     for _ in range(ex.p.vest_epochs + 1):
         ex.settle()
     pnl = worth(ex, [ATTACKER], price) - before
-    return (f"spot {(price * PQ / twap - 1):.0%} above the epoch's time-weighted price when it paid $100: the TWAP alone "
-            f"would mint it {twap_only / burned:.3f} TXC per TXC burned ({usd((twap_only - burned) * price // UNIT)}); the "
-            f"bound by what its credits burned held it to {capped / burned:.3f}; that money alone: {usd(pnl)}", pnl)
+    return (f"spot {(price * PQ / twap - 1):.0%} above the epoch's time-weighted price when it paid 100,000 sats: the TWAP alone "
+            f"would mint it {twap_only / burned:.3f} TXC per TXC burned ({both((twap_only - burned) * price // UNIT)}); the "
+            f"bound by what its credits burned held it to {capped / burned:.3f}; that money alone: {both(pnl)}", pnl)
 
 
 def cheap_credits(ex):
@@ -484,21 +502,21 @@ def cheap_credits(ex):
     held = ex.wallet(ATTACKER)["coin_units"]
     ex.swap(ATTACKER, "buy", 80_000_000)                          # the pump
     spot = ex.price()
-    made = ex.buy_credits(ATTACKER, units=held)["credits_micros"]
+    made = ex.buy_credits(ATTACKER, units=held)["credits_msats"]
     ex.swap(ATTACKER, "sell", ex.wallet(ATTACKER)["coin_units"])   # unwinds it
-    return (f"burns its TXC with the spot pumped to ${spot / 1e6:.4f}: credits come at the lower reference price "
-            f"(${ex.ref_q() / PQ / 1e6:.4f}), {made:,} credits for TXC that cost $20; dollars on-ramp 1:1 whatever the pool does")
+    return (f"burns its TXC with the spot pumped to {fmt_price(spot * PQ)}: credits come at the lower reference price "
+            f"({fmt_price(ex.ref_q())}), {made:,} credits for TXC that cost 20,000 sats; sats on-ramp 1:1 whatever the pool does")
 
 
 def inflate_mint(ex):
     """Inflate a capped mint: a large holder dumps 300,000 TXC it earned long ago to hold the pool's price down for a
-    whole epoch (so the time-weighted price is low and its credits are worth more TXC), pays $100 to its own learning
+    whole epoch (so the time-weighted price is low and its credits are worth more TXC), pays 100,000 sats to its own learning
     there, then buys its TXC back. Measured, at the price before the dump, from just before the dump."""
     lid = real_learning(ex)
     endow(ex, ATTACKER, 300_000 * UNIT)
     p0 = ex.price()
     before = worth(ex, [ATTACKER], p0)
-    cash = ex.swap(ATTACKER, "sell", 300_000 * UNIT)["paid_micros"]     # the price falls...
+    cash = ex.swap(ATTACKER, "sell", 300_000 * UNIT)["paid_msats"]     # the price falls...
     low = ex.price()
     ex.time.advance(DAY)                                          # ...and stays down all epoch (nobody buys the dip)
     ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 500_000})
@@ -507,7 +525,7 @@ def inflate_mint(ex):
     ex.swap(ATTACKER, "buy", cash)                                # buys its TXC back
     for _ in range(ex.p.vest_epochs):
         ex.settle()
-    return (f"dumps 300,000 TXC to hold the pool {1 - low / p0:.0%} down for a whole epoch, pays itself $100 there, buys "
+    return (f"dumps 300,000 TXC to hold the pool {1 - low / p0:.0%} down for a whole epoch, pays itself 100,000 sats there, buys "
             f"back: the cap is the lower of the credits at that low time-weighted price and the TXC they burned, so it "
             f"gets back what it burned ({fmt_txc(m['minted_units']['work'])} TXC) less every share not its own, and pays "
             f"the spread both ways", worth(ex, [ATTACKER], p0) - before)
@@ -516,7 +534,7 @@ def inflate_mint(ex):
 def operator_self_deal(dealing):
     def attack(ex):
         """The attacker runs the node (it collects the operator share). Honest traffic: a producer's 20 traces and a
-        user's $10. Self-dealing: 2,000 junk transactions of its own, to claim more of the operator's 10%."""
+        user's 10,000 sats. Self-dealing: 2,000 junk transactions of its own, to claim more of the operator's 10%."""
         lid = submit(ex, HONEST, parents_of(ex), TRUE_GAIN, "real")
         ex.settle()
         validate(ex, lid, TRUE_GAIN, TRUE_GAIN)
@@ -524,7 +542,7 @@ def operator_self_deal(dealing):
         if dealing:
             for i in range(2_000):
                 ex.submit_trace(dict(trace(ATTACKER, f"self-dealt transaction {i}", "attacker-tests@1")))
-        return ("runs the node and sends it 2,000 transactions of its own ($0.10 of fees) to claim more of the "
+        return ("runs the node and sends it 2,000 transactions of its own (116 sats of fees) to claim more of the "
                 "operator's 10%: it is minted at most what its fees burned" if dealing else
                 "runs the node honestly, minted its share for the fees honest traffic paid")
     return attack
@@ -538,7 +556,7 @@ def fee_evasion(ex):
     lid = real_learning(ex)
     ex.usage({"learning": lid, "consumer": ATTACKER, "calls": 5_000})                   # one report, 5,000 calls
     try:                                                                                 # drain before settlement
-        ex.swap(ATTACKER, "buy", ex.wallet(ATTACKER)["balance_micros"] + ex.wallet(ATTACKER)["credits_micros"])
+        ex.swap(ATTACKER, "buy", ex.wallet(ATTACKER)["balance_msats"] + ex.wallet(ATTACKER)["credits_msats"])
         drained = "it could"
     except ValueError:
         drained = "refused: an account can't spend what it owes"
@@ -548,8 +566,8 @@ def fee_evasion(ex):
 
 
 def curve_gaming(ex):
-    """Bounty curve gaming under dollar pricing: push the pool up, then back its own bounty with dollars (fewer TXC go
-    into the pool for the same dollars) hoping for coins worth more than the TXC it put in; lure an honest backer; sell
+    """Bounty curve gaming under sats pricing: push the pool up, then back its own bounty with sats (fewer TXC go
+    into the pool for the same sats) hoping for coins worth more than the TXC it put in; lure an honest backer; sell
     back; unwind the pump."""
     b = ex.post_bounty({"poster": ATTACKER, "path": "code", "eval_set": "sha256:lure", "target": 0.9, "title": "lure"})
     ex.swap(ATTACKER, "buy", 80_000_000)                          # the pump
@@ -557,13 +575,13 @@ def curve_gaming(ex):
     ex.swap(ATTACKER, "sell", ex.wallet(ATTACKER)["coin_units"])   # unwinds it
     ex.buy_coins(b["id"], BACKER, 60_000_000)                     # an honest backer
     ex.sell_coins(b["id"], ATTACKER, got["coins"])
-    return (f"backs its own bounty with $10 while it has the pool pumped: the coins count only the TXC that went in, at "
-            f"the reference price (${got['spent_micros'] / 1e6:.2f} of the $10), and a sale returns that TXC, never more")
+    return (f"backs its own bounty with 10,000 sats while it has the pool pumped: the coins count only the TXC that went in, at "
+            f"the reference price ({got['spent_msats'] // 1000:,} of the 10,000 sats), and a sale returns that TXC, never more")
 
 
 def whale_dump(ex):
     """A large holder dumps 300,000 TXC it earned long ago (30% of the pool's TXC) into the pool at once, in an epoch
-    when honest users pay for an honest learning, and keeps the dollars."""
+    when honest users pay for an honest learning, and keeps the sats."""
     lid = submit(ex, HONEST, parents_of(ex), TRUE_GAIN, "real")
     ex.settle()
     validate(ex, lid, TRUE_GAIN, TRUE_GAIN)
@@ -577,12 +595,12 @@ def whale_dump(ex):
     ex.settle()
     active = len(ex._active())
     return (f"dumps 300,000 TXC at once (the price falls {1 - low / p0:.0%}): it sells down its own price, credits still "
-            f"cost $1 per million, and the federation keeps working ({active} of 7 validators keep their seats while "
-            f"they top up to the dollar minimum)", worth(ex, [ATTACKER], p0) - before)
+            f"cost 1 msat each, and the federation keeps working ({active} of 7 validators keep their seats while "
+            f"they top up to the sats minimum)", worth(ex, [ATTACKER], p0) - before)
 
 
 def stake_floor(ex):
-    """Push honest validators under the dollar minimum and take the draw: dump 300,000 TXC earned long ago so the next
+    """Push honest validators under the sats minimum and take the draw: dump 300,000 TXC earned long ago so the next
     reference price falls, stake 3 validators of its own at the new minimum, and submit fakes, hoping only its own
     validators still count as active."""
     mine = ["0x" + f"{0x90 + i:02x}" * 20 for i in range(3)]
@@ -617,7 +635,7 @@ def stake_floor(ex):
 
 def sybil(ex):
     """Split across many accounts: 10 trainer identities with 10 learnings of 20 traces each, 10 consumer accounts
-    paying $10 each, and its stake split into 5 validators at the minimum; caps, shares and draws are all linear."""
+    paying 10,000 sats each, and its stake split into 5 validators at the minimum; caps, shares and draws are all linear."""
     trainers = ["0x" + f"{0x60 + i:02x}" * 20 for i in range(10)]
     payers = ["0x" + f"{0x70 + i:02x}" * 20 for i in range(10)]
     sybils = ["0x" + f"{0x80 + i:02x}" * 20 for i in range(5)]
@@ -632,7 +650,7 @@ def sybil(ex):
         own = [ex.submit_trace(dict(trace(t, f"{TASK.format(j)} variant {i}", "attacker-tests@1")))["id"] for j in range(20)]
         ex.swap(t, "buy", 6_000_000)
         L = Learning.build(kind="lora", task="code.python", base_model="qwen", artifact={"uri": f"sybil-{i}", "hash": None},
-                           parents=[(p, 1) for p in own], trainer=t, per_call_micros=200,
+                           parents=[(p, 1) for p in own], trainer=t, per_call_msats=200,
                            attestation=attest(V(0), "sha256:claim", "pass@1", 0.30, 0.38))
         lids.append(ex.register_learning(L)["id"])
     ex.settle()
@@ -645,7 +663,7 @@ def sybil(ex):
             ex.usage({"learning": lid, "consumer": payer, "calls": 50_000})
             paid += 1
     ex.sybil_accounts = trainers + payers + sybils
-    return f"10 trainers, 10 payers ({paid} paid $10 each to the sybils' own accepted learnings) and 5 minimum-stake validators"
+    return f"10 trainers, 10 payers ({paid} paid 10,000 sats each to the sybils' own accepted learnings) and 5 minimum-stake validators"
 
 
 ATTACKS = [
@@ -674,7 +692,7 @@ ATTACKS = [
     ("Hold the pool low to inflate a mint", inflate_mint, 0),
     ("Operator self-dealing", operator_self_deal(True), 0),
     ("Fee evasion: pack, batch, drain", fee_evasion, 0),
-    ("Bounty curve gaming (dollar curve)", curve_gaming, 0),
+    ("Bounty curve gaming (sats curve)", curve_gaming, 0),
     ("Large holder dumps into the pool", whale_dump, 0),
     ("Sybil: split across 25 accounts", sybil, 0),
     ("Dump to push validators under the minimum", stake_floor, 0),
@@ -719,18 +737,19 @@ def main(argv=None):
     rows = []
     if seeds == 1:
         honest = run(honest_trainer)[0]
-        print(f"{'attack':40} {'P&L':>11} {'vs honest':>11}   what happened")
+        print(f"{'attack':40} {'P&L, sats':>14} {'vs honest':>14} {'about $':>10}   what happened")
         for name, attack, bribed in ATTACKS:
             pnl, extra, note = play(name, attack, bribed, honest=honest)
             rows.append((name, pnl, extra, note))
-            print(f"{name:40} {usd(pnl):>11} {usd(extra):>11}   {note}")
+            print(f"{name:40} {sats(pnl):>14} {sats(extra):>14} {usd(extra):>10}   {note}")
     else:                      # each run against its honest twin: same seed, and its real learning draws the same noise
         honest = {s: run(honest_trainer, seed=s)[0] for s in range(1, seeds + 1)}
-        print(f"{'attack':40} {'mean vs honest':>15} {'best run':>11} {'runs it paid':>13}")
+        print(f"{'attack':40} {'mean vs honest':>18} {'about $':>10} {'best run':>16} {'runs it paid':>13}")
         for name, attack, bribed in ATTACKS:
             xs = [play(name, attack, bribed, s, honest[s])[1] for s in range(1, seeds + 1)]
             rows.append((name, sum(xs) / len(xs), max(xs), sum(x > 0 for x in xs)))
-            print(f"{name:40} {usd(sum(xs) / len(xs)):>15} {usd(max(xs)):>11} {sum(x > 0 for x in xs):>6} of {seeds}")
+            print(f"{name:40} {sats(sum(xs) / len(xs)):>18} {usd(sum(xs) / len(xs)):>10} {sats(max(xs)):>16} "
+                  f"{sum(x > 0 for x in xs):>6} of {seeds}")
     print("\nEvery strategy loses, including owning most of the validator stake: a majority can still block honest work, "
           "because it controls the vote, but no verdict moves money to it. Nobody is minted more than the credits burned "
           "on their own work were worth, at the time-weighted price and never above the TXC those credits burned; bounties "

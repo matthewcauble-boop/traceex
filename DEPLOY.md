@@ -58,13 +58,15 @@ Every push to `main` redeploys; the disk keeps the data. The seed never runs aga
 
 ## The coin economy
 
-The blueprint runs the node with `TRACEX_ECONOMY=coin` (testnet v0.4; it opens on an empty database and refuses a
-v0.3 one): users pay in credits (test dollars buy TXC from the pool and burn it, a million credits a dollar), and each
-epoch mints at most a fixed emission to the work that was paid for, never more than its credits were worth.
+The blueprint runs the node with `TRACEX_ECONOMY=coin` (testnet v0.5, everything priced in bitcoin; it opens on an
+empty database and refuses a v0.4 or v0.3 one, so **a node upgrading from v0.4 needs a fresh database**: delete
+`/var/data/exchange.db` on the disk, or point `TRACEX_DB` at a new file, and the seed runs again). Users pay in credits
+(test sats buy TXC from the pool and burn it, a thousand credits a sat: one per msat), and each epoch mints at most a
+fixed emission to the work that was paid for, never more than its credits were worth.
 A federation of staked validators decides which learnings may earn; no verdict mints or moves money by itself
 (SPEC 4e, 4f). On first boot the seed stakes three validators (1,500 TXC each, operator-run) and validates the seeded
-learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's $20 of usage is
-minted to its traces; the flight routing learning is inconclusive (three emails can't prove a gain), so its bounty stays open. The
+learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's 20,000 sats of
+usage is minted to its traces; the flight routing learning is inconclusive (three emails can't prove a gain), so its bounty stays open. The
 node opens on epoch 3.
 
 New learnings are validated by the validators the beacon draws for them. On the testnet those are operator-run, and
@@ -77,9 +79,9 @@ python node/validator.py --url $URL --token $TOKEN --address 0xVALIDATOR --learn
 ```
 
 Add a validator: `POST /v0/validators {"address": ..., "stake_units": "1500000000000000000000"}` (1,500 TXC; TXC has
-18 decimals and every `_units` amount travels as a decimal string; the minimum is $10 of TXC at the reference price) with the admin token (the address
+18 decimals and every `_units` amount travels as a decimal string; the minimum is 10,000 sats of TXC at the reference price) with the admin token (the address
 needs the TXC: `POST /v0/swap`). Anyone can challenge an accepted learning, any time:
-`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes $2 of TXC). `GET /v0/coin` shows the price, supply,
+`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes 2,000 sats of TXC). `GET /v0/coin` shows the price in sats, supply,
 burns, vesting, licence money waiting and stake.
 
 Operator-only, with the admin token:
@@ -91,27 +93,34 @@ Operator-only, with the admin token:
   hides it.
 - **Licence money.** It waits until each buyer shows which traces it used. A buyer's learnings do that automatically.
   A buyer that builds nothing names the traces: `POST /v0/licences/direct {"lot": ..., "buyer": ..., "traces": [...]}`.
-- **Transaction fees.** Every transaction pays $0.00005 in credits, billed each epoch and burned. They are the
+- **Transaction fees.** Every transaction pays 58 msats in credits (about $0.00005), billed each epoch and burned. They are the
   operator's claim on 10% of each epoch's emission, minted to `TRACEX_FEE_TO`, the address that pays the hosting bill
   (set it in the Render dashboard). Until it is set they count for an account called `network`. `GET /v0/fees` and
-  `GET /v0/coin` show what has been burned and minted.
-- **Credits.** `POST /v0/credits {"account": ..., "micros": 1000000}` makes a million credits from $1;
-  `{"units": "..."}` burns held TXC instead.
+  `GET /v0/coin` show what has been burned and minted. The fee is fixed in sats; to hold it at $0.00005 instead, run
+  with `Params(fee_repeg_epochs=N)` and keep the reference price current with
+  `POST /v0/admin/btc-price {"usd_per_btc": 85962}` (it re-pegs every N epochs and says so in the feed).
+- **Bitcoin price.** `TRACEX_BTC_USD` (or `POST /v0/admin/btc-price`) sets the dollars-per-bitcoin reference for the
+  approximate dollar figures the API and site show beside sats (default $85,962, Coinbase spot on 2026-10-05). No
+  amount is ever computed from it, except the fee re-peg when it is on.
+- **Credits.** `POST /v0/credits {"account": ..., "sats": 1000}` makes 1,000,000 credits (msats) from 1,000 sats;
+  `{"units": "..."}` burns held TXC instead. Amounts in `micros` are refused.
 - **Bounty claims** carry the poster's own measurement on its hidden eval:
   `POST /v0/bounties/<id>/claims {"learning": ..., "attestation": {"validator": <poster>, "eval_set": ..., "after": ...}}`.
 
 ## What it is, and what it isn't yet
 
-It is a **testnet**. Each new wallet can take $25 of test credits once, every spend has to be covered by them, and no
-real money moves; TXC exists only on this node. Payouts are still computed exactly and every epoch publishes its Merkle
+It is a **testnet**. Each new wallet can take 30,000 test sats once, every spend has to be covered by them, and no
+real money moves (a spend a wallet can't cover answers `402 Payment Required` with an L402 challenge whose invoice is a
+placeholder); TXC exists only on this node. Payouts are still computed exactly and every epoch publishes its Merkle
 payout root, so the numbers are the protocol's numbers. Before a real coin: signed wallets, validator and poster
 keys, a public randomness beacon (drand), decoys run by more than the operator, a validator set large and independent
 enough that blocking honest work is out of any one party's reach, an audited token and payout contract, and a lawyer's
 read on the coin.
 
 Wallet addresses aren't signed yet: the website makes a random address and keeps it in the browser, and the API trusts
-the address it's given. Before real money: signed requests (EIP-712), validator signatures on attestations, x402 or
-USDC deposits, and the contracts in `contracts/` deployed after an audit.
+the address it's given. Before real money: signed requests, validator signatures on attestations, a Lightning node
+behind the L402 challenge (real invoices, preimage checks), and a bitcoin-side settlement for the payout roots (the
+contracts in `contracts/` are the v0.1 sketch, built for a USDC chain) after an audit.
 
 ## Operating it
 

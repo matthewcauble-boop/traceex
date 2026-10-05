@@ -1,4 +1,5 @@
-"""Sealed-bid batch auctions (spec section 3). Prices are integer micros (1 micro = $0.000001 USDC).
+"""Sealed-bid batch auctions (spec section 3). Prices are integers in the node's money (msats on a
+coin node, where everything is priced in sats; micro-dollars on the retired v0.1 dollar node).
 
 Shared (non-rival) licences: a uniform-price k-unit Vickrey auction. The top k bids at or above the reserve win and
 each pays the (k+1)-th highest bid, or the reserve if there is no (k+1)-th. For unit demand, bidding your true value
