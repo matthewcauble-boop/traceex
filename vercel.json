@@ -5,7 +5,7 @@
   "functions": {
     "api/node.py": {
       "maxDuration": 60,
-      "includeFiles": "{node,sdk/python,examples/flight_emails,examples/code_repair}/**"
+      "includeFiles": "{node,sdk/python,examples/code_repair}/**"
     }
   },
   "rewrites": [

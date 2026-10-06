@@ -130,8 +130,8 @@ get solved with learnings or packages that are then sold. The classifier engine 
     560 input tokens per level), and a standard-library keyword engine otherwise. A hosted engine that fails, or a
     node's daily request cap, never blocks a submission: the node falls back to the rules engine, records which engine
     filed each trace, and classifies outside its write lock. `POST /v0/admin/reclassify` re-files keyword-filed traces
-    once a key is added (a node with a key does this by itself on startup). Measured on the 247 seeded traces: the
-    keyword engine misfiled 7 of the 244 code traces (6 MBPP problems under extract > commerce > receipt, 1 under
+    once a key is added (a node with a key does this by itself on startup). Measured on the 247 traces seeded with
+    the flight example opted in (code repair plus 3 flight traces): the keyword engine misfiled 7 of the 244 code traces (6 MBPP problems under extract > commerce > receipt, 1 under
     code > repair); Jev (jev-1.13.0) re-filed all 247 with 497 requests and 279k input tokens, about 2 requests and
     1,100 tokens a trace, and moved exactly those 7 to code > generate.
   - *How it failed:* read exactly from the placeholders, no model: `type_mismatch` (a code where a number belongs),
@@ -156,8 +156,8 @@ get solved with learnings or packages that are then sold. The classifier engine 
   in the same transaction as the trace or failure it indexes. `sort=new` (the default without words) is newest first;
   `sort=bounty` puts what feeds the richest open bounty first; `facets=1` adds counts per branch and per failure mode.
   Results come back with the open bounties on the branch and, with words, the top matching failures, so a trainer
-  sees supply, demand and the registry together. Measured on the 247 seeded traces with 54 frozen queries (relevance
-  labelled from trace metadata only; 47 answerable): **87% top-1 and 96% top-5 from the words alone, 89% / 96% with
+  sees supply, demand and the registry together. Measured on the 247 seeded traces (flight example opted in) with 54
+  frozen queries (relevance labelled from trace metadata only; 47 answerable): **87% top-1 and 96% top-5 from the words alone, 89% / 96% with
   the filters an agent knows to pass**; the v0.6 search scored 70% / 77% and 66% / 66%, and its JSON answers were about
   2.7 times as long (median 946 tokens against 349 for five cards). `GET /v0/taxonomy` gives the tree with trace counts
   per branch.
@@ -570,13 +570,14 @@ what it fixed, per model version.
   staked federation but not yet paid for that work, nor slashed for not revealing (a round that runs out of time
   settles with the majority that revealed). Repro re-checks are not commit-reveal yet. Validator and poster messages
   are relayed by the operator until they are signed.
-- **The seeded preview** (`node/seed.py`, real recorded runs, nothing made up): 247 traces filed under 13 failures;
-  LoRA v2 claims the 8 code failures it was built from and the three validators measure it on their own third of the
-  held-out problems the base model failed with each failure's mode (first try: 6 partly fixed at about 13%, 2
-  inconclusive on 5 and 3 hidden cases); LoRA v1, registered as a model version, re-checks all 10 Qwen2.5 failures
-  (8 partly fixed at 13-14%, 2 inconclusive); the flight routing learning claims the 3 flight failures and is
-  inconclusive (a few fields per airline); the maintainer's bounty on the TypeError failure stays open (its poster
-  measured LoRA v2 at 14% against a 50% target). Runtime-error failures share their hidden cases (the recorded eval
+- **The seeded preview** (`node/seed.py`, real recorded runs, nothing made up): by default only the code-repair runs
+  (`examples/code_repair`): 244 traces filed under 11 failures, two open bounties, one learning; LoRA v2 claims the 8
+  code failures it was built from and the three validators measure it on their own third of the held-out problems the
+  base model failed with each failure's mode (first try: 6 partly fixed at about 13%, 2 inconclusive on 5 and 3 hidden
+  cases); LoRA v1, registered as a model version, re-checks all 11 Qwen2.5 failures (9 partly fixed at 13-14%, 2
+  inconclusive); the maintainer's bounty on the TypeError failure stays open (its poster measured LoRA v2 at 14%
+  against a 50% target). The flight-email example is opt-in (`TRACEX_SEED_FLIGHT=1`): it adds 3 traces, 3 flight
+  failures that its routing learning claims and leaves inconclusive (a few fields per airline), and the flight bounty. Runtime-error failures share their hidden cases (the recorded eval
   keeps each problem's mode, not its exception), so they share a pass rate.
 
 ## 4i. Ingestion: from tests and telemetry (v0.7)

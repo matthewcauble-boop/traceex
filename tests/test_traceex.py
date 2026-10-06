@@ -202,6 +202,24 @@ class Classifier(unittest.TestCase):
                          ["extract", "commerce", "invoice"])
         self.assertEqual(E.classify("Traceback: exception in test, failing")["path"][:1], ["code"])
 
+    def test_rules_engine_robotics_proof_sql(self):
+        from traceex.classify import RulesEngine
+        E = RulesEngine()
+        cases = {
+            "task: robotics.grasp\nEpisode 41, physics sim. Cylinder r=2.1 cm. Top-down grasp, grip force 8 N: "
+            "slipped at lift, dropped. Score 0/1": ["robotics", "grasp"],
+            "task: robotics.pick_place\nArm placed the part 2.6 cm outside the 1 cm placement tolerance after a "
+            "collision with the bin wall": ["robotics", "manipulation"],
+            "task: robotics.walk\nQuadruped gait on wet tile, friction 0.2: rear foot slipped twice, fell at 2.3 m":
+                ["robotics", "locomotion"],
+            "task: proof\ntheorem sq_add (a b : Nat) : ... error: unsolved goals. Fixed with simp only and omega: "
+            "no goals (Lean 4, Mathlib)": ["proof", "lean"],
+            "task: code.sql\nSELECT region, AVG(total) FROM orders GROUP BY region. The checker compared ground "
+            "truth rows: expected SELECT SUM": ["code", "sql"],
+        }
+        for text, path in cases.items():
+            self.assertEqual(E.classify(text)["path"], path, text)
+
     def test_jev_beam_walks_the_tree(self):
         from traceex.classify import JevEngine
         asked = []
@@ -772,11 +790,17 @@ class HostedNode(unittest.TestCase):
     def test_seed_once(self):
         from seed import seed_if_empty
         ex = Exchange(":memory:", test_credits=25_000_000, validators=(A("5"),))
-        seed_if_empty(ex)
+        seed_if_empty(ex)                                            # by default: the code-repair runs only
         s = ex.stats()
         self.assertEqual((s["traces"], s["learnings"], s["bounties_open"], s["bounties_solved"], s["epoch"]),
-                         (247, 2, 2, 1, 2))
+                         (244, 1, 1, 0, 2))
+        self.assertEqual(ex.search(q="flight")["total"], 0)
         self.assertIn("left alone", seed_if_empty(ex))
+        withflight = Exchange(":memory:", test_credits=25_000_000, validators=(A("5"),))
+        seed_if_empty(withflight, flight=True)                       # opt-in: the flight-email example as well
+        s = withflight.stats()
+        self.assertEqual((s["traces"], s["learnings"], s["bounties_open"], s["bounties_solved"], s["epoch"]),
+                         (247, 2, 2, 1, 2))
         lora = [L for L in ex.find_learnings(path="code/generate")["learnings"] if L["kind"] == "lora"][0]
         self.assertEqual((lora["before"], lora["after"]), (0.294, 0.372))
         self.assertLess(lora["p_value"], 0.001)

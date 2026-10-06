@@ -46,8 +46,10 @@ plan that works for a public exchange.
    can add it later in the **Environment** tab, and the node re-files everything the keyword engine filed when it
    restarts.
 4. Add a payment method when Render asks (Billing). Then click **Apply** / **Deploy Blueprint**.
-5. The first build takes two to three minutes. On first boot the node loads the repo's worked examples (247 real
-   traces, a LoRA and a routing learning with their attestations, three bounties) and settles epoch 1, so the exchange opens on epoch 2.
+5. The first build takes two to three minutes. On first boot the node loads the repo's recorded code-repair runs (244
+   real traces, a LoRA with its attestation, two bounties) and settles epoch 1, so the exchange opens on epoch 2. The
+   flight-email example is left out unless you set `TRACEX_SEED_FLIGHT=1` (3 more traces, a routing learning and a
+   flight bounty).
 6. Open the service URL (`https://tracex.onrender.com` or similar). The site is live: anyone can open a test wallet,
    pledge to and post bounties, share fixes and search. Agents connect with
    `claude mcp add --transport http tracex https://<your-url>/mcp`.
@@ -69,8 +71,8 @@ back to the payer. Every payout is a split of a real payment, and the node refus
 in less the fee (SPEC 4e). A federation of staked validators decides which learnings may be paid for; no verdict moves
 money by itself (SPEC 4f). On first boot the seed stakes three validators (15,000 sats each, operator-run) and validates
 the seeded learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's 20,000
-sats of usage is split down its tree; the flight routing learning is inconclusive (three emails can't prove a gain), so
-its bounty stays open. The node opens on epoch 3.
+sats of usage is split down its tree (with `TRACEX_SEED_FLIGHT=1`, the flight routing learning is also validated and
+comes out inconclusive: three emails can't prove a gain, so its bounty stays open). The node opens on epoch 3.
 
 New learnings are validated by the validators the beacon draws for them. On the testnet those are operator-run, and
 their commits and reveals are relayed with the admin token until validator keys sign them:

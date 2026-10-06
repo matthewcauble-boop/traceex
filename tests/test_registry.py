@@ -354,14 +354,14 @@ class Migration(unittest.TestCase):
 
 
 class SearchIndex(unittest.TestCase):
-    """The Leviathan-style search on the seeded testnet (247 real traces)."""
+    """The Leviathan-style search on the seeded testnet with the flight example opted in (247 real traces)."""
 
     @classmethod
     def setUpClass(cls):
         from seed import seed_if_empty
         os.environ.pop("TYPESAFE_API_KEY", None)
         cls.ex = Exchange(":memory:", test_credits=25_000_000)
-        seed_if_empty(cls.ex)
+        seed_if_empty(cls.ex, flight=True)
         cls.meta = {}
         for tid, body in cls.ex.db.execute("SELECT id, body FROM traces").fetchall():
             t = json.loads(body)
@@ -747,6 +747,7 @@ class Preview(unittest.TestCase):
         self.assertEqual((top["family"], top["reporters"]), ("qwen2.5", 3))
         self.assertGreater(f["statuses"]["partly_fixed"], 3)
         self.assertTrue(all(0.1 <= x["pass_rate"] < 0.9 for x in f["failures"] if x["status"] == "partly_fixed"))
+        self.assertFalse([x for x in f["failures"] if x["family"] != "qwen2.5"])   # no flight example by default
         rep = ex.model_report(QWEN + "+lora-v1")
         self.assertEqual(rep["summary"]["pending"], 0)
         typeerr = [x for x in f["failures"] if x["signature"] == "code:runtime_error/TypeError"][0]

@@ -2,7 +2,7 @@
 searched, grouped into lots, and matched to bounties.
 
 Two parts:
-  1. Where it belongs: a path down TAXONOMY (e.g. extract > travel > flight). Two interchangeable engines:
+  1. Where it belongs: a path down TAXONOMY (e.g. extract > travel > flight, robotics > grasp). Two interchangeable engines:
        RulesEngine  keyword scoring, standard library only, always available
        JevEngine    TypeSafe Jev hierarchical beam search: one request per level, with a `choice` question for each
                     branch still on the beam (the method of TypeSafe's hierarchical-classification cookbook).
@@ -57,6 +57,26 @@ TAXONOMY = {
         "generate": ("Write new code from a description.", ["implement", "write a function", "write a python function",
                                                              "write a program", "write a class", "generate", "create"], {}),
         "test": ("Write or fix tests.", ["unittest", "pytest", "write a test", "write tests", "test case", "mock"], {}),
+        "sql": ("Write or fix SQL; the checker compares the returned rows with ground truth.",
+                ["sql", "group by", "order by", "inner join", "left join", "aggregate", "ground truth rows",
+                 "select count", "select sum", "select avg"], {}),
+    }),
+    "robotics": ("Control a robot, real or simulated: grasping, manipulation, locomotion. The checker is usually a "
+                 "physics sim or a scored rollout.",
+                 ["robot", "gripper", "end effector", "end-effector", "joint", "torque", "manipulator", "rollout",
+                  "physics sim", "mujoco", "pybullet", "isaac"], {
+        "grasp": ("Grasp and lift an object; success is scored per try (lifted and held, or not).",
+                  ["grasp", "grip force", "grip width", "lift", "dropped", "slipped", "fingers", "cylinder"], {}),
+        "manipulation": ("Pick-and-place and other contact tasks: collisions, placement tolerance.",
+                         ["pick-and-place", "pick and place", "placed", "bin wall", "collision", "placement",
+                          "tolerance", "insertion"], {}),
+        "locomotion": ("Legged and wheeled movement: gait, balance, footing on hard terrain.",
+                       ["gait", "legged", "quadruped", "biped", "foot", "stride", "terrain", "friction", "fell"], {}),
+    }),
+    "proof": ("Formal proofs that a proof checker accepts or rejects.",
+              ["theorem", "lemma", "proof", "tactic", "unsolved goals", "no goals", "qed"], {
+        "lean": ("Lean 4 and Mathlib: the checker reports unsolved goals until the proof closes.",
+                 ["lean 4", "lean4", "mathlib", "unsolved goals", "no goals", "simp only", "omega", "linarith"], {}),
     }),
     "reasoning": ("Answers that need calculation or logic.", ["calculate", "how many", "total", "date", "convert", "units", "compare"], {
         "arithmetic": ("Sums, totals, percentages.", ["sum", "total", "percent", "multiply", "add"], {}),

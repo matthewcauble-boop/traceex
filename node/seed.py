@@ -1,9 +1,12 @@
-"""Seed an empty node with the repo's two worked examples, so a new public exchange opens on real data.
+"""Seed an empty node with the repo's recorded runs, so a new public exchange opens on real data.
 
-  examples/flight_emails  two agents' skeleton traces from a 26M on-device model, a bounty that a routing learning
-                          solved (first-pass 63.3% -> 73.3% on unseen airlines), and an autopilot's follow-up bounty.
-  examples/code_repair    244 verified Python fixes from Qwen2.5-0.5B-Instruct (MBPP train split, CC BY 4.0), the
-                          maintainer's bounty and the backers' pledges, and the attested LoRA built from those fixes.
+  examples/code_repair    (always) 244 verified Python fixes from Qwen2.5-0.5B-Instruct (MBPP train split, CC BY 4.0),
+                          the maintainer's bounty and the backers' pledges, the producers' autopilots backing it, an
+                          auction for the first lot, and the attested LoRA built from those fixes.
+  examples/flight_emails  (opt-in: TRACEX_SEED_FLIGHT=1, or seed_if_empty(ex, flight=True)) two agents' skeleton
+                          traces from a 26M on-device model, a bounty that a routing learning solved (first-pass
+                          63.3% -> 73.3% on unseen airlines), and an autopilot's follow-up bounty. Off by default, so
+                          the public preview (api/node.py, render.yaml) holds no flight or email records.
 
 Everything is replayed from the recorded runs through the node's own HTTP API (a private loopback listener, so the
 operator-only calls work); nothing is made up. The demo accounts are the examples' fixed addresses (0xaaaa…, 0x7777…).
@@ -12,17 +15,19 @@ traces is left alone.
 
 On a sats node (node/sats.py, v0.7) the seed also stakes three validators and runs the federation for real: each
 validator holds its own slice of the held-out data (one airline's email each; a third of the 500 MBPP problems each),
-commits, then reveals its paired measurement. Learnings are validated in epoch 2, so that node opens on epoch 3.
+commits, then reveals its paired measurement (the flight
+part only when the flight example is seeded). Learnings are validated in epoch 2, so that node opens on epoch 3.
 
 The failure registry (v0.7) fills itself as the traces arrive. The three code producers post reporter bonds, so their
 reports count. Then, measured the same way and from the same recorded runs: LoRA v2 claims the code failures it was
 built from, and each validator measures it on its own third of the held-out problems the base model failed with that
-failure's mode; the flight routing learning claims the flight failures, measured field by field on each validator's
-airline (too few cases to call, so they stay open); LoRA v1, registered as a model version, re-checks every Qwen2.5
-failure; and the maintainer posts a bounty on the TypeError failure, then measures LoRA v2 on its own hidden cases
+failure's mode; with the flight example, the flight routing learning claims the flight failures, measured field by
+field on each validator's airline (too few cases to call, so they stay open); LoRA v1, registered as a model version,
+re-checks every Qwen2.5 failure; and the maintainer posts a bounty on the TypeError failure, then measures LoRA v2 on its own hidden cases
 (below the target, so it stays open).
 
     python node/seed.py exchange.db        # seed a database file directly
+    TRACEX_SEED_FLIGHT=1 python node/seed.py exchange.db    # ... with the flight-email example as well
 """
 import datetime as dt
 import hashlib
@@ -73,7 +78,10 @@ def _grant(ex, accounts, amount=None):
         ex.db.commit()
 
 
-def seed_if_empty(ex):
+def seed_if_empty(ex, flight=None):
+    """Seed `ex` if it holds no traces. `flight` adds examples/flight_emails; None reads TRACEX_SEED_FLIGHT (off)."""
+    if flight is None:
+        flight = os.environ.get("TRACEX_SEED_FLIGHT", "") == "1"
     if ex.db.execute("SELECT COUNT(*) FROM traces").fetchone()[0]:
         return "seed: database already has traces; left alone"
     from exchange import make_handler
@@ -85,7 +93,7 @@ def seed_if_empty(ex):
     # (Jev) re-files these traces in the background once it is serving.
     ex.quiet, engine, ex.engine = True, ex.engine, RulesEngine()
     try:
-        story = seed(ex, url)
+        story = seed(ex, url, flight=flight)
     finally:
         ex.quiet, ex.engine = False, engine
         srv.shutdown()
@@ -97,13 +105,15 @@ def seed_if_empty(ex):
             f"{ex.stats()['learnings']} learnings; epoch {s['epoch']} settled, root {s['root'][:18]}…")
 
 
-def seed(ex, url):
+def seed(ex, url, flight=False):
     from traceex import AdaptiveAgent, Client, Learning, apply_routing, attest, first_pass_score, routing_from_traces
     from traceex.autopilot import Autopilot, Policy
     from traceex.classify import RulesEngine
-    import flight
-    from model import Model
     import tasks
+    fl = Model = model = routed = fb = lid = parents = None
+    if flight:
+        import flight as fl
+        from model import Model
 
     sats_mode = getattr(ex, "economy", "") == "sats"
     # The demo's amounts are the same numbers on both nodes: msats on a sats node (everything paid in sats), micros
@@ -120,55 +130,59 @@ def seed(ex, url):
         for v in SEED_VALIDATORS:
             ex.register_validator(v, 15_000_000)
     node = Client(url)
-    node._call("POST", "/v0/checkers", {"id": "flight-rules", "author": CHECKER_AUTHOR})
+    if flight:
+        node._call("POST", "/v0/checkers", {"id": "flight-rules", "author": CHECKER_AUTHOR})
     node._call("POST", "/v0/checkers", {"id": "mbpp-tests", "author": CHECKER_AUTHOR})
-    story = ["seeded from the repo's two examples: flight emails on a 26M on-device model, Python on "
-             "Qwen2.5-0.5B-Instruct"]
+    story = (["seeded from the repo's two examples: flight emails on a 26M on-device model, Python on "
+              "Qwen2.5-0.5B-Instruct"] if flight else
+             [f"seeded from the repo's recorded code-repair runs: Python on {QWEN}, MBPP problems checked by their "
+              "unit tests"])
 
-    # --- flight emails: a bounty, skeleton traces, an auction, a routing learning that solves the bounty -------------
-    model = Model(live=False)
+    # --- flight emails (opt-in): a bounty, skeleton traces, an auction, a routing learning that solves the bounty -----
+    if flight:
+        model = Model(live=False)
 
-    def agent(addr):
-        return AdaptiveAgent(model, flight.check, fields=flight.FIELDS, task=flight.TASK, base_model=Model.name,
-                             checker=flight.CHECKER, producer=addr, clean=flight.clean, narrow=flight.context_for,
-                             evidence=flight.evidence)
+        def agent(addr):
+            return AdaptiveAgent(model, fl.check, fields=fl.FIELDS, task=fl.TASK, base_model=Model.name,
+                                 checker=fl.CHECKER, producer=addr, clean=fl.clean, narrow=fl.context_for,
+                                 evidence=fl.evidence)
 
-    eval_hash = attest(VALIDATOR, flight.EVAL, "", 0, 0)["eval_set"]
-    fb = Client(url, CONSUMER).post_bounty(title="Flight extraction: 70% first-pass on unseen airlines",
-                                           path="extract/travel/flight", eval_set=eval_hash, target=0.70,
-                                           base_model=Model.name, epochs=EPOCHS)
-    Client(url, KIM).pledge(fb["id"], **amt(2_000_000))
-    Client(url, RAJ).pledge(fb["id"], **amt(3_000_000))
-    traces = []
-    for who, emails in ((A("a"), ["southwest", "united"]), (A("b"), ["delta"])):
-        ag = agent(who)
-        for name in emails:
-            t = ag.run(flight.TRAIN[name], created="2026-10-03T00:00:00Z")["trace"]
-            Client(url, who).submit(t)
-            traces.append(t)
-    lot = next(x["lot"] for x in node.lots()["lots"] if x["lot"].startswith(flight.TASK + "|"))
-    for who, price in ((TRAINER, 900_000), (BIDDER2, 600_000), (HOST, 250_000)):
-        Client(url, who).bid(lot, **bid_at(price))
-    node.clear()
-    if sats_mode:                   # licence money waits for the traces each buyer used: these two name theirs, the
-        _direct(ex, lot, (BIDDER2, HOST))         # trainer's learnings do it for the trainer
-    artifact, parents = routing_from_traces(traces)
-    artifact["name"] = "Field routing for flight emails"
-    before, _ = first_pass_score(flight.EVAL, model, flight.check, fields=flight.FIELDS, clean=flight.clean)
-    after, _ = first_pass_score(flight.EVAL, apply_routing(model, artifact, flight.context_for), flight.check,
-                                fields=flight.FIELDS, clean=flight.clean)
-    att = attest(VALIDATOR, flight.EVAL, "first-pass field accuracy, 3 unseen airlines", before, after)
-    L = Learning.build(kind="routing", task=flight.TASK, base_model=Model.name, artifact=artifact, parents=parents,
-                       trainer=TRAINER, attestation=att, **per_call(200))
-    lid = Client(url, TRAINER).register_learning(L)["id"]
-    story += [f"{len(traces)} skeleton traces filed under extract/travel/flight by 2 agents: no names, codes, dates "
-              "or prices left their devices"]
-    if not sats_mode:
-        won = Client(url, TRAINER).claim_bounty(fb["id"], lid)
-        Client(url, CONSUMER).report_usage(lid, 5_000)
-        story += [f"bounty #{fb['id']} solved by a routing learning: first-pass {before:.1%} → {after:.1%} on unseen "
-                  f"airlines; its ${won['pool_micros'] / 1e6:,.2f} of pledges paid the solver and the traces"]
-    routed = apply_routing(model, artifact, flight.context_for)
+        eval_hash = attest(VALIDATOR, fl.EVAL, "", 0, 0)["eval_set"]
+        fb = Client(url, CONSUMER).post_bounty(title="Flight extraction: 70% first-pass on unseen airlines",
+                                               path="extract/travel/flight", eval_set=eval_hash, target=0.70,
+                                               base_model=Model.name, epochs=EPOCHS)
+        Client(url, KIM).pledge(fb["id"], **amt(2_000_000))
+        Client(url, RAJ).pledge(fb["id"], **amt(3_000_000))
+        traces = []
+        for who, emails in ((A("a"), ["southwest", "united"]), (A("b"), ["delta"])):
+            ag = agent(who)
+            for name in emails:
+                t = ag.run(fl.TRAIN[name], created="2026-10-03T00:00:00Z")["trace"]
+                Client(url, who).submit(t)
+                traces.append(t)
+        lot = next(x["lot"] for x in node.lots()["lots"] if x["lot"].startswith(fl.TASK + "|"))
+        for who, price in ((TRAINER, 900_000), (BIDDER2, 600_000), (HOST, 250_000)):
+            Client(url, who).bid(lot, **bid_at(price))
+        node.clear()
+        if sats_mode:               # licence money waits for the traces each buyer used: these two name theirs, the
+            _direct(ex, lot, (BIDDER2, HOST))     # trainer's learnings do it for the trainer
+        artifact, parents = routing_from_traces(traces)
+        artifact["name"] = "Field routing for flight emails"
+        before, _ = first_pass_score(fl.EVAL, model, fl.check, fields=fl.FIELDS, clean=fl.clean)
+        after, _ = first_pass_score(fl.EVAL, apply_routing(model, artifact, fl.context_for), fl.check,
+                                    fields=fl.FIELDS, clean=fl.clean)
+        att = attest(VALIDATOR, fl.EVAL, "first-pass field accuracy, 3 unseen airlines", before, after)
+        L = Learning.build(kind="routing", task=fl.TASK, base_model=Model.name, artifact=artifact, parents=parents,
+                           trainer=TRAINER, attestation=att, **per_call(200))
+        lid = Client(url, TRAINER).register_learning(L)["id"]
+        story += [f"{len(traces)} skeleton traces filed under extract/travel/flight by 2 agents: no names, codes, "
+                  "dates or prices left their devices"]
+        if not sats_mode:
+            won = Client(url, TRAINER).claim_bounty(fb["id"], lid)
+            Client(url, CONSUMER).report_usage(lid, 5_000)
+            story += [f"bounty #{fb['id']} solved by a routing learning: first-pass {before:.1%} → {after:.1%} on "
+                      f"unseen airlines; its ${won['pool_micros'] / 1e6:,.2f} of pledges paid the solver and the traces"]
+        routed = apply_routing(model, artifact, fl.context_for)
 
     # --- open weights: the maintainer's bounty, 244 verified Python fixes, the LoRA built from them ------------------
     base, rule, rep = _load("eval-base.json"), _load("bounty.json"), _load("eval-repair.json")
@@ -214,19 +228,20 @@ def seed(ex, url):
     if not sats_mode:
         Client(url, HOST).report_usage(lid2, 400_000)
 
-    # --- an agent on autopilot meets a failure nobody has fixed, and posts a bounty for it ---------------------------
-    pilot = Autopilot(Client(url, AUTO), task=flight.TASK, base_model=Model.name, checker=flight.CHECKER,
-                      engine=RulesEngine(), policy=Policy(bounty_after=2, bounty_epochs=EPOCHS, **budget(1_000_000)))
-    auto = agent(AUTO)
-    auto.autopilot = pilot
+    # --- (flight) an agent on autopilot meets a failure nobody has fixed, and posts a bounty for it -----------------
     posted, joined = [], []
-    for email in flight.LIVE.values():
-        for a in auto.run(email).get("autopilot", []):
-            acts[a["action"]] += 1
-            if a["action"] == "posted_bounty":
-                posted.append(a["bounty"])
-            elif a["action"] == "backed_existing_bounty":
-                joined.append(a["bounty"])
+    if flight:
+        pilot = Autopilot(Client(url, AUTO), task=fl.TASK, base_model=Model.name, checker=fl.CHECKER,
+                          engine=RulesEngine(), policy=Policy(bounty_after=2, bounty_epochs=EPOCHS, **budget(1_000_000)))
+        auto = agent(AUTO)
+        auto.autopilot = pilot
+        for email in fl.LIVE.values():
+            for a in auto.run(email).get("autopilot", []):
+                acts[a["action"]] += 1
+                if a["action"] == "posted_bounty":
+                    posted.append(a["bounty"])
+                elif a["action"] == "backed_existing_bounty":
+                    joined.append(a["bounty"])
 
     backed = acts.get("backed_existing_bounty", 0)
     story += [f"bounty #{cb['id']} posted free: +3 points first-try pass@1 for {QWEN}; kim, raj and lee pledge "
@@ -246,7 +261,7 @@ def seed(ex, url):
         story.append(f"an agent on autopilot hit the same flight failure twice; bounty #{joined[0]} already covers it, "
                      f"so it pledged {money(1_000_000)} of its budget to that one")
     if sats_mode:
-        story += federate(ex, url, flight, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
+        story += federate(ex, url, fl, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
     return story
 
 
@@ -267,23 +282,26 @@ def _paired_se(diffs):
 
 def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents, code_parents):
     """Sats node: settle epoch 1 (the beacon draws the validators), then each validator measures its own slice of
-    the held-out data, commits, and reveals. Accepted learnings earn as people pay to use them."""
+    the held-out data, commits, and reveals. Accepted learnings earn as people pay to use them. `flight` is the
+    flight example's module, or None when it is not seeded."""
     from traceex import Client, first_pass_score
     from sats import attestation_digest
     claims = registry_claims(ex, url, lid, lid2)          # v0.7: drawn from the beacon this settlement publishes
     ex.settle()
     story = ["3 validators staked 15,000 sats each; each holds its own slice of the held-out data"]
-    fields = list(flight.FIELDS)
-    shards = {}
-    for v, name in zip(SEED_VALIDATORS, sorted(flight.EVAL)):          # one unseen airline's email each
-        doc = {name: flight.EVAL[name]}
-        b, bad_b = first_pass_score(doc, model, flight.check, fields=flight.FIELDS, clean=flight.clean)
-        a, bad_a = first_pass_score(doc, routed, flight.check, fields=flight.FIELDS, clean=flight.clean)
-        diffs = [(f in bad_b[name]) - (f in bad_a[name]) for f in fields]
-        shards[v] = {"validator": v, "eval_set": "sha256:" + hashlib.sha256(flight.EVAL[name].encode()).hexdigest(),
-                     "metric": "first-pass field accuracy", "before": b, "after": a, "n": len(fields),
-                     "se": round(_paired_se(diffs), 4), "audit": {"checked": min(10, len(flight_parents)), "bad": 0}}
-    verdicts = {lid: shards}
+    verdicts = {}
+    if flight:
+        fields = list(flight.FIELDS)
+        shards = {}
+        for v, name in zip(SEED_VALIDATORS, sorted(flight.EVAL)):      # one unseen airline's email each
+            doc = {name: flight.EVAL[name]}
+            b, bad_b = first_pass_score(doc, model, flight.check, fields=flight.FIELDS, clean=flight.clean)
+            a, bad_a = first_pass_score(doc, routed, flight.check, fields=flight.FIELDS, clean=flight.clean)
+            diffs = [(f in bad_b[name]) - (f in bad_a[name]) for f in fields]
+            shards[v] = {"validator": v, "eval_set": "sha256:" + hashlib.sha256(flight.EVAL[name].encode()).hexdigest(),
+                         "metric": "first-pass field accuracy", "before": b, "after": a, "n": len(fields),
+                         "se": round(_paired_se(diffs), 4), "audit": {"checked": min(10, len(flight_parents)), "bad": 0}}
+        verdicts[lid] = shards
     base, v2 = rep["base"]["per_task"], rep["lora-v2"]["per_task"]
     shards = {}
     for i, v in enumerate(SEED_VALIDATORS):                            # a third of the 500 problems each
@@ -300,13 +318,15 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
             ex.commit(learning_id, v, attestation_digest(att, "seed:" + v))
         for v, att in atts.items():
             ex.reveal(learning_id, v, att, "seed:" + v)
-    vr, vc = ex.verdict(lid), ex.verdict(lid2)
+    vc = ex.verdict(lid2)
     gains = lambda vd: ", ".join(f"{g['gain'] * 100:+.0f}" for g in vd["reveals"])
-    story.append(f"flight routing: validators measured {gains(vr)} points on one airline each (10 fields apiece); "
-                 f"median {vr['median_gain'] * 100:+.0f}, {vr['status']}: three emails can't prove it, so bounty "
-                 f"#{fb['id']} stays open for whoever can")
-    if vr["status"] == "accepted":
-        Client(url, TRAINER).claim_bounty(fb["id"], lid)
+    if flight:
+        vr = ex.verdict(lid)
+        story.append(f"flight routing: validators measured {gains(vr)} points on one airline each (10 fields apiece); "
+                     f"median {vr['median_gain'] * 100:+.0f}, {vr['status']}: three emails can't prove it, so bounty "
+                     f"#{fb['id']} stays open for whoever can")
+        if vr["status"] == "accepted":
+            Client(url, TRAINER).claim_bounty(fb["id"], lid)
     story.append(f"LoRA v2: three validators on a third of the 500 held-out problems each measured {gains(vc)} points; "
                  f"median {vc['median_gain'] * 100:+.1f}, {vc['status']}: it may now earn, as people use it")
     if vc["status"] == "accepted":
@@ -314,7 +334,8 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
         story.append("a host serves the open weights: 400,000 calls at 0.05 sat (20,000 sats, about $17), split at "
                      "settlement: traces 60, trainer 25, checkers 10, validators 5; the traces' part waits 4 epochs "
                      "in escrow in case a challenge claws it back")
-    story.append("licence money waits for the traces each buyer used: the trainer's learnings name its traces, the "
+    story.append(f"licence money waits for the traces each buyer used: the trainer's learning{'s' if flight else ''} "
+                 f"name{'' if flight else 's'} its traces, the "
                  "other buyers named theirs")
     story += registry_measure(ex, url, claims, flight, model, routed)
     return story
@@ -333,7 +354,7 @@ def registry_claims(ex, url, lid, lid2):
     lora = trainer.claim_fix(code, QWEN, kind="learning", learning=lid2,
                              artifact={"name": "LoRA v2", "uri": f"{REPO}/code_repair/runs/lora-v2"})["id"]
     routing = trainer.claim_fix(flights, "needle3", kind="learning", learning=lid,
-                                artifact={"name": "Field routing for flight emails"})["id"] if flights else None
+                                artifact={"name": "Field routing for flight emails"})["id"] if flights and lid else None
     v1 = ex.register_model({"version": QWEN + "+lora-v1", "parent": QWEN})["recheck"]
     typeerr = ex.db.execute("SELECT id FROM failures WHERE family=? AND path='code/generate' AND "
                             "signature='code:runtime_error/TypeError'", (qwen,)).fetchone()
@@ -352,7 +373,7 @@ def registry_claims(ex, url, lid, lid2):
 def registry_measure(ex, url, claims, flight, model, routed):
     """Each drawn validator measures each claim on its own cases (commit, then reveal): the held-out problems in its
     third that the base model failed with the failure's mode (code), or the fields of the failure on its own airline's
-    email that the base model got wrong (flight). Real recorded results; nothing is made up."""
+    email that the base model got wrong (flight, when seeded; `flight` is its module or None). Real recorded results; nothing is made up."""
     from traceex import Client, attest, first_pass_score
     from registry import measurement_digest
     base, v1, v2 = (_load(f)["per_task"] for f in ("eval-base.json", "eval-lora-v1.json", "eval-lora-v2.json"))
@@ -367,7 +388,7 @@ def registry_measure(ex, url, claims, flight, model, routed):
                 out[x["failure"]] = {"passed": sum(bool(after[t]["passed"]) for t in ids), "n": len(ids)}
         return out
 
-    airline = dict(zip(SEED_VALIDATORS, sorted(flight.EVAL)))
+    airline = dict(zip(SEED_VALIDATORS, sorted(flight.EVAL))) if flight else {}
 
     def flight_results(fix_id, v):
         name = airline[v]

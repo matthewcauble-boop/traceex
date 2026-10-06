@@ -32,7 +32,7 @@ DB = os.path.join(tempfile.gettempdir(), "tracex-preview.db")
 if os.path.exists(DB):                              # every instance starts from a fresh seed, never a stale one
     os.remove(DB)
 ex = SatsExchange(DB, test_credits=30_000_000, reserve_msats=50_000)   # 30,000 test sats a wallet; 50-sat reserve
-seed_if_empty(ex)
+seed_if_empty(ex, flight=False)                     # code-repair runs only: no flight/email records
 
 
 def _frozen(*a, **k):

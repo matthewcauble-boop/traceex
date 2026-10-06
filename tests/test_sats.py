@@ -870,20 +870,36 @@ class VercelPreview(unittest.TestCase):
         self.assertEqual(m.original_path("/api/node?x_route=/v0/search&q=add&path=code&x_tail=search"),
                          "/v0/search?q=add&path=code")
         self.assertEqual(m.original_path("/v0/faucet?x_route=%2Fv0%2Ffaucet&x_tail=faucet"), "/v0/faucet")
-        self.assertEqual(m.ex.stats()["traces"], 247)
+        self.assertEqual(m.ex.stats()["traces"], 244)                  # the code-repair runs; no flight example
         self.assertTrue(m.ex.describe()["read_only"])
         self.assertIsNone(m.ex.economy_stats()["token"])
         for name in m.WRITES:
             with self.assertRaisesRegex(PermissionError, "read-only preview"):
                 getattr(m.ex, name)()
-        self.assertGreater(m.ex.search(q="flight")["total"], 0)
+        for q in ("flight", "airline", "email", "travel"):
+            self.assertEqual(m.ex.search(q=q)["total"], 0, q)
+        self.assertFalse([x for x in m.ex.failures(limit=100)["failures"] if x["family"] != "qwen2.5"])
+        self.assertTrue(all("flight" not in b["title"].lower() for b in m.ex.bounties()["bounties"]))
 
 
 class Seed(unittest.TestCase):
-    def test_the_sats_seed_runs_the_federation_for_real(self):
+    def test_the_default_seed_is_the_code_repair_runs_only(self):
         from seed import seed_if_empty
         ex = SatsExchange(":memory:", test_credits=30_000_000, reserve_msats=50_000)
         seed_if_empty(ex)
+        e = ex.economy_stats()
+        self.assertEqual((ex.stats()["traces"], e["learnings"], ex.epoch), (244, {"accepted": 1}, 3))
+        b = ex.bounties()["bounties"]
+        self.assertEqual([x["status"] for x in b], ["open", "open"])        # the maintainer's, and one on a failure
+        self.assertEqual(b[1]["failure_id"][:4], "TXF-")
+        self.assertEqual([lot["lot"].split("|")[0] for lot in ex.lots()["lots"]], ["code.python"])
+        self.assertGreater(e["paid_out_msats"], 0)
+        self.assertTrue(ex.audit()["balanced"])
+
+    def test_the_sats_seed_runs_the_federation_for_real(self):
+        from seed import seed_if_empty
+        ex = SatsExchange(":memory:", test_credits=30_000_000, reserve_msats=50_000)
+        seed_if_empty(ex, flight=True)
         self.assertTrue(all(json.loads(b)["royalty"].get("per_call_msats") is not None
                             for (b,) in ex.db.execute("SELECT body FROM learnings").fetchall()))
         e = ex.economy_stats()
