@@ -283,7 +283,8 @@ class Search(unittest.TestCase):
         self.assertEqual(r["results"][0]["id"], self.flight)
         self.assertEqual([h["id"] for h in self.ex.search(limit=10)["results"]][0], self.code[-1])   # newest first
         b = self.ex.post_bounty({"poster": A("8"), "path": "code", "eval_set": "sha256:E", "target": .5, "failure": "runtime_error"})
-        self.ex.buy_coins(b["id"], A("8"), 2_000_000)
+        self.assertEqual(self.ex.search()["bounties"], [])            # an unbacked bounty stays out of the search
+        self.ex.pledge(b["id"], A("8"), 2_000_000)
         top = self.ex.search(sort="bounty")["results"][0]
         self.assertEqual((top["id"], top["bounty_pool_micros"]), (self.code[1], 2_000_000))
         with self.assertRaises(ValueError):
@@ -369,54 +370,69 @@ class Bounties(unittest.TestCase):
         self.assertEqual(self.ex.bounties()["bounties"][0]["status"], "expired")
 
 
-class BountyCoins(unittest.TestCase):
-    def test_curve_maths(self):
-        from traceex import bountycoin as c
-        n = c.coins_for(0, 2_000_000)
-        self.assertAlmostEqual(c.cost(0, n), 2_000_000, delta=1)
-        self.assertAlmostEqual(c.sell_value(n, n), 2_000_000, delta=1)         # selling everything empties the pool
-        self.assertGreater(c.coins_for(0, 1_000_000), c.coins_for(500, 1_000_000))   # early backers get more coins
+class BountyPledges(unittest.TestCase):
+    """v0.6: a bounty is a refundable pledge escrow. No coin, no curve, no buying, selling or transferring, no revenue
+    share: backers get the solution, or their money back."""
 
     def setUp(self):
         self.ex = Exchange(":memory:", k=2, reserve_micros=100, validators=(A("5"),))
         self.ex.register_checker("flight-rules", A("c"))
         self.tid = self.ex.submit_trace(dict(make_trace()))["id"]
         self.b = self.ex.post_bounty({"poster": A("8"), "path": "extract/travel/flight", "eval_set": "sha256:E",
-                                      "target": .7})["id"]
+                                      "target": .7, "failure": "role_swap", "base_model": "needle3"})["id"]
 
-    def test_free_post_buy_sell_transfer(self):
-        self.assertEqual(self.ex.holders(self.b)["pool_micros"], 0)              # posting is free
-        k = self.ex.buy_coins(self.b, A("1"), 2_000_000)
-        r = self.ex.buy_coins(self.b, A("2"), 2_000_000)
-        self.assertGreater(k["coins"], r["coins"])
-        s = self.ex.sell_coins(self.b, A("2"), r["coins"])                         # raj exits at the curve
-        self.assertAlmostEqual(s["paid_micros"], 2_000_000, delta=2)
-        self.ex.transfer_coins(self.b, A("1"), A("3"), k["coins"] / 4)
-        h = self.ex.holders(self.b)["holders"]
-        self.assertAlmostEqual(h[A("3")], k["coins"] / 4, places=4)
-        with self.assertRaises(ValueError):
-            self.ex.transfer_coins(self.b, A("3"), A("4"), k["coins"])            # more than held
+    def test_no_coin_left_anywhere(self):
+        import importlib.util
+        self.assertIsNone(importlib.util.find_spec("traceex.bountycoin"))
+        for gone in ("buy_coins", "sell_coins", "transfer_coins", "holders"):
+            self.assertFalse(hasattr(self.ex, gone), gone)
+        self.assertEqual(self.ex.backers(self.b)["pool_micros"], 0)               # posting is free
 
-    def test_holders_earn_from_the_solution(self):
-        k = self.ex.buy_coins(self.b, A("1"), 1_000_000)
-        self.ex.buy_coins(self.b, A("2"), 1_000_000)
-        self.ex.transfer_coins(self.b, A("1"), A("3"), k["coins"] / 2)
+    def test_pledges_add_up_and_a_duplicate_post_backs_the_open_bounty(self):
+        self.ex.pledge(self.b, A("1"), 2_000_000)
+        self.ex.pledge(self.b, A("2"), 1_000_000)
+        self.ex.pledge(self.b, A("1"), 500_000)
+        self.assertEqual(self.ex.backers(self.b)["backers"], {A("1"): 2_500_000, A("2"): 1_000_000})
+        dup = self.ex.post_bounty({"poster": A("3"), "path": "extract/travel/flight/", "eval_set": "sha256:other",
+                                   "target": .9, "failure": "role_swap", "base_model": "needle3", "seed_micros": 700})
+        self.assertEqual((dup["id"], dup["merged"]), (self.b, True))               # the same key: no second bounty
+        self.assertEqual(len(self.ex.bounties()["bounties"]), 1)
+        self.assertEqual(self.ex.backers(self.b)["pool_micros"], 3_500_700)
+        other = self.ex.post_bounty({"poster": A("3"), "path": "extract/travel/flight", "eval_set": "sha256:o",
+                                     "target": .9, "failure": "wrong_span", "base_model": "needle3"})
+        self.assertNotEqual(other["id"], self.b)                                   # another failure is another bounty
+
+    def test_a_solve_pays_the_pledges_and_nothing_after(self):
+        self.ex.pledge(self.b, A("1"), 1_000_000)
+        self.ex.pledge(self.b, A("2"), 1_000_000)
         L = Learning.build(kind="routing", task="extract.flight", base_model="needle3", artifact={"uri": "inline"},
                            parents=[(self.tid, 1)], trainer=A("e"), per_call_micros=10,
                            attestation={"validator": A("5"), "eval_set": "sha256:E", "metric": "acc", "before": .5,
                                         "after": .8, "sig": "x"})
         lid = self.ex.register_learning(L)["id"]
         won = self.ex.claim_bounty(self.b, lid)
-        self.assertEqual(sum(won["payout"].values()), 2_000_000)
+        self.assertEqual(sum(won["payout"].values()), 2_000_000)                   # exactly what was pledged
+        self.assertNotIn(A("1"), won["payout"])                                     # backers get the fix, no cut
         with self.assertRaises(ValueError):
-            self.ex.buy_coins(self.b, A("4"), 1000)                                # curve closes once solved
+            self.ex.pledge(self.b, A("4"), 1000)                                   # closed once solved
         self.ex.usage({"learning": lid, "consumer": A("9"), "calls": 100_000})    # $1.00 of usage
         s = self.ex.settle()
-        cut = {a: s["claims"][a]["amount_micros"] for a in (A("1"), A("2"), A("3"))}
-        self.assertEqual(sum(cut.values()), 200_000)                               # holders' 20%
-        self.assertAlmostEqual(cut[A("1")], cut[A("3")], delta=1)                  # split by coins held now
-        self.assertGreater(cut[A("1")] + cut[A("3")], cut[A("2")])                 # early backer earns more per dollar
-        self.assertEqual(s["total_micros"], 2_000_000 + 1_000_000)
+        self.assertNotIn(A("1"), s["claims"])                                      # no revenue share for backers
+        self.assertNotIn(A("2"), s["claims"])
+
+    def test_unsolved_refunds_each_backer_what_it_put_in_and_unbacked_ones_expire(self):
+        self.ex.pledge(self.b, A("1"), 1_200_000)
+        self.ex.pledge(self.b, A("2"), 300_000)
+        lonely = self.ex.post_bounty({"poster": A("8"), "path": "code", "eval_set": "sha256:L", "target": .5,
+                                      "epochs": 20})["id"]
+        for _ in range(6):
+            s = self.ex.settle()
+            if A("1") in s["claims"]:
+                refunds = {a: s["claims"][a]["amount_micros"] for a in (A("1"), A("2"))}
+        self.assertEqual(refunds, {A("1"): 1_200_000, A("2"): 300_000})
+        st = {b["id"]: (b["status"], b["note"]) for b in self.ex.bounties()["bounties"]}
+        self.assertEqual(st[self.b], ("expired", "deadline"))
+        self.assertEqual(st[lonely], ("expired", "unbacked"))                      # nobody pledged within 3 epochs
 
 
 CODE_PROMPT = "Write a function to add two numbers.\nassert add(1, 2) == 3"
@@ -596,7 +612,7 @@ class AgentsUseTheExchange(unittest.TestCase):
         self.assertEqual((a1["action"], a1["path"], a1["seen"]), ("noted", "extract/travel/flight", 1))
         a2 = pilot.on_result(email2.replace("QX7PLM", "TRVQ8B"), fail)[0]
         self.assertEqual(a2["action"], "posted_bounty")
-        self.assertEqual(a2["backed_micros"], 500)
+        self.assertEqual(a2["pledged_micros"], 500)
         b = self.ex.bounties(status="open")["bounties"][0]
         self.assertEqual((b["path"], b["failure"]), ("extract/travel/flight", "unresolved:outbound_date,return_date"))
         self.assertEqual(b["eval_set"], a2["eval_set"])                         # only the hash is public
@@ -652,9 +668,12 @@ class HostedNode(unittest.TestCase):
             Client(self.url, token="wrong").clear()
         Client(self.url, A("8")).faucet()
         b = Client(self.url, A("8")).post_bounty(title="t", path="extract", eval_set="sha256:E", target=.5)
-        Client(self.url, A("8")).buy_coins(b["id"], 1_000_000)
-        with self.assertRaisesRegex(RuntimeError, "^403"):          # transfers wait for signed wallets
-            Client(self.url, A("8")).transfer_coins(b["id"], A("9"), 1)
+        Client(self.url, A("8")).pledge(b["id"], micros=1_000_000)
+        with self.assertRaisesRegex(RuntimeError, "^403"):          # claims wait for signed messages
+            Client(self.url, A("8"))._call("POST", f"/v0/bounties/{b['id']}/claims", {"learning": "x"})
+        for gone in ("buy", "sell", "transfer"):                    # bounty coins are gone
+            with self.assertRaisesRegex(RuntimeError, "^410"):
+                Client(self.url, A("8"))._call("POST", f"/v0/bounties/{b['id']}/{gone}", {})
 
     def test_testnet_wallets_must_cover_every_spend(self):
         me = Client(self.url, A("8"))
@@ -665,13 +684,11 @@ class HostedNode(unittest.TestCase):
         self.assertTrue(me.faucet()["already"])                     # once per address
         b = me.post_bounty(title="t", path="extract", eval_set="sha256:E", target=.5)
         with self.assertRaisesRegex(RuntimeError, "not enough test credits"):
-            me.buy_coins(b["id"], 6_000_000)
-        me.buy_coins(b["id"], 2_000_000)
+            me.pledge(b["id"], micros=6_000_000)
+        me.pledge(b["id"], micros=2_000_000)
         w = me.wallet()
         self.assertEqual(w["balance_micros"], 3_000_000)
-        self.assertGreater(w["coins"][str(b["id"])], 0)
-        me.sell_coins(b["id"], w["coins"][str(b["id"])])
-        self.assertEqual(me.wallet()["balance_micros"], 5_000_000)  # the curve buys back at cost while it's open
+        self.assertEqual(w["pledged_micros"], {str(b["id"]): 2_000_000})
         with self.assertRaisesRegex(RuntimeError, "(?s)^400.*40 hex"):
             Client(self.url, "0xnope").faucet()
         for i in range(2):                                           # three new wallets per source per day
@@ -711,7 +728,7 @@ class HostedNode(unittest.TestCase):
                          (dict(t, input=t["input"] + " pad" * 9000), "KB")):
             with self.assertRaisesRegex(ValueError, why):
                 ex.submit_trace(bad)
-        for call in (lambda: ex.buy_coins(1, "bob", 10), lambda: ex.bid({"lot": "x", "bidder": "bob", "price_micros": 5}),
+        for call in (lambda: ex.pledge(1, "bob", 10), lambda: ex.bid({"lot": "x", "bidder": "bob", "price_micros": 5}),
                      lambda: ex.post_bounty({"poster": "bob", "path": "extract", "eval_set": "sha256:E", "target": .5})):
             with self.assertRaisesRegex(ValueError, "0x address"):
                 call()
@@ -724,7 +741,7 @@ class HostedNode(unittest.TestCase):
         Client(self.url, A("8")).faucet()
         me = Client(self.url, A("8"))
         b = me.post_bounty(title="spam", path="extract", eval_set="sha256:E", target=.5)
-        me.buy_coins(b["id"], 1_000_000)
+        me.pledge(b["id"], micros=1_000_000)
         r = me.submit(make_trace(producer=A("8")))
         with self.assertRaisesRegex(RuntimeError, "^403"):
             me._call("POST", "/v0/admin/remove", {"kind": "bounty", "id": b["id"]})
@@ -734,7 +751,7 @@ class HostedNode(unittest.TestCase):
         self.assertEqual(me.bounties(status="")["bounties"], [])
         self.assertEqual(me.search()["count"], 0)
         self.assertFalse(any("spam" in e["text"] for e in me.events()["events"]))
-        self.assertEqual(me.wallet()["balance_micros"], 5_000_000)  # the pool went back to its backer
+        self.assertEqual(me.wallet()["balance_micros"], 5_000_000)  # the pledge went back to its backer
 
     def test_full_disk_stops_new_writes_only(self):
         import tempfile

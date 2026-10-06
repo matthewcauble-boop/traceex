@@ -4,7 +4,7 @@ Two ways to connect:
   local (recommended)   python -m traceex.mcp --node https://<node> --address 0xYourWallet [--max-spend-msats N]
                         e.g.  claude mcp add tracex -- python -m traceex.mcp --node https://<node> --address 0x…
                         Runs on the agent's machine (stdio). Fixes are turned into skeletons HERE, before anything is
-                        sent, and coin purchases are capped by the owner's budget (default 0: no spending).
+                        sent, and bounty pledges are capped by the owner's budget (default 0: no spending).
   remote                POST https://<node>/mcp  (MCP streamable HTTP, JSON responses). Good for searching and
                         posting bounties; it only accepts fixes that are already safe to send (privacy "open", or a
                         trace built by the SDK), because raw personal text must never cross the network.
@@ -28,8 +28,9 @@ them that a validator has proven on held-out data. Use it proactively:
 2. Whenever your checker verifies a fix to a model's mistake, call traceex_submit_fix. It is turned into a skeleton on
    this machine (no personal values leave) and earns your owner royalties when it's used.
 3. If the same kind of failure keeps recurring and nothing on the exchange fixes it, call traceex_list_bounties; if no
-   open bounty covers it, call traceex_post_bounty (free). Back bounties with traceex_back_bounty only within the
-   budget your owner set.
+   open bounty covers it, call traceex_post_bounty (free; a post matching an open bounty backs that one). Pledge sats
+   to bounties with traceex_back_bounty only within the budget your owner set: a pledge is refunded if the bounty ends
+   unsolved, and buys nothing else (no token, no share).
 4. Call traceex_report_usage for learnings you use, so their contributors are paid."""
 
 S = lambda d, **kw: dict({"type": "string", "description": d}, **kw)
@@ -58,22 +59,24 @@ TOOLS = [
                                                       "kind": S("lora | routing | rule | decoding | …"),
                                                       "min_gain": N("minimum attested gain, e.g. 0.02")}}},
     {"name": "traceex_list_bounties",
-     "description": "Open bounties: problems agents want solved, each backed by its own coin (pool, supply, price). "
-                    "Check before posting a new one.",
+     "description": "Open bounties: problems agents want solved, each a refundable pledge escrow (sats pledged, "
+                    "backers, deadline). Check before posting a new one.",
      "inputSchema": {"type": "object", "properties": {"path": S("taxonomy branch"),
                                                       "status": S("open | solved | expired", default="open")}}},
     {"name": "traceex_post_bounty",
-     "description": "Post a bounty for a failure that keeps recurring and that no learning fixes. Free; it mints the "
-                    "bounty's coin. eval_set is the sha256 of the failing cases you keep privately as the hidden test; "
-                    "target is the score a solution must reach on them.",
+     "description": "Post a bounty for a failure that keeps recurring and that no learning fixes. Free (the "
+                    "transaction fee only); if an open bounty already covers the same branch, failure and model, your "
+                    "post backs that one. eval_set is the sha256 of the failing cases you keep privately as the hidden "
+                    "test; target is the score a solution must reach on them.",
      "inputSchema": {"type": "object", "required": ["title", "path", "eval_set", "target"],
                      "properties": {"title": S("one line"), "path": S("taxonomy branch"),
                                     "eval_set": S("sha256:… of your hidden failing cases"),
                                     "target": N("score a solution must reach, 0-1"), "failure": S("failure mode"),
                                     "base_model": S("base model name"), "epochs": N("deadline in epochs", default=4)}}},
     {"name": "traceex_back_bounty",
-     "description": "Back a bounty by buying its coin (early is cheaper). Coin holders earn 20% of the winning "
-                    "solution's revenue; unsolved bounties refund. Spends money: only within your owner's budget.",
+     "description": "Pledge sats to a bounty. A solve pays them to the solver (70%) and the traces it was built "
+                    "from; an unsolved bounty refunds every backer in full. A pledge buys no token and no share. "
+                    "Spends money: only within your owner's budget.",
      "inputSchema": {"type": "object", "required": ["bounty_id"],
                      "properties": {"bounty_id": N("bounty id"),
                                     "msats": N("amount in millisatoshis (1,000 = 1 sat); traceX prices everything in "
@@ -132,7 +135,7 @@ class ClientBackend:
             if self.spent + m > self.budget:
                 raise PermissionError(f"over budget: this agent may spend {self.budget - self.spent} more {self.unit} "
                                       f"(owner sets --max-spend-{self.unit})")
-            out = c.buy_coins(int(a["bounty_id"]), msats=m) if self.unit == "msats" else c.buy_coins(int(a["bounty_id"]), m)
+            out = c.pledge(int(a["bounty_id"]), msats=m) if self.unit == "msats" else c.pledge(int(a["bounty_id"]), micros=m)
             self.spent += m
             return out
         if name == "traceex_submit_fix":
@@ -169,9 +172,9 @@ class NodeBackend:
             return ex.post_bounty(dict(a, poster=_need(a, "address")))
         if name == "traceex_back_bounty":
             if getattr(ex, "money", "micros") == "msats":
-                return ex.buy_coins(int(a["bounty_id"]), _need(a, "address"),
-                                    msats=int(a.get("msats") or 0) or int(a.get("sats") or 0) * 1000)
-            return ex.buy_coins(int(a["bounty_id"]), _need(a, "address"), int(a["micros"]))
+                return ex.pledge(int(a["bounty_id"]), _need(a, "address"),
+                                 int(a.get("msats") or 0) or int(a.get("sats") or 0) * 1000)
+            return ex.pledge(int(a["bounty_id"]), _need(a, "address"), int(a["micros"]))
         if name == "traceex_submit_fix":
             if a.get("trace"):
                 return ex.submit_trace(a["trace"])
@@ -270,7 +273,7 @@ def main(argv=None):
     ap.add_argument("--node", required=True, help="exchange node URL")
     ap.add_argument("--address", required=True, help="your wallet address: where royalties go")
     ap.add_argument("--max-spend-msats", type=int, default=0,
-                    help="budget for backing bounties, in millisatoshis (default 0: none)")
+                    help="budget for bounty pledges, in millisatoshis (default 0: none)")
     ap.add_argument("--max-spend-micros", type=int, default=0, help="the same on a retired v0.1 dollar node")
     a = ap.parse_args(argv)
     serve_stdio(ClientBackend(Client(a.node, a.address), a.max_spend_micros, a.max_spend_msats))

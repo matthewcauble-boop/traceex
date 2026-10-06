@@ -28,8 +28,8 @@ PRODUCERS = {"ana": A("a"), "ben": A("b")}
 TRAINER, BIDDER2, CONSUMER, CHECKER_AUTHOR, VALIDATOR = A("c"), A("d"), A("e"), A("f"), A("5")
 KIM, RAJ, LEE, AUTO = A("7"), A("8"), A("6"), A("4")
 NAMES = {**{v: k for k, v in PRODUCERS.items()}, TRAINER: "trainer", BIDDER2: "bidder-2", CONSUMER: "consumer",
-         CHECKER_AUTHOR: "checker author", VALIDATOR: "validator", KIM: "kim (coin)", RAJ: "raj (coin)",
-         LEE: "lee (coin)"}
+         CHECKER_AUTHOR: "checker author", VALIDATOR: "validator", KIM: "kim (backer)", RAJ: "raj (backer)",
+         LEE: "lee (backer)"}
 usd = lambda m: f"${m / 1e6:,.4f}"
 
 
@@ -53,14 +53,12 @@ def main(port=8799, live=None):
                                                path="extract/travel/flight", eval_set=eval_hash, target=0.70,
                                                base_model=Model.name)
     print(f"   bounty #{bounty['id']} posted free: extract/travel/flight on needle3, reach 70% first-pass on a hidden "
-          f"eval. Its coin starts at {usd(bounty['price_micros'])}")
-    k = Client(url, KIM).buy_coins(bounty["id"], 2_000_000)
-    r = Client(url, RAJ).buy_coins(bounty["id"], 3_000_000)
-    print(f"   kim backs it early: $2.00 buys {k['coins']:,.0f} coins (avg {usd(k['avg_price_micros'])})")
-    print(f"   raj backs it later: $3.00 buys {r['coins']:,.0f} coins (avg {usd(r['avg_price_micros'])}); "
-          f"pool {usd(r['pool_micros'])}, next coin {usd(r['next_price_micros'])}")
-    Client(url, KIM).transfer_coins(bounty["id"], LEE, k["coins"] / 2)
-    print(f"   kim sells half her coins to lee off-exchange (transfer {k['coins'] / 2:,.0f} coins)")
+          "eval. It is a refundable pledge escrow: no token, no share")
+    Client(url, KIM).pledge(bounty["id"], micros=2_000_000)
+    r = Client(url, RAJ).pledge(bounty["id"], micros=3_000_000)
+    Client(url, LEE).pledge(bounty["id"], micros=1_000_000)
+    print(f"   kim, raj and lee pledge $2.00, $3.00 and $1.00: the bounty holds {usd(r['pool_micros'] + 1_000_000)}, "
+          "all of it refunded if nobody reaches the target")
 
     print("\n1. Agents fix their own mistakes; fixes become classified skeleton traces")
     owned = {"ana": ["southwest", "united"], "ben": ["delta"]}
@@ -108,7 +106,8 @@ def main(port=8799, live=None):
     won = Client(url, TRAINER).claim_bounty(bounty["id"], lid)
     print(f"   {after:.1%} beats the bounty's 70% target: bounty #{won['bounty']} solved, its {usd(won['pool_micros'])} "
           "pool pays " + ", ".join(f"{NAMES[a]} {usd(m)}" for a, m in sorted(won["payout"].items(), key=lambda kv: -kv[1])))
-    print(f"   from now on the bounty's coin holders earn {won['holders_now_earn']}")
+    print("   the backers got what they paid for: the fix. No token, no revenue share; the learning keeps earning "
+          "for the traces and the trainer as other agents pay to use it")
 
     print("\n4. A new agent adopts it and gets better without ever seeing the training emails")
     newbie = agent(CONSUMER)
@@ -155,7 +154,7 @@ def main(port=8799, live=None):
                       f"{a['failure'].split(':', 1)[1].replace(',', ', ')}")
                 print(f"              its {a['cases']} failing emails stay on this device as the hidden eval "
                       f"({a.get('eval_set', '')[:19]}…); target {a.get('target', 0):.0%}; "
-                      f"backed with {usd(a.get('backed_micros', 0))} of its {usd(pilot.policy.budget_micros)} budget")
+                      f"pledged {usd(a.get('pledged_micros', 0))} of its {usd(pilot.policy.budget_micros)} budget")
             elif a["action"] == "already_posted":
                 print(f"   {name:10} same failure: bounty #{a['bounty']} already stands, nothing new to post")
     srv.shutdown()

@@ -1,7 +1,7 @@
 """Improving an open-weight model with shared verified fixes, end to end, against a real exchange node.
 
   0. A maintainer posts a bounty, free: "+3 points pass@1 for Qwen2.5-0.5B-Instruct on a hidden held-out code eval",
-     its target fixed from the base score before any training (runs/bounty.json). Backers buy its coin.
+     its target fixed from the base score before any training (runs/bounty.json). Backers pledge to it.
   1. Round 1. Three agents run the open model on their own coding work. Unit tests catch failures, tracebacks go back
      to the model, and verified fixes become `open` traces. Their autopilots post (and back) a bounty for the failures
      nobody could fix.
@@ -11,7 +11,7 @@
      trained on both lots and scored the same way.
   4. The best learning that beat the base is registered; if it reached the bounty's target it claims the bounty. It is
      released as open weights with a model card naming every contributor.
-  5. Hosted inference is metered; settlement pays coin holders, producers, trainer, checker author and validator.
+  5. Hosted inference is metered; settlement pays producers, trainer, checker author and validator.
 
     python examples/code_repair/demo.py      # replays runs/ (recorded generations, adapters' hashes, eval results)
 
@@ -42,7 +42,7 @@ BACKERS = {"kim": A("7"), "raj": A("8"), "lee": A("6")}
 HOST = A("9")                                        # an inference provider serving the released weights
 NAMES = {PRODUCERS[0]: "agent ana", PRODUCERS[1]: "agent ben", PRODUCERS[2]: "agent eve", TRAINER: "trainer",
          CHECKER_AUTHOR: "checker author", VALIDATOR: "validator", MAINTAINER: "maintainer", HOST: "host",
-         **{v: f"{k} (coin)" for k, v in BACKERS.items()}}
+         **{v: f"{k} (backer)" for k, v in BACKERS.items()}}
 usd = lambda m: f"${m / 1e6:,.4f}"
 
 
@@ -69,7 +69,7 @@ def main(port=8796):
     node = Client(url)
     node._call("POST", "/v0/checkers", {"id": "mbpp-tests", "author": CHECKER_AUTHOR})
 
-    print("0. A maintainer posts a bounty to improve an open-weight model; backers buy its coin")
+    print("0. A maintainer posts a bounty to improve an open-weight model; backers pledge to it (refundable)")
     target = bounty_rule["target"]
     b = Client(url, MAINTAINER).post_bounty(title=f"+3 points pass@1 for {BASE_MODEL} on a hidden code eval",
                                             path="code/generate", base_model=BASE_MODEL, eval_set=base["eval_set"],
@@ -77,8 +77,8 @@ def main(port=8796):
     print(f"   bounty #{b['id']}: base scores {base['rate']:.1%} on the hidden set, so the target is {target:.1%} "
           f"(fixed {bounty_rule['set_at'][:16].replace('T', ' ')} UTC, before any training)")
     for name, spend in (("kim", 4_000_000), ("raj", 3_000_000), ("lee", 3_000_000)):
-        r = Client(url, BACKERS[name]).buy_coins(b["id"], spend)
-        print(f"   {name} backs it with {usd(spend)}: {r['coins']:,.0f} coins at avg {usd(r['avg_price_micros'])}")
+        r = Client(url, BACKERS[name]).pledge(b["id"], micros=spend)
+        print(f"   {name} pledges {usd(spend)}; the bounty holds {usd(r['pool_micros'])}, refunded if unsolved")
 
     print(f"\n1. Round 1: three agents run {BASE_MODEL}; unit tests catch failures; verified fixes become open traces")
     hows = Counter(p["how"] for p in prod1)
@@ -105,11 +105,11 @@ def main(port=8796):
             if a["action"] == "posted_bounty":
                 print(f"   {NAMES[u['producer']]}'s autopilot posts bounty #{a['bounty']} ({a['path']}: {a['failure']}; "
                       f"its {a['cases']} unresolved cases stay on the device as the hidden eval)"
-                      + (f", backs it with {usd(a['backed_micros'])}" if a.get("backed_micros") else ""))
+                      + (f", pledges {usd(a['pledged_micros'])}" if a.get("pledged_micros") else ""))
             elif a["action"] == "backed_existing_bounty":
                 print(f"   {NAMES[u['producer']]}'s autopilot: {a['cases']} unresolved {a['failure'].split(':')[-1]} failures "
                       f"on {a['path']}; bounty #{a['bounty']} already covers them, so it backs that one"
-                      + (f" with {usd(a['backed_micros'])}" if a.get("backed_micros") else ""))
+                      + (f", pledging {usd(a['pledged_micros'])}" if a.get("pledged_micros") else ""))
             seen[a["action"]] += 1
 
     print("\n2. A trainer buys the lot, exports training data, trains LoRA v1; the validator scores it")

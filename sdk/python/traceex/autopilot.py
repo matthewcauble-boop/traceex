@@ -5,8 +5,8 @@ Hook it to the agent's check loop and it acts without being asked:
   - every failure the loop couldn't fix is classified, and the exchange is searched for an attested learning for that
     branch and base model; the best one is handed back for the agent to adopt;
   - when the same kind of failure keeps coming back and nothing fixes it, the autopilot checks the open bounties: it
-    backs a matching one, or posts a new one for free. The failing cases stay on this machine as the bounty's hidden
-    eval; only their hash is published;
+    pledges to a matching one, or posts a new one for free. The failing cases stay on this machine as the bounty's
+    hidden eval; only their hash is published. A pledge is refunded if the bounty ends unsolved;
   - it never spends more than the owner's budget (default: nothing).
 
     pilot = Autopilot(Client(node, address), task="extract.flight", base_model="needle3", checker="flight-rules@1")
@@ -30,7 +30,7 @@ class Policy:
     bounty_after: int = 3            # unresolved failures of the same kind before acting on a bounty
     bounty_target: float = 0.6       # a solution must fix this share of the hidden failing cases
     bounty_epochs: int = 4
-    back_msats: int = 0              # back each bounty it posts or joins with this much (a sats-priced coin node)...
+    back_msats: int = 0              # pledge this much to each bounty it posts or joins (a sats node)...
     budget_msats: int = 0            # ...and never spend more than this in total
     back_micros: int = 0             # the same on the v0.1 dollar node
     budget_micros: int = 0
@@ -137,14 +137,17 @@ class Autopilot:
             r = self.c.post_bounty(title=self._title(path, failure, len(cases)),
                                    path=path, eval_set=eval_set, target=self.policy.bounty_target, failure=failure,
                                    base_model=self._model_name(), epochs=self.policy.bounty_epochs)
-            bid, act = r["id"], {"action": "posted_bounty", "eval_set": eval_set, "target": self.policy.bounty_target}
+            if r.get("merged"):                 # the node found the same problem already posted: back that one
+                bid, act = r["id"], {"action": "backed_existing_bounty"}
+            else:
+                bid, act = r["id"], {"action": "posted_bounty", "eval_set": eval_set, "target": self.policy.bounty_target}
         for k in due:
             self.bounties[k] = bid
         sats = bool(self.policy.back_msats)
         back = (min(self.policy.back_msats, self.policy.budget_msats - self.spent) if sats
                 else min(self.policy.back_micros, self.policy.budget_micros - self.spent))
         if back > 0:
-            self.c.buy_coins(bid, msats=back) if sats else self.c.buy_coins(bid, back)
+            self.c.pledge(bid, msats=back) if sats else self.c.pledge(bid, micros=back)
             self.spent += back
-            act["backed_msats" if sats else "backed_micros"] = back
+            act["pledged_msats" if sats else "pledged_micros"] = back
         return dict(act, bounty=bid, path=path, failure=failure, cases=len(cases))

@@ -1,6 +1,6 @@
-"""Who gets paid what (spec sections 3-4). All amounts are integers in the node's money (msats on a coin
-node; micros on the retired dollar node); rounding dust goes to the first payee so
-every split sums exactly to the amount paid."""
+"""Who gets paid what (spec sections 3-4). All amounts are integers in the node's money (msats on a sats node; micros
+on the retired v0.1 dollar node); rounding dust goes to the first payee so every split sums exactly to the amount
+paid. Every payout is a split of a real payment: nothing here creates money."""
 from collections import defaultdict
 
 TRACE_SALE_SPLIT = {"producer": 0.85, "checker": 0.10, "validators": 0.05}
@@ -54,3 +54,20 @@ def split_usage(amount, learning, trace_info, validators, learning_info=None, _d
                 for a, mm in split_usage(m, learning_info[pid], trace_info, validators, learning_info, _depth + 1).items():
                     out[a] += mm
     return dict(out)
+
+
+def pro_rata(amount, weights):
+    """Split an integer amount by integer (or float) weights; sums exactly to amount, dust to the largest weight. Used
+    to refund a bounty's backers by what each pledged."""
+    w = {k: v for k, v in weights.items() if v and v > 0}
+    total = sum(w.values())
+    if amount <= 0 or total <= 0:
+        return {}
+    if all(isinstance(v, int) for v in w.values()):
+        out = {k: amount * v // total for k, v in w.items()}
+    else:
+        out = {k: int(amount * v / total) for k, v in w.items()}
+    dust = amount - sum(out.values())
+    if dust:
+        out[max(w, key=lambda k: (w[k], k))] += dust
+    return {k: m for k, m in out.items() if m}

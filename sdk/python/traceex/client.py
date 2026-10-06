@@ -47,7 +47,7 @@ class Client:
         return self._call("GET", "/v0/lots")
 
     def bid(self, lot, price_micros=0, license="shared", *, price_msats=0):
-        """A sealed bid: price_msats on a sats-priced (coin) node, price_micros on the v0.1 dollar node."""
+        """A sealed bid: price_msats on a sats node, price_micros on the retired v0.1 dollar node."""
         price = {"price_msats": int(price_msats)} if price_msats else {"price_micros": price_micros}
         return self._call("POST", "/v0/bids", dict(price, lot=lot, bidder=self.address, license=license))
 
@@ -74,23 +74,19 @@ class Client:
 
     def post_bounty(self, *, title, path, eval_set, target, seed_micros=0, failure="", base_model="", epochs=4,
                     seed_msats=0):
-        """Free to post; mints the bounty's coin. seed_msats (a coin node) or seed_micros (the dollar node) optionally
-        buys the first coins."""
+        """Free to post (the transaction fee only). A bounty is a refundable pledge escrow: seed_msats (a sats node) or
+        seed_micros (the dollar node) makes the poster's first pledge. A post matching an open bounty's branch, failure
+        and model backs that bounty instead (the reply says `merged`)."""
         seed = {"seed_msats": int(seed_msats)} if seed_msats else ({"seed_micros": seed_micros} if seed_micros else {})
         return self._call("POST", "/v0/bounties", dict(seed, poster=self.address, title=title, path=path,
                                                        eval_set=eval_set, target=target, failure=failure,
                                                        base_model=base_model, epochs=epochs))
 
-    def buy_coins(self, bounty_id, micros=0, *, msats=0):
-        """Back a bounty: msats on a sats-priced (coin) node, micros on the v0.1 dollar node."""
-        amount = {"msats": int(msats)} if msats else {"micros": micros}
-        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", dict(amount, buyer=self.address))
-
-    def sell_coins(self, bounty_id, coins):
-        return self._call("POST", f"/v0/bounties/{bounty_id}/sell", {"seller": self.address, "coins": coins})
-
-    def transfer_coins(self, bounty_id, to, coins):
-        return self._call("POST", f"/v0/bounties/{bounty_id}/transfer", {"from": self.address, "to": to, "coins": coins})
+    def pledge(self, bounty_id, msats=0, *, micros=0):
+        """Pledge to a bounty: msats on a sats node (micros on the retired v0.1 dollar node). Refunded in full if the
+        bounty ends unsolved; a solve pays it to the solver and the traces. No token, no share, nothing to trade."""
+        amount = {"msats": int(msats)} if msats else {"micros": int(micros)}
+        return self._call("POST", f"/v0/bounties/{bounty_id}/pledges", dict(amount, backer=self.address))
 
     def find_learnings(self, path="", model="", kind="", min_gain=0.0, limit=20):
         qs = urllib.parse.urlencode({k: v for k, v in dict(path=path, model=model, kind=kind, min_gain=min_gain,
@@ -103,15 +99,15 @@ class Client:
     def describe(self):
         return self._call("GET", "/.well-known/trace-exchange.json")
 
-    def holders(self, bounty_id):
-        return self._call("GET", f"/v0/bounties/{bounty_id}/holders")
+    def backers(self, bounty_id):
+        return self._call("GET", f"/v0/bounties/{bounty_id}/backers")
 
     def bounties(self, path="", status="open"):
         qs = urllib.parse.urlencode({k: v for k, v in dict(path=path, status=status).items() if v})
         return self._call("GET", f"/v0/bounties?{qs}")
 
     def claim_bounty(self, bounty_id, learning_id, attestation=None):
-        """On a coin node the claim needs the bounty poster's own measurement on its hidden eval (`attestation`, signed
+        """On a sats node the claim needs the bounty poster's own measurement on its hidden eval (`attestation`, signed
         by the poster as `validator`), unless the learning already carries it."""
         body = {"learning": learning_id}
         if attestation:
@@ -124,29 +120,20 @@ class Client:
     def balance(self, address=None):
         return self._call("GET", f"/v0/balances/{address or self.address}")
 
-    # --- coin economy (nodes run with --economy coin) -----------------------------------------------------------------
-    def coin(self):
-        return self._call("GET", "/v0/coin")
+    # --- the sats economy (nodes run with --economy sats, v0.6) --------------------------------------------------------
+    def economy(self):
+        """Where the sats are: paid in, paid out, refunded, fees, escrow, stakes, forfeits destroyed. No token."""
+        return self._call("GET", "/v0/economy")
 
-    def swap(self, side, amount):
-        """side "buy": spend `amount` msats on TXC; side "sell": sell `amount` TXC base units for sats."""
-        body = {"msats": int(amount)} if side == "buy" else {"units": str(int(amount))}
-        return self._call("POST", "/v0/swap", dict(body, account=self.address, side=side))
-
-    def buy_credits(self, msats=0, units=0):
-        """Make credits (1 credit = 1 msat): `msats` of sats buy TXC that is burned, or burn `units` of TXC you hold.
-        Credits pay for everything; they can't be moved or turned back. TXC amounts travel as decimal strings."""
-        return self._call("POST", "/v0/credits", {"account": self.address, "msats": int(msats), "units": str(int(units))})
-
-    def back_with_coins(self, bounty_id, coins):
-        """Back a bounty with TXC you hold: `coins` is an amount of TXC ("12.5"), sent exactly as a string."""
-        return self._call("POST", f"/v0/bounties/{bounty_id}/buy", {"buyer": self.address, "coins": str(coins)})
+    def fees(self):
+        return self._call("GET", "/v0/fees")
 
     def validators(self):
         return self._call("GET", "/v0/validators")
 
-    def stake(self, units):
-        return self._call("POST", "/v0/validators", {"address": self.address, "stake_units": int(units)})
+    def stake(self, msats):
+        """Stake sats as a validator (at least 10,000 sats on the testnet; operator-relayed until signed)."""
+        return self._call("POST", "/v0/validators", {"address": self.address, "stake_msats": int(msats)})
 
     def verdict(self, learning_id):
         return self._call("GET", f"/v0/learnings/{learning_id}/verdict")
@@ -167,14 +154,14 @@ class Client:
         return self._call("POST", "/v0/licences/direct", {"lot": lot, "buyer": self.address, "traces": list(traces)})
 
     def register_decoy(self, learning, digest, funder):
-        """Operator: a learning whose true gain is sealed (coin.decoy_digest); unseal it once validators have revealed."""
+        """Operator: a learning whose true gain is sealed (sats.decoy_digest); unseal it once validators have revealed."""
         return self._call("POST", "/v0/decoys", {"learning": dict(learning), "digest": digest, "funder": funder})
 
     def unseal_decoy(self, learning_id, gain, salt):
         return self._call("POST", "/v0/decoys/unseal", {"learning": learning_id, "gain": gain, "salt": salt})
 
     def faucet(self, address=None):
-        """On a testnet node: open a wallet with test money (30,000 test sats on a coin node; no real money)."""
+        """On a testnet node: open a wallet with test money (30,000 test sats on a sats node; no real money)."""
         return self._call("POST", "/v0/faucet", {"address": address or self.address})
 
     def wallet(self, address=None):

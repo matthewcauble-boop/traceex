@@ -9,8 +9,9 @@ Every time an agent's checker catches a model mistake and the fix is verified, t
 signal there is. traceX turns it into a **trace**: a skeleton of the failure (no names, codes, dates or prices
 leave your device) that you own. A classifier files every trace by task and by *how* the model failed, so anyone can
 find it. Trainers buy traces and build **learnings**, and a validator has to prove each one helps on data it never saw.
-Agents post **bounties** for the problems they need solved, free, and anyone can back a bounty by buying its coin.
-Every use of a learning pays royalties back down the family tree, settled on an L2 with one Merkle root per epoch.
+Agents post **bounties** for the problems they need solved, free, and anyone can pledge sats to one, refunded if
+nobody solves it. Every paid use of a learning is split back down the family tree in sats, with one Merkle root of
+payouts per epoch. There is no token.
 
 ```
 act ──▶ check ──▶ fix ──▶ trace ──▶ learning ──▶ attested gain ──▶ every agent adopts ──▶ act
@@ -29,46 +30,51 @@ a testnet: everything is priced in bitcoin, every wallet takes 30,000 test sats,
 operator calls:
 [DEPLOY.md](DEPLOY.md).
 
-## The coin
+## Paid in sats, no token
 
-On a coin-economy node (`--economy coin`, what the hosted testnet runs; testnet v0.5) **everything is priced in
-bitcoin**. Users pay in sats; contributors earn **TXC**, a coin priced in sats by an open pool that pairs it with
-bitcoin (1,000,000 TXC beside 10,000,000 sats at genesis, so it opens at 10 sats). Every payment buys TXC from the pool
-and burns all of it, and each epoch mints a fixed, halving emission to the work that was paid for, never more than the
-burn was worth. Nothing is minted for a verdict. The pool sets the price. Sats arrive over Lightning with L402: a call
-your wallet can't cover answers `402 Payment Required` with an invoice (a placeholder on the testnet, where the faucet
-gives 30,000 test sats instead).
+On a sats node (`--economy sats`, what the hosted testnet runs; testnet v0.6) **everything is paid directly in sats**:
+whole millisatoshis, over Lightning with L402 (a call your wallet can't cover answers `402 Payment Required` with an
+invoice; a placeholder on the testnet, where the faucet gives 30,000 test sats instead). There is no coin, no pool, no
+emission and no treasury. v0.5 paid contributors in a token, TXC, and its own anti-farming cap made the token a
+pass-through (contributors got back 99-100% of what users paid), so it added price risk and securities risk and
+nothing else; v0.6 removes it (SPEC 4e explains why).
 
-Farming is designed to lose because **only payments pay, and whoever pays judges**:
-
-- Users pay for a learning after trying it on their own data.
-- A bounty pays on its poster's own measurement on its hidden eval.
-- A licence buyer's own learnings decide which traces get its money.
-- Validators, drawn at random after you submit, decide which learnings may earn. They commit before anyone reveals, and
-  the median of their paired measurements decides.
-- Forfeited bonds and stakes burn. Validators earn only from what the learnings they vouched for go on to earn.
-- Decoys with a sealed true gain catch validators who don't measure.
-- Copies, reworded copies and padded parents earn nothing.
-- Payments are in credits, and a credit is a millisatoshi (a sat always buys 1,000; the TXC it buys is burned). Each
-  epoch mints at most a fixed emission to the work that was paid for, and nobody is minted more than their credits
-  were worth at the epoch's time-weighted price, so paying yourself returns at most what you burned.
-- Every transaction pays one standard fee, 58 msats in credits, burned: about $0.00005 at today's bitcoin price and
-  about 125x the electricity of the dearest transaction (`python examples/fees/measure.py` shows the measurement),
-  enough to fund the network and price out spam. It is fixed in sats, so its dollar value floats with bitcoin; an
-  operator can re-peg it to a dollar target every N epochs (off by default).
-- Bonds are 5,000 sats of TXC, the validator minimum stake 10,000 sats, a challenge 2,000 sats, and a bounty's coin
-  starts at 10 sats; all are charged in TXC at the reference price. Dollar figures, wherever shown, are approximate.
+- **Use pays out at once.** Sellers set the price of a call (`per_call_msats`). Each paid use is split at settlement:
+  **traces 60 / trainer 25 / checkers 10 / validators 5**, equal per distinct parent, copies counted as their original,
+  cited learnings passing their slice through to their own traces. The traces' share waits 4 epochs in escrow so a
+  challenge can still give it back to the payer.
+- **Nothing is paid out that a payer didn't pay in.** Every payout is a move out of one payment's own escrow, and the
+  node refuses any move that would take a payment's payouts past what its payer paid less the fee (`InvariantError`;
+  `audit()` re-checks every payment). So paying yourself returns at most what you paid, less every share that isn't
+  yours and the fee.
+- **One fee: 58 msats a transaction**, paid at once to the operator that served it, its whole income: about $0.00005 at
+  today's bitcoin price and about 123x the electricity of the dearest transaction (`python examples/fees/measure.py`).
+  It is fixed in sats; an operator can re-peg it to a dollar target every N epochs at a bitcoin price it sets (off by
+  default).
+- **Stakes in sats:** a learning bond is 5,000 sats, the validator minimum stake 10,000, a challenge 2,000. Forfeits are
+  destroyed: they go to an account nothing can spend, batched per epoch for a provably unspendable output on mainnet.
+- **Bounties are refundable pledges.** Free to post; anyone pledges sats; a solve on the poster's hidden eval pays the
+  solver 70, the traces 20, checkers and validators 5 each; unsolved, every backer gets back what it put in. A pledge is
+  not an investment: no token, no share of the solution's revenue, nothing to trade. A post matching an open bounty's
+  branch, failure and model backs that bounty instead of opening a duplicate; one nobody backs expires.
+- **Only payments pay, and whoever pays judges.** Users pay for a learning after trying it on their own data; a bounty
+  pays on its poster's own measurement; a licence buyer's own learnings decide which traces get its money. Validators,
+  drawn at random after you submit, decide which learnings may be paid for: they commit before anyone reveals, the
+  median of their paired measurements decides, decoys with a sealed true gain catch validators who don't measure (two
+  misses, not one, cost a validator 25% of its stake), and challenges claw back what hasn't vested.
 
 ```
 python examples/farming/attacks.py              # every farming strategy against a real node, with its profit or loss
 python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
-python examples/scaling/simulate.py             # TXC's price in sats as usage grows to $1B (1.16T sats) a day, crashes and recovers
+python examples/farming/attacks.py --decoys     # the decoy test's false-positive rate
+python examples/scaling/simulate.py             # payouts scale linearly with paid usage, up to $1B (1.16T sats) a day
 ```
 
-All 29 strategies lose against honest work on average over 30 random runs, including owning most of the validator
-stake; 28 lose in every run, and the lazy validator came out ahead of its honest twin once, because that twin was
-slashed for an unlucky 4-sigma measurement of a decoy (SPEC 4f). A majority can still block honest work, because it
-controls the vote, but no verdict moves money to it. Rules and numbers: SPEC sections 4e and 4f.
+All 22 strategies lose against honest work on average over 30 random runs, including owning most of the validator
+stake; 21 lose in every run. The lazy validator came out ahead of its honest twin in 3 of 30 runs, when it was drawn
+for only one decoy (one miss is a strike, not a slash, so an honest validator's unlucky draw no longer costs it 25%).
+A majority can still block honest work, because it controls the vote, but no verdict moves money to it. Rules and
+numbers: SPEC sections 4e and 4f.
 
 ## Join the network: share your traces
 
@@ -99,14 +105,14 @@ from traceex import Client
 me = Client("https://<exchange-node>", address="0xYourWallet")
 
 b = me.post_bounty(title="70% first-pass on unseen airlines", path="extract/travel/flight",
-                   base_model="needle3", eval_set="sha256:…", target=0.70)     # free; mints the bounty's coin
-me.buy_coins(b["id"], msats=10_000_000)                                        # back it with 10,000 sats; early is cheaper
-me.transfer_coins(b["id"], to="0xFriend", coins=50)                            # coins move freely
+                   base_model="needle3", eval_set="sha256:…", target=0.70)     # free (the fee only)
+me.pledge(b["id"], msats=10_000_000)                                           # pledge 10,000 sats, refundable
+me.backers(b["id"])                                                            # who pledged what
 ```
 
-When a learning beats the bounty's hidden eval, the pool pays the solver 70%, the traces it was built from 20%, and
-the checker and validator 5% each. From then on **coin holders earn 20% of every paid use of that solution**. If no
-one solves it by the deadline, the pool goes back to holders pro rata.
+When a learning beats the bounty's hidden eval (measured by its poster), the pledges pay the solver 70%, the traces
+it was built from 20%, and the checker and validators 5% each. If no one solves it by the deadline, every backer gets
+back exactly what it pledged. Backers get the fix; there is no coin and no revenue share.
 
 ## Let your agent use it on its own
 
@@ -171,9 +177,8 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
 
 ```
 0. An agent with a problem posts a bounty
-   bounty #1 posted free: extract/travel/flight on needle3, reach 70% first-pass on a hidden eval. Its coin starts at $0.0100
-   kim backs it early: $2.00 buys 124 coins (avg $0.0162)
-   raj backs it later: $3.00 buys 108 coins (avg $0.0278); pool $5.0000, next coin $0.0332
+   bounty #1 posted free: extract/travel/flight on needle3, reach 70% first-pass on a hidden eval. It is a refundable pledge escrow: no token, no share
+   kim, raj and lee pledge $2.00, $3.00 and $1.00: the bounty holds $6.0000, all of it refunded if nobody reaches the target
 1. Agents fix their own mistakes; fixes become classified skeleton traces
    filed under extract/travel/flight; failure role_swap:2 type_mismatch:2 wrong_span:1; feeds bounty #1
    what actually leaves the device:
@@ -182,7 +187,7 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
    top 2 win, each pays the next bid down: $0.2500 (bids were $0.90, $0.60, $0.25)
 3. A learning is built from the traces and must prove itself on held-out emails
    validator on 3 unseen emails: first-pass accuracy 63.3% -> 73.3%
-   73.3% beats the bounty's 70% target: bounty #1 solved, its $5.0000 pool pays the solver and the traces
+   73.3% beats the bounty's 70% target: bounty #1 solved, its $6.0000 pool pays trainer $4.2000, ana $1.0000, validator $0.3000, checker author $0.3000, ben $0.2000
 4. A new agent adopts it and gets better without ever seeing the training emails
 5. Settlement: royalties flow down the family tree; one Merkle root goes on-chain (all proofs valid)
 ```
@@ -192,14 +197,15 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
 | Path | What |
 |---|---|
 | [`SPEC.md`](SPEC.md) | the protocol: roles, Trace and Learning objects, the auctions, classifier and bounties, settlement, threats, what v0.1 leaves out |
-| `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, bounty coins, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
-| `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --economy coin --test-credits 30000000` for a hosted testnet (30,000 test sats a wallet) |
-| `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a coin node it also stakes three validators and runs the federation on real held-out slices |
-| `node/coin.py`, `node/validator.py` | the coin economy (pool, credits, burn and mint, federated validation, decoys, licence escrow, vesting, challenges) and a validator's commit/reveal tool |
-| `examples/farming/` | `attacks.py`: farming strategies run against a real coin node, with profit or loss |
+| `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
+| `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --economy sats --test-credits 30000000` for a hosted testnet (30,000 test sats a wallet) |
+| `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a sats node it also stakes three validators and runs the federation on real held-out slices |
+| `node/sats.py`, `node/validator.py` | v0.6, no token: payments in sats with the payout invariant, the 60/25/10/5 split, escrow and vesting, pledge bounties, stakes and forfeits, federated validation, decoys, licence escrow, challenges; and a validator's commit/reveal tool |
+| `examples/farming/` | `attacks.py`: farming strategies run against a real sats node, with profit or loss |
+| `examples/scaling/` | `simulate.py`: payouts are the same share of paid usage from $10 to $1B a day |
 | `examples/fees/` | `measure.py`: what each kind of transaction costs in electricity, and so the standard fee |
 | `render.yaml`, `DEPLOY.md` | one-click hosting on Render, costs, limits and operator calls |
-| `contracts/` | `Registry.sol` (ownership + family tree), `PayoutDistributor.sol` (per-epoch Merkle root, claim with proof), `BountyMarket.sol` (free bounties, bonding-curve coins, holder revenue share) |
+| `contracts/` | `Registry.sol` (ownership + family tree), `PayoutDistributor.sol` (per-epoch Merkle root, claim with proof); v0.1's on-chain sketch, in USDC |
 | `examples/flight_emails/` | the first producer: flight-booking extraction, a rules checker, train and held-out emails, `demo.py` |
 | `examples/code_repair/` | open weights: Qwen2.5-0.5B on MBPP, unit tests as the checker, `produce.py` → `train_lora.py` → `evaluate.py`, `demo.py` replays it all |
 | `tests/` | `python -m unittest discover tests` (stdlib; contract tests run when `web3` + `eth-tester` + `py-solc-x` are installed) |
@@ -219,10 +225,10 @@ and failure mode for browsing. Open bounties on the same branch come back with t
 
 ## Status
 
-v0.1 protocol; coin economy testnet v0.5. The hosted exchange runs as a testnet (test sats only). Everything is priced
-in bitcoin: sats over Lightning with L402 is the specified mainnet payment path (USDC and x402 are retired). The
-contracts are the v0.1 on-chain sketch: they have run on a local EVM (13 tests) but are **unaudited**, still use a mock
-USDC token, and have not been moved to a bitcoin-side settlement; don't put real money in them. Not built yet: signed
+v0.1 protocol; sats economy testnet v0.6 (no token). The hosted exchange runs as a testnet (test sats only).
+Everything is paid in bitcoin: sats over Lightning with L402 is the specified mainnet payment path (USDC, x402 and v0.5's
+TXC are retired). The contracts are the v0.1 on-chain sketch: they have run on a local EVM but are **unaudited**, still
+use a mock USDC token, and have not been moved to a bitcoin-side settlement; don't put real money in them. Not built yet: signed
 wallets and validator signatures, real Lightning payments behind the 402 (the testnet's invoice is a placeholder). See
 the end of `SPEC.md`.
 

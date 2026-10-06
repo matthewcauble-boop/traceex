@@ -3,7 +3,7 @@
     python examples/fees/measure.py                   # bitcoin at $85,962 (Coinbase spot, 2026-10-05)
     python examples/fees/measure.py --btc-usd 120000  # the same measurement at another bitcoin price
 
-Runs each kind of transaction many times on a real coin node (an on-disk SQLite database, as hosted) and measures the
+Runs each kind of transaction many times on a real sats node (an on-disk SQLite database, as hosted) and measures the
 CPU time it takes, the bytes it moves over the network and the bytes it leaves on disk. Then it prices the energy:
 
     energy = CPU seconds x watts per busy core x PUE
@@ -17,8 +17,9 @@ hosted node) and then folded into balances and one Merkle root per epoch. The as
 change them and run it again. Electricity is bought in dollars, so it is priced in dollars and converted to sats at
 the bitcoin price given (--btc-usd). The standard fee (exchange.TX_FEE_MSATS, 58 msats) was set at about 125 times the
 dearest transaction here at $85,962 a bitcoin, so it funds the network and prices out spam at machine scale, not just
-the electricity. It is fixed in sats, so the multiple floats with bitcoin: about 62x if bitcoin halves, 250x if it
-doubles. A coin node can re-peg it to a dollar target every N epochs (coin.Params.fee_repeg_epochs; off by default).
+the electricity; it is the whole income of the operator that served the transaction. It is fixed in sats, so the
+multiple floats with bitcoin: about 62x if bitcoin halves, 250x if it doubles. A sats node can re-peg it to a dollar
+target every N epochs (sats.Params.fee_repeg_epochs, at an operator-set bitcoin price; off by default).
 """
 import json
 import os
@@ -31,9 +32,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [os.path.join(ROOT, "sdk", "python"), os.path.join(ROOT, "node")]
 from traceex import Trace, Learning, attest  # noqa: E402
-from coin import CoinExchange, Params, UNIT, attestation_digest  # noqa: E402
+from sats import SatsExchange, Params, attestation_digest  # noqa: E402
 from exchange import TX_FEE_MSATS  # noqa: E402
-from coin import BTC_USD, MSATS_PER_BTC  # noqa: E402
+from sats import BTC_USD, MSATS_PER_BTC  # noqa: E402
 
 KWH_USD = 0.15              # $ per kWh: the US commercial average is about $0.13-0.14 (EIA); data centres often pay less
 WATTS_PER_CORE = 10         # a busy server core with its share of memory, board and fans
@@ -58,13 +59,12 @@ def db_bytes(ex):
 
 
 def node(path):
-    ex = CoinExchange(path, test_credits=30_000_000, beacon_delay=0, params=Params(quorum=3))
+    ex = SatsExchange(path, test_credits=30_000_000, beacon_delay=0, params=Params(quorum=3))
     for who in [A(c) for c in "0123456789abcdef"]:
         ex.db.execute("INSERT OR REPLACE INTO grants VALUES (?,?,?,?)", (who, 10**12, "measure", "measure"))
     vals = [A(c) for c in "abc"]
     for v in vals:
-        ex.swap(v, "buy", 20_000_000)
-        ex.register_validator(v, 1_500 * UNIT)
+        ex.register_validator(v, 15_000_000)
     ex.register_checker("unit-tests", A("1"))
     ex.db.commit()
     return ex, vals
@@ -123,12 +123,9 @@ def _main(folder, btc_usd=BTC_USD):
         ids.append(r["id"])
         return r
     rows.append(measure(ex, "file a trace (about 1 KB)", lambda i: dict(trace(i)), submit, kept="for good"))
-    rows.append(measure(ex, "swap sats for TXC", lambda i: ("buy", 10_000), lambda b: ex.swap(A("2"), *b)))
-    rows.append(measure(ex, "buy credits (TXC burned)", lambda i: 10_000, lambda m: ex.buy_credits(A("7"), msats=m)))
     bounty = ex.post_bounty({"poster": A("3"), "path": "code/generate", "eval_set": "sha256:x", "target": 0.5,
                              "title": "measure"})["id"]
-    ex.swap(A("3"), "buy", 100_000_000)
-    rows.append(measure(ex, "back a bounty", lambda i: UNIT, lambda u: ex.buy_coins(bounty, A("3"), units=u)))
+    rows.append(measure(ex, "pledge to a bounty", lambda i: 10_000, lambda m: ex.pledge(bounty, A("3"), m)))
     lot = ex.lots()["lots"][0]["lot"]
     rows.append(measure(ex, "bid on a lot", lambda i: {"lot": lot, "bidder": A("4"), "price_msats": 1_000 + i},
                         ex.bid))
@@ -139,7 +136,6 @@ def _main(folder, btc_usd=BTC_USD):
         r = ex.register_learning(L)
         learning_ids.append(r["id"])
         return r
-    ex.swap(A("5"), "buy", 3_000_000_000)
     rows.append(measure(ex, "register a learning (bonded)",
                         lambda i: Learning.build(kind="lora", task="code.python", base_model="Qwen/Qwen2.5-0.5B-Instruct",
                                                  artifact={"uri": f"weights-{i}", "hash": None},
@@ -178,7 +174,7 @@ def _main(folder, btc_usd=BTC_USD):
     print(f"the standard fee: {TX_FEE_MSATS} msats (${fee_nanos / 1e9:.7f} at ${btc_usd:,.0f} a bitcoin), "
           f"{fee_nanos / top:,.0f}x the dearest transaction's electricity and {fee_nanos / low:,.0f}x the cheapest's")
     print(f"the fee is fixed in sats, so the multiple floats with bitcoin: {fee_nanos / 2 / top:,.0f}x if bitcoin "
-          f"halves, {fee_nanos * 2 / top:,.0f}x if it doubles; coin.Params.fee_repeg_epochs re-pegs it to $0.00005 "
+          f"halves, {fee_nanos * 2 / top:,.0f}x if it doubles; sats.Params.fee_repeg_epochs re-pegs it to $0.00005 "
           "(off by default)")
     ex.db.close()
     return rows

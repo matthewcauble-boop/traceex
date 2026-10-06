@@ -1,4 +1,4 @@
-"""Act as a validator on a coin-economy node: commit a measurement, then reveal it.
+"""Act as a validator on a sats node (v0.6): commit a measurement, then reveal it.
 
     python node/validator.py --url https://<node> --token $TRACEX_ADMIN_TOKEN --address 0xVALIDATOR \\
         --learning sha256:... --eval-set sha256:... --metric "pass@1" --before 0.294 --after 0.372 --n 167 \\
@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sdk", "python"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from traceex import Client  # noqa: E402
-from coin import attestation_digest  # noqa: E402
+from sats import attestation_digest  # noqa: E402
 
 
 def main(argv=None):

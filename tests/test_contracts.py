@@ -11,16 +11,14 @@ with the standard library only. To run them:
     .venv/Scripts/python.exe -m unittest tests.test_contracts -v
 """
 import glob
-import math
 import os
 import sys
 import unittest
-from fractions import Fraction
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path[:0] = [os.path.join(ROOT, "sdk", "python")]
 
-from traceex import merkle, bountycoin  # noqa: E402
+from traceex import merkle  # noqa: E402
 
 try:
     import solcx
@@ -34,7 +32,7 @@ except Exception:  # pragma: no cover - depends on the machine
     HAVE_EVM = False
 
 SOLC = "0.8.26"
-ONE = 10**6          # coin units per coin, and USDC micros per dollar
+ONE = 10**6          # USDC micros per dollar
 DAY = 86400
 _BUILD = None
 
@@ -184,159 +182,6 @@ class PayoutDistributorTest(EVMCase):
         self.reverts(self.pd.functions.claim(2, a, 100 * ONE, bad[a]), a, "exceeds epoch")
         self.tx(self.pd.functions.claim(1, b, 100 * ONE, good[b]), b)
         self.assertEqual(self.bal(b), 100 * ONE)
-
-
-# ======================================================================================================================
-class BountyMarketTest(EVMCase):
-    def setUp(self):
-        super().setUp()
-        self.settler = self.acct[1]
-        self.bm = self.deploy("BountyMarket", self.usdc.address, self.settler)
-        for who in self.acct[1:8]:
-            self.fund(who, 1_000_000 * ONE, self.bm)
-        self.A, self.B, self.C, self.D = self.acct[2:6]
-
-    def post(self, epochs_open=7, poster=None):
-        poster = poster or self.acct[6]
-        before = self.bal(poster)
-        self.tx(self.bm.functions.post(b"\x01" * 32, b"\x02" * 32, 9000, epochs_open), poster)
-        self.assertEqual(self.bal(poster), before)                      # posting is free
-        return self.bm.functions.count().call() - 1
-
-    def b(self, bid):
-        r = self.bm.functions.bounties(bid).call()
-        return dict(zip(["poster", "pathHash", "evalSet", "targetBps", "deadline", "status", "supply", "pool",
-                         "learning", "accPerCoin"], r))
-
-    def buy(self, bid, who, coins):
-        c = self.bm.functions.cost(self.b(bid)["supply"], coins).call()
-        self.tx(self.bm.functions.buy(bid, coins, c), who)
-        return c
-
-    def test_cost_matches_python_curve(self):
-        import random
-        rng = random.Random(7)
-        cases = [(0, ONE), (0, 1), (0, 1000 * ONE), (123_456_789, 3 * ONE + 7), (10**12, 1), (5 * ONE, 999_999)]
-        cases += [(rng.randrange(10**10), rng.randrange(1, 10**9)) for _ in range(40)]
-        for s, n in cases:
-            exact = Fraction(bountycoin.BASE * n, ONE) + Fraction(bountycoin.SLOPE * (2 * s * n + n * n), 2 * ONE * ONE)
-            got = self.bm.functions.cost(s, n).call()
-            self.assertEqual(got, math.ceil(exact), (s, n))                          # rounds up for buyers
-            self.assertEqual(self.bm.functions.sellValue(s, n).call(), math.floor(exact), (s, n))  # down for sellers
-            self.assertAlmostEqual(got, bountycoin.cost(s / ONE, n / ONE), delta=1.0)  # same curve as the SDK
-        self.assertEqual(self.bm.functions.cost(0, ONE).call(), 10_050)               # first whole coin: $0.01005
-
-    def test_buy_slippage_sell_minout_and_full_exit_empties_pool(self):
-        bid = self.post()
-        self.assertEqual(self.bm.functions.priceNow(bid).call(), bountycoin.BASE)
-        c = self.bm.functions.cost(0, 10 * ONE).call()
-        self.reverts(self.bm.functions.buy(bid, 10 * ONE, c - 1), self.A, "slippage")
-        self.tx(self.bm.functions.buy(bid, 10 * ONE, c), self.A)
-        self.assertEqual(self.bm.functions.priceNow(bid).call(), bountycoin.BASE + bountycoin.SLOPE * 10)
-        cb = self.buy(bid, self.B, 3 * ONE + 333_333)
-        cc = self.buy(bid, self.C, 7)
-        pool = self.b(bid)["pool"]
-        self.assertEqual(self.bal(self.bm.address), pool)
-
-        # A sells in odd slices after B and C bought dearer coins: it gets back what it paid, never more
-        s = self.b(bid)["supply"]
-        self.assertGreater(self.bm.functions.sellValue(s - 10 * ONE, 10 * ONE).call(), c)  # the curve alone would pay
-        start_a = self.bal(self.A)                                             # A more, out of B's and C's money
-        self.reverts(self.bm.functions.sell(bid, ONE, 10**12), self.A, "slippage")
-        self.reverts(self.bm.functions.sell(bid, 11 * ONE, 0), self.A, "balance")
-        self.reverts(self.bm.functions.sell(bid, 0, 0), self.A, "balance")
-        pieces = [1, 333_333, 2_500_001, 7, 999_999, 1, 3, 5, 11]
-        pieces.append(10 * ONE - sum(pieces))                                  # rest of A's 10 coins
-        for piece in pieces:
-            self.tx(self.bm.functions.sell(bid, piece, 0), self.A)
-        self.assertEqual(self.bm.functions.balanceOf(bid, self.A).call(), 0)
-        self.assertEqual(self.bal(self.A) - start_a, c)                        # the early backer can't sell into later buys
-
-        # B and C exit with exactly what they paid
-        for who, coins, paid in [(self.B, 3 * ONE + 333_333, cb), (self.C, 7, cc)]:
-            before = self.bal(who)
-            self.tx(self.bm.functions.sell(bid, coins, 0), who)
-            self.assertEqual(self.bal(who) - before, paid)
-
-        b = self.b(bid)
-        self.assertEqual((b["supply"], b["pool"]), (0, 0))                      # every backer whole, nothing left over
-        self.assertEqual(self.bal(self.bm.address), 0)
-
-        # a lone round trip never profits, however it is sliced
-        bid2 = self.post()
-        before = self.bal(self.D)
-        self.buy(bid2, self.D, 5 * ONE + 3)
-        for piece in [1, 2, 5 * ONE]:
-            self.tx(self.bm.functions.sell(bid2, piece, 0), self.D)
-        self.assertLessEqual(self.bal(self.D), before)
-        self.assertEqual(self.b(bid2)["supply"], 0)
-
-    def test_settler_only_solve_then_holder_accrual_follows_the_coin(self):
-        A, B, C, D = self.A, self.B, self.C, self.D
-        bid = self.post()
-        self.buy(bid, A, 3 * ONE)
-        self.buy(bid, B, 1 * ONE)
-        pool = self.b(bid)["pool"]
-        self.reverts(self.bm.functions.payHolders(bid, ONE), self.settler, "cannot pay")   # not solved yet
-        self.reverts(self.bm.functions.solve(bid, b"\x09" * 32), A, "cannot solve")
-        settler_before = self.bal(self.settler)
-        self.tx(self.bm.functions.solve(bid, b"\x09" * 32), self.settler)
-        self.assertEqual(self.bal(self.settler) - settler_before, pool)
-        self.reverts(self.bm.functions.solve(bid, b"\x09" * 32), self.settler, "cannot solve")
-        self.reverts(self.bm.functions.buy(bid, ONE, 10**12), C, "not open")
-        self.reverts(self.bm.functions.sell(bid, ONE, 0), A, "not open")
-        self.assertEqual(self.b(bid)["status"], 1)
-
-        self.reverts(self.bm.functions.payHolders(bid, 4 * ONE), A, "cannot pay")
-        self.tx(self.bm.functions.payHolders(bid, 4 * ONE), self.settler)           # 1 USDC per coin
-        pend = lambda w: self.bm.functions.pending(bid, w).call()
-        self.assertEqual((pend(A), pend(B), pend(C)), (3 * ONE, ONE, 0))
-
-        self.tx(self.bm.functions.transfer(bid, C, ONE), A)                          # C arrives after the payment
-        self.tx(self.bm.functions.transfer(bid, D, ONE), B)                          # B leaves after it
-        self.reverts(self.bm.functions.transfer(bid, D, ONE), B, "balance")
-        self.assertEqual((pend(A), pend(B), pend(C), pend(D)), (3 * ONE, ONE, 0, 0))
-
-        self.tx(self.bm.functions.payHolders(bid, 4 * ONE), self.settler)
-        self.assertEqual((pend(A), pend(B), pend(C), pend(D)), (5 * ONE, ONE, ONE, ONE))
-
-        for who, want in [(A, 5 * ONE), (B, ONE), (C, ONE), (D, ONE)]:
-            before = self.bal(who)
-            self.tx(self.bm.functions.withdraw(bid), who)
-            self.assertEqual(self.bal(who) - before, want)
-            self.assertEqual(pend(who), 0)
-            self.tx(self.bm.functions.withdraw(bid), who)                           # second withdraw pays nothing
-            self.assertEqual(self.bal(who) - before, want)
-        self.assertEqual(self.bal(self.bm.address), 0)
-
-    def test_transfer_to_zero_address_rejected(self):
-        bid = self.post()
-        self.buy(bid, self.A, ONE)
-        self.reverts(self.bm.functions.transfer(bid, "0x" + "00" * 20, ONE), self.A, "zero address")
-
-    def test_expire_after_deadline_and_redeem_by_what_each_put_in(self):
-        A, B, C = self.A, self.B, self.C
-        other = self.post()
-        self.buy(other, C, 2 * ONE)                                   # a second bounty's pool must stay untouched
-        bid = self.post(epochs_open=1)
-        ca = self.buy(bid, A, 2 * ONE)                                # A's coins are cheaper than B's
-        self.buy(bid, B, 5 * ONE + 1)
-        pool = self.b(bid)["pool"]
-        self.reverts(self.bm.functions.expire(bid), A, "not expirable")
-        self.reverts(self.bm.functions.redeem(bid), A, "not expired")
-        self.travel(DAY + 1)
-        self.reverts(self.bm.functions.buy(bid, ONE, 10**12), C, "not open")
-        self.tx(self.bm.functions.expire(bid), C)                     # anyone can expire
-        self.assertEqual(self.b(bid)["status"], 2)
-        self.reverts(self.bm.functions.solve(bid, b"\x09" * 32), self.settler, "cannot solve")
-        a0, b0 = self.bal(A), self.bal(B)
-        self.tx(self.bm.functions.redeem(bid), A)
-        self.assertEqual(self.bal(A) - a0, ca)                        # what it put in, not a share by coin count
-        self.reverts(self.bm.functions.redeem(bid), A, "nothing to redeem")
-        self.tx(self.bm.functions.redeem(bid), B)
-        self.assertEqual((self.bal(A) - a0) + (self.bal(B) - b0), pool)  # last redeemer takes the remainder
-        self.assertEqual(self.b(bid)["pool"], 0)
-        self.assertEqual(self.bal(self.bm.address), self.b(other)["pool"])
 
 
 # ======================================================================================================================

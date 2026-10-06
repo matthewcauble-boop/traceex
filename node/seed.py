@@ -3,14 +3,14 @@
   examples/flight_emails  two agents' skeleton traces from a 26M on-device model, a bounty that a routing learning
                           solved (first-pass 63.3% -> 73.3% on unseen airlines), and an autopilot's follow-up bounty.
   examples/code_repair    244 verified Python fixes from Qwen2.5-0.5B-Instruct (MBPP train split, CC BY 4.0), the
-                          maintainer's bounty and its backers, and the attested LoRA built from those fixes.
+                          maintainer's bounty and the backers' pledges, and the attested LoRA built from those fixes.
 
 Everything is replayed from the recorded runs through the node's own HTTP API (a private loopback listener, so the
 operator-only calls work); nothing is made up. The demo accounts are the examples' fixed addresses (0xaaaa…, 0x7777…).
 Epoch 1 is then settled, so the node opens on epoch 2 with a published payout root. A database that already holds
 traces is left alone.
 
-On a coin-economy node (node/coin.py) the seed also stakes three validators and runs the federation for real: each
+On a sats node (node/sats.py, v0.6) the seed also stakes three validators and runs the federation for real: each
 validator holds its own slice of the held-out data (one airline's email each; a third of the 500 MBPP problems each),
 commits, then reveals its paired measurement. Learnings are validated in epoch 2, so that node opens on epoch 3.
 
@@ -55,7 +55,7 @@ def _load(*parts):
 
 def _grant(ex, accounts, amount=None):
     """On a testnet node every spend needs test money; the demo accounts get theirs the way anyone does (the node's
-    faucet amount: 30,000 test sats on a coin node)."""
+    faucet amount: 30,000 test sats on a sats node)."""
     if not ex.test_credits:
         return
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -97,23 +97,20 @@ def seed(ex, url):
     from model import Model
     import tasks
 
-    coin_mode = getattr(ex, "economy", "") == "coin"
-    # The demo's amounts are the same numbers on both nodes: msats on a coin node (everything priced in sats), micros
+    sats_mode = getattr(ex, "economy", "") == "sats"
+    # The demo's amounts are the same numbers on both nodes: msats on a sats node (everything paid in sats), micros
     # on the v0.1 dollar node. 10,000 msats is 10 sats, and $0.01 on the dollar node.
-    amt = (lambda m: {"msats": m}) if coin_mode else (lambda m: {"micros": m})
-    bid_at = (lambda m: {"price_msats": m}) if coin_mode else (lambda m: {"price_micros": m})
-    per_call = (lambda m: {"per_call_msats": m}) if coin_mode else (lambda m: {"per_call_micros": m})
-    budget = (lambda m: {"back_msats": m, "budget_msats": m}) if coin_mode else \
+    amt = (lambda m: {"msats": m}) if sats_mode else (lambda m: {"micros": m})
+    bid_at = (lambda m: {"price_msats": m}) if sats_mode else (lambda m: {"price_micros": m})
+    per_call = (lambda m: {"per_call_msats": m}) if sats_mode else (lambda m: {"per_call_micros": m})
+    budget = (lambda m: {"back_msats": m, "budget_msats": m}) if sats_mode else \
         (lambda m: {"back_micros": m, "budget_micros": m})
-    money = (lambda m: f"{m / 1000:,.0f} sats") if coin_mode else (lambda m: f"${m / 1e6:,.2f}")
+    money = (lambda m: f"{m / 1000:,.0f} sats") if sats_mode else (lambda m: f"${m / 1e6:,.2f}")
     _grant(ex, [KIM, RAJ, LEE, CONSUMER, AUTO, HOST, TRAINER, MAINTAINER, BIDDER2, BIDDER3, BIDDER4, BIDDER5,
                 *CODE_PRODUCERS, *SEED_VALIDATORS])
-    if coin_mode:                                # three validators stake; the trainer buys TXC for two bonds
-        from coin import UNIT
+    if sats_mode:                                # three validators stake 15,000 sats each
         for v in SEED_VALIDATORS:
-            ex.swap(v, "buy", 16_000_000)
-            ex.register_validator(v, 1_500 * UNIT)
-        ex.swap(TRAINER, "buy", 12_000_000)
+            ex.register_validator(v, 15_000_000)
     node = Client(url)
     node._call("POST", "/v0/checkers", {"id": "flight-rules", "author": CHECKER_AUTHOR})
     node._call("POST", "/v0/checkers", {"id": "mbpp-tests", "author": CHECKER_AUTHOR})
@@ -132,9 +129,8 @@ def seed(ex, url):
     fb = Client(url, CONSUMER).post_bounty(title="Flight extraction: 70% first-pass on unseen airlines",
                                            path="extract/travel/flight", eval_set=eval_hash, target=0.70,
                                            base_model=Model.name, epochs=EPOCHS)
-    k = Client(url, KIM).buy_coins(fb["id"], **amt(2_000_000))
-    Client(url, RAJ).buy_coins(fb["id"], **amt(3_000_000))
-    Client(url, KIM).transfer_coins(fb["id"], LEE, k["coins"] / 2)
+    Client(url, KIM).pledge(fb["id"], **amt(2_000_000))
+    Client(url, RAJ).pledge(fb["id"], **amt(3_000_000))
     traces = []
     for who, emails in ((A("a"), ["southwest", "united"]), (A("b"), ["delta"])):
         ag = agent(who)
@@ -146,7 +142,7 @@ def seed(ex, url):
     for who, price in ((TRAINER, 900_000), (BIDDER2, 600_000), (HOST, 250_000)):
         Client(url, who).bid(lot, **bid_at(price))
     node.clear()
-    if coin_mode:                   # licence money waits for the traces each buyer used: these two name theirs, the
+    if sats_mode:                   # licence money waits for the traces each buyer used: these two name theirs, the
         _direct(ex, lot, (BIDDER2, HOST))         # trainer's learnings do it for the trainer
     artifact, parents = routing_from_traces(traces)
     artifact["name"] = "Field routing for flight emails"
@@ -159,11 +155,11 @@ def seed(ex, url):
     lid = Client(url, TRAINER).register_learning(L)["id"]
     story += [f"{len(traces)} skeleton traces filed under extract/travel/flight by 2 agents: no names, codes, dates "
               "or prices left their devices"]
-    if not coin_mode:
+    if not sats_mode:
         won = Client(url, TRAINER).claim_bounty(fb["id"], lid)
         Client(url, CONSUMER).report_usage(lid, 5_000)
         story += [f"bounty #{fb['id']} solved by a routing learning: first-pass {before:.1%} → {after:.1%} on unseen "
-                  f"airlines; pool ${won['pool_micros'] / 1e6:,.2f} paid, coin holders now earn 20% of every use"]
+                  f"airlines; its ${won['pool_micros'] / 1e6:,.2f} of pledges paid the solver and the traces"]
     routed = apply_routing(model, artifact, flight.context_for)
 
     # --- open weights: the maintainer's bounty, 244 verified Python fixes, the LoRA built from them ------------------
@@ -173,7 +169,7 @@ def seed(ex, url):
                                              path="code/generate", base_model=QWEN, eval_set=base["eval_set"],
                                              target=rule["target"], epochs=EPOCHS)
     for who, spend in ((KIM, 4_000_000), (RAJ, 3_000_000), (LEE, 3_000_000)):
-        Client(url, who).buy_coins(cb["id"], **amt(spend))
+        Client(url, who).pledge(cb["id"], **amt(spend))
     for t in lot1:
         Client(url, t["producer"]).submit(t)
     prompts = {t["task_id"]: tasks.prompt(t) for t in tasks.load("train")}
@@ -189,7 +185,7 @@ def seed(ex, url):
     for who, price in ((TRAINER, 2_000_000), (BIDDER4, 1_200_000), (BIDDER3, 900_000)):
         Client(url, who).bid(code_lot, **bid_at(price))
     node.clear()
-    if coin_mode:
+    if sats_mode:
         _direct(ex, code_lot, (BIDDER4, BIDDER3))
     for t in lot2:
         Client(url, t["producer"]).submit(t)
@@ -204,7 +200,7 @@ def seed(ex, url):
                        parents=[(json_id(t), 1) for t in lot1 + lot2], trainer=TRAINER, attestation=att,
                        release="open", **per_call(50))
     lid2 = Client(url, TRAINER).register_learning(L)["id"]
-    if not coin_mode:
+    if not sats_mode:
         Client(url, HOST).report_usage(lid2, 400_000)
 
     # --- an agent on autopilot meets a failure nobody has fixed, and posts a bounty for it ---------------------------
@@ -222,23 +218,23 @@ def seed(ex, url):
                 joined.append(a["bounty"])
 
     backed = acts.get("backed_existing_bounty", 0)
-    story += [f"bounty #{cb['id']} posted free: +3 points first-try pass@1 for {QWEN}; kim, raj and lee back it with "
-              f"{money(10_000_000)}",
+    story += [f"bounty #{cb['id']} posted free: +3 points first-try pass@1 for {QWEN}; kim, raj and lee pledge "
+              f"{money(10_000_000)} to it, refunded if nobody reaches the target",
               f"{len(lot1)} open traces filed under code/generate by 3 agents' unit tests (round 1)"
-              + (f"; their autopilots back bounty #{cb['id']} {backed} times for the failures nobody fixed" if backed else ""),
+              + (f"; their autopilots pledge to bounty #{cb['id']} {backed} times for the failures nobody fixed" if backed else ""),
               f"{len(lot2)} more traces from the adapted model's own failures (round 2)",
               f"LoRA v2 attested: {rep['base']['rate']:.1%} → {r['rate']:.1%} with one round of checker feedback "
               f"(p = {r['vs_base']['p_value']:.1g}), released as open weights",
               f"LoRA v2 first try: {base['rate']:.1%} → {ev['rate']:.1%}, not significant; bounty #{cb['id']} stays open"]
-    if not coin_mode:
+    if not sats_mode:
         story.append("a host serves the open weights: 400,000 calls metered at $0.00005")
     if posted:
         story.append(f"an agent on autopilot hit the same flight failure twice and posted bounty #{posted[0]} free, "
-                     f"backed with {money(1_000_000)} of its budget")
+                     f"pledging {money(1_000_000)} of its budget")
     elif joined:
         story.append(f"an agent on autopilot hit the same flight failure twice; bounty #{joined[0]} already covers it, "
-                     f"so it backed that one with {money(1_000_000)} of its budget")
-    if coin_mode:
+                     f"so it pledged {money(1_000_000)} of its budget to that one")
+    if sats_mode:
         story += federate(ex, url, flight, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
     return story
 
@@ -259,12 +255,12 @@ def _paired_se(diffs):
 
 
 def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents, code_parents):
-    """Coin economy: settle epoch 1 (the beacon draws the validators), then each validator measures its own slice of
-    the held-out data, commits, and reveals. Accepted learnings earn at the next settlement."""
+    """Sats node: settle epoch 1 (the beacon draws the validators), then each validator measures its own slice of
+    the held-out data, commits, and reveals. Accepted learnings earn as people pay to use them."""
     from traceex import Client, first_pass_score
-    from coin import attestation_digest
+    from sats import attestation_digest
     ex.settle()
-    story = [f"3 validators staked {1_500:,} TXC each; each holds its own slice of the held-out data"]
+    story = ["3 validators staked 15,000 sats each; each holds its own slice of the held-out data"]
     fields = list(flight.FIELDS)
     shards = {}
     for v, name in zip(SEED_VALIDATORS, sorted(flight.EVAL)):          # one unseen airline's email each
@@ -303,9 +299,9 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
                  f"median {vc['median_gain'] * 100:+.1f}, {vc['status']}: it may now earn, as people use it")
     if vc["status"] == "accepted":
         Client(url, HOST).report_usage(lid2, 400_000)
-        story.append("a host serves the open weights: 400,000 calls at 0.05 sat (20,000 sats, about $17) buy TXC from "
-                     "the pool and burn it; the epoch's emission is minted to LoRA v2's traces, trainer and validators "
-                     "for that work, never more than the burn was worth")
+        story.append("a host serves the open weights: 400,000 calls at 0.05 sat (20,000 sats, about $17), split at "
+                     "settlement: traces 60, trainer 25, checkers 10, validators 5; the traces' part waits 4 epochs "
+                     "in escrow in case a challenge claws it back")
     story.append("licence money waits for the traces each buyer used: the trainer's learnings name its traces, the "
                  "other buyers named theirs")
     return story

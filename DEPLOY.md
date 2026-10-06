@@ -8,8 +8,8 @@ One Render web service serves the website, the API and the MCP endpoint, with th
 
 **https://tracex-indol.vercel.app** is live. Vercel serves the website from its edge, and a Python function
 (`api/node.py`) answers `/v0`, `/mcp` and `/.well-known` from a snapshot of the seeded testnet. Search, bounties,
-learnings, verdicts, the coin's numbers and the read-only MCP tools all work. Anything that writes (a wallet, a swap, a
-trace, a bounty) gets a note that it opens on the live node.
+learnings, verdicts, the economy's numbers (in sats) and the read-only MCP tools all work. Anything that writes (a wallet,
+a pledge, a trace, a bounty) gets a note that it opens on the live node.
 
 A Vercel function keeps no disk from one instance to the next, so it can't hold wallets and a ledger; the live
 exchange runs on Render, below. Once it does, point Vercel at it so the same address serves the live exchange. In
@@ -49,25 +49,28 @@ plan that works for a public exchange.
 5. The first build takes two to three minutes. On first boot the node loads the repo's worked examples (247 real
    traces, a LoRA and a routing learning with their attestations, three bounties) and settles epoch 1, so the exchange opens on epoch 2.
 6. Open the service URL (`https://tracex.onrender.com` or similar). The site is live: anyone can open a test wallet,
-   back and post bounties, share fixes and search. Agents connect with
+   pledge to and post bounties, share fixes and search. Agents connect with
    `claude mcp add --transport http tracex https://<your-url>/mcp`.
 7. In the service's **Environment** tab, copy `TRACEX_ADMIN_TOKEN` into your password manager. It is the operator key.
 8. Optional: **Settings → Custom Domains** to put it on your own domain (Render issues the certificate).
 
 Every push to `main` redeploys; the disk keeps the data. The seed never runs again on a database that has traces.
 
-## The coin economy
+## The sats economy (v0.6, no token)
 
-The blueprint runs the node with `TRACEX_ECONOMY=coin` (testnet v0.5, everything priced in bitcoin; it opens on an
-empty database and refuses a v0.4 or v0.3 one, so **a node upgrading from v0.4 needs a fresh database**: delete
-`/var/data/exchange.db` on the disk, or point `TRACEX_DB` at a new file, and the seed runs again). Users pay in credits
-(test sats buy TXC from the pool and burn it, a thousand credits a sat: one per msat), and each epoch mints at most a
-fixed emission to the work that was paid for, never more than its credits were worth.
-A federation of staked validators decides which learnings may earn; no verdict mints or moves money by itself
-(SPEC 4e, 4f). On first boot the seed stakes three validators (1,500 TXC each, operator-run) and validates the seeded
-learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's 20,000 sats of
-usage is minted to its traces; the flight routing learning is inconclusive (three emails can't prove a gain), so its bounty stays open. The
-node opens on epoch 3.
+The blueprint runs the node with `TRACEX_ECONOMY=sats` (testnet v0.6: everything is paid directly in sats, and there is
+no token). It opens on an empty database and refuses a v0.5 (TXC) one or any older one, so **a node upgrading from
+v0.5 needs a fresh database**: delete `/var/data/exchange.db` on the disk, or point `TRACEX_DB` at a new file, and the
+seed runs again. `TRACEX_ECONOMY=coin` is refused.
+
+Users pay in sats (test sats here; Lightning with L402 on mainnet). Each paid use of a learning is split at settlement:
+traces 60, trainer 25, checkers 10, validators 5; the traces' part waits 4 epochs in escrow so a challenge can give it
+back to the payer. Every payout is a split of a real payment, and the node refuses any payout past what its payer paid
+in less the fee (SPEC 4e). A federation of staked validators decides which learnings may be paid for; no verdict moves
+money by itself (SPEC 4f). On first boot the seed stakes three validators (15,000 sats each, operator-run) and validates
+the seeded learnings with them: LoRA v2 is accepted on three slices of the 500 held-out problems, and a host's 20,000
+sats of usage is split down its tree; the flight routing learning is inconclusive (three emails can't prove a gain), so
+its bounty stays open. The node opens on epoch 3.
 
 New learnings are validated by the validators the beacon draws for them. On the testnet those are operator-run, and
 their commits and reveals are relayed with the admin token until validator keys sign them:
@@ -78,32 +81,34 @@ python node/validator.py --url $URL --token $TOKEN --address 0xVALIDATOR --learn
 # run once to commit, again to reveal; GET /v0/learnings/<id>/verdict shows who was drawn and the result
 ```
 
-Add a validator: `POST /v0/validators {"address": ..., "stake_units": "1500000000000000000000"}` (1,500 TXC; TXC has
-18 decimals and every `_units` amount travels as a decimal string; the minimum is 10,000 sats of TXC at the reference price) with the admin token (the address
-needs the TXC: `POST /v0/swap`). Anyone can challenge an accepted learning, any time:
-`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes 2,000 sats of TXC). `GET /v0/coin` shows the price in sats, supply,
-burns, vesting, licence money waiting and stake.
+Add a validator: `POST /v0/validators {"address": ..., "stake_sats": 15000}` with the admin token (the minimum is 10,000
+sats; the address needs the sats in its wallet). Anyone can challenge an accepted learning, any time:
+`POST /v0/learnings/<id>/challenges {"challenger": ...}` (stakes 2,000 sats). `GET /v0/economy` shows where the sats
+are: paid in, paid out, refunded, fees, what waits in escrow, what is staked, and the forfeits destroyed, with each
+epoch's burn batch.
 
 Operator-only, with the admin token:
 
-- **Decoys.** These check that validators measure. Seal a learning's true gain with `coin.decoy_digest(gain, salt)`,
+- **Decoys.** These check that validators measure. Seal a learning's true gain with `sats.decoy_digest(gain, salt)`,
   fund its bond from any account, and register it with `POST /v0/decoys {"learning": {...}, "digest": ..., "funder": ...}`.
   It looks like any other learning. Once its validators have revealed, `POST /v0/decoys/unseal
-  {"learning": ..., "gain": ..., "salt": ...}` slashes whoever reported a gain it doesn't have, returns the bond and
-  hides it.
-- **Licence money.** It waits until each buyer shows which traces it used. A buyer's learnings do that automatically.
+  {"learning": ..., "gain": ..., "salt": ...}` gives a strike to whoever reported a gain further than 4 of its own
+  standard errors from the truth, returns the bond and hides it. A second strike inside 30 epochs costs that validator
+  25% of its stake, so run enough decoys that every validator meets at least two in a window.
+- **Licence money.** It waits in escrow until each buyer shows which traces it used. A buyer's learnings do that automatically.
   A buyer that builds nothing names the traces: `POST /v0/licences/direct {"lot": ..., "buyer": ..., "traces": [...]}`.
-- **Transaction fees.** Every transaction pays 58 msats in credits (about $0.00005), billed each epoch and burned. They are the
-  operator's claim on 10% of each epoch's emission, minted to `TRACEX_FEE_TO`, the address that pays the hosting bill
-  (set it in the Render dashboard). Until it is set they count for an account called `network`. `GET /v0/fees` and
-  `GET /v0/coin` show what has been burned and minted. The fee is fixed in sats; to hold it at $0.00005 instead, run
-  with `Params(fee_repeg_epochs=N)` and keep the reference price current with
-  `POST /v0/admin/btc-price {"usd_per_btc": 85962}` (it re-pegs every N epochs and says so in the feed).
+- **Transaction fees.** Every transaction pays 58 msats (about $0.00005), at once, to `TRACEX_FEE_TO`, the address
+  that pays the hosting bill (set it in the Render dashboard; until it is set the fees go to an account called
+  `network`). They are the operator's whole income. `GET /v0/fees` and `GET /v0/economy` show what they have paid.
+  The fee is fixed in sats; to hold it at $0.00005 instead, run with `Params(fee_repeg_epochs=N)` and keep the bitcoin
+  price current with `POST /v0/admin/btc-price {"usd_per_btc": 85962}` (it re-pegs every N epochs and says so in the
+  feed).
 - **Bitcoin price.** `TRACEX_BTC_USD` (or `POST /v0/admin/btc-price`) sets the dollars-per-bitcoin reference for the
   approximate dollar figures the API and site show beside sats (default $85,962, Coinbase spot on 2026-10-05). No
   amount is ever computed from it, except the fee re-peg when it is on.
-- **Credits.** `POST /v0/credits {"account": ..., "sats": 1000}` makes 1,000,000 credits (msats) from 1,000 sats;
-  `{"units": "..."}` burns held TXC instead. Amounts in `micros` are refused.
+- **Forfeits.** Lost bonds, slashed stake and failed challenge stakes go to the account `burn:unspendable`, which no call
+  can spend from; each epoch's forfeits are one batch with a digest (`GET /v0/economy`). On mainnet the settlement
+  transaction pays each batch to an `OP_RETURN` output carrying its digest. Amounts in `micros` are refused everywhere.
 - **Bounty claims** carry the poster's own measurement on its hidden eval:
   `POST /v0/bounties/<id>/claims {"learning": ..., "attestation": {"validator": <poster>, "eval_set": ..., "after": ...}}`.
 
@@ -111,11 +116,11 @@ Operator-only, with the admin token:
 
 It is a **testnet**. Each new wallet can take 30,000 test sats once, every spend has to be covered by them, and no
 real money moves (a spend a wallet can't cover answers `402 Payment Required` with an L402 challenge whose invoice is a
-placeholder); TXC exists only on this node. Payouts are still computed exactly and every epoch publishes its Merkle
-payout root, so the numbers are the protocol's numbers. Before a real coin: signed wallets, validator and poster
-keys, a public randomness beacon (drand), decoys run by more than the operator, a validator set large and independent
-enough that blocking honest work is out of any one party's reach, an audited token and payout contract, and a lawyer's
-read on the coin.
+placeholder). Payouts are still computed exactly and every epoch publishes its Merkle payout root, so the numbers are
+the protocol's numbers. There is no token to launch. Before real sats: signed wallets, validator and poster keys, a
+public randomness beacon (drand), decoys run by more than the operator, a validator set large and independent enough
+that blocking honest work is out of any one party's reach, a Lightning node behind the L402 challenge, and an audited
+settlement for the payout roots and burn batches.
 
 Wallet addresses aren't signed yet: the website makes a random address and keeps it in the browser, and the API trusts
 the address it's given. Before real money: signed requests, validator signatures on attestations, a Lightning node
@@ -124,9 +129,9 @@ contracts in `contracts/` are the v0.1 sketch, built for a USDC chain) after an 
 
 ## Operating it
 
-Some calls are kept to the operator on a public node, because attestations and transfers are not signed yet:
-registering learnings and checkers, claiming bounties, moving coins between wallets, settling and clearing by hand,
-and takedowns. Send the admin token as a bearer token:
+Some calls are kept to the operator on a public node, because attestations and claims are not signed yet:
+registering learnings and checkers, staking validators, claiming bounties, settling and clearing by hand, and
+takedowns. Send the admin token as a bearer token:
 
 ```bash
 TOKEN=...   # from Render's Environment tab
@@ -162,6 +167,6 @@ Render's **Logs** tab shows one line per request.
 ## Run the same thing locally
 
 ```bash
-python node/exchange.py --public --seed --test-credits 25000000 --epoch-hours 24 --port 8787
+python node/exchange.py --public --seed --economy sats --test-credits 30000000 --epoch-hours 24 --port 8787
 # open http://127.0.0.1:8787
 ```

@@ -80,7 +80,8 @@ class Learning(dict):
     @classmethod
     def build(cls, *, kind, task, base_model, artifact, parents, trainer, attestation, per_call_msats=None,
               per_call_micros=None, split=None, release=None):
-        """per_call_msats: the price of one metered call in millisatoshis (a coin node: everything is priced in sats).
+        """per_call_msats: the price of one metered call in millisatoshis, set by the seller (a sats node: everything
+        is paid in sats).
         per_call_micros: the same in micro-dollars, for the retired v0.1 dollar node. Give one.
         release: None (licensed: buyers get the artifact, every metered use pays royalties) or "open" (the artifact
         is published for anyone, e.g. open weights; it can't be metered once public, so it is funded up front by a

@@ -1,7 +1,7 @@
 """Reference exchange node (spec section 7). Standard library only: http.server + sqlite3.
 
     python node/exchange.py --port 8787 --db exchange.db                 # local
-    python node/exchange.py --host 0.0.0.0 --public --seed --economy coin --test-credits 30000000 --epoch-hours 24
+    python node/exchange.py --host 0.0.0.0 --public --seed --economy sats --test-credits 30000000 --epoch-hours 24
 
 One process plays the off-chain half of the protocol: it accepts skeleton traces, groups them into lots, takes sealed
 bids, clears each epoch, registers learnings with validator attestations, meters usage, and at settlement computes
@@ -28,22 +28,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk", "python"
 from traceex import canonical, object_id  # noqa: E402
 from traceex.client import privacy_leaks  # noqa: E402
 from traceex.auction import Bid, clear_shared  # noqa: E402
-from traceex.royalty import split_trace_sale, split_usage, MAX_DEPTH  # noqa: E402
+from traceex.royalty import split_trace_sale, split_usage, pro_rata, MAX_DEPTH  # noqa: E402
 from traceex.merkle import leaf, build_tree, proof  # noqa: E402
 from traceex.classify import classify, default_engine, nodes, RulesEngine, TAXONOMY_VERSION  # noqa: E402
-from traceex import bountycoin as coin  # noqa: E402
 
-# A bounty's pool, when a learning claims it: the solver is paid most, the traces it was built from still earn.
+# A bounty's pledges, when a learning solves it: the solver is paid most, the traces it was built from still earn.
+# Backers get the solution and nothing else: no token, no share of its revenue, nothing to trade.
 BOUNTY_SPLIT = {"trainer": 0.70, "traces": 0.20, "checkers": 0.05, "validators": 0.05}
 # The standard transaction fee: 58 millisatoshis (TX_FEE_MSATS), about $0.00005 with bitcoin at $85,962 (Coinbase
 # spot, 2026-10-05) and about 125 times the electricity of the dearest transaction examples/fees/measure.py finds
 # (registering a learning, its 5.5 KB kept in three copies for ten years: about $0.0000004), far more than any other.
-# The margin is the point: the fee funds the network (on a coin node it is paid in msat credits and burned, and it is
-# the operator's claim on 10% of each epoch's emission) and prices out spam at machine scale, where a billion junk
-# transactions cost 58 million sats (about $50,000) instead of about $400. This is the one setting; 100x to 200x the
-# measured electricity keeps both jobs. It is fixed in sats, so its dollar value floats with bitcoin; a coin node can
-# re-peg it to a dollar target every N epochs (coin.Params.fee_repeg_epochs, off by default). A millisatoshi is the
-# smallest amount Lightning moves, so the fee is a whole number of them and nothing carries over.
+# The margin is the point: the fee is the whole income of the operator that served the transaction (paid to it in
+# sats, at once) and prices out spam at machine scale, where a billion junk transactions cost 58 million sats (about
+# $50,000) instead of about $400. This is the one setting; 100x to 200x the measured electricity keeps both jobs. It is
+# fixed in sats, so its dollar value floats with bitcoin; a sats node can re-peg it to a dollar target every N epochs
+# (sats.Params.fee_repeg_epochs, off by default). A millisatoshi is the smallest amount Lightning moves, so the fee is a
+# whole number of them and nothing carries over.
 TX_FEE_MSATS = 58
 # Retired with the v0.1 dollar node (USDC settlement is no longer the mainnet path; see SPEC 5): its fee in
 # nano-dollars, $0.00005, billed in whole micro-dollars.
@@ -64,10 +64,12 @@ CREATE TABLE IF NOT EXISTS labels   (id TEXT PRIMARY KEY, path TEXT, confidence 
                                      modes TEXT, model TEXT, task TEXT);
 CREATE TABLE IF NOT EXISTS bounties (id INTEGER PRIMARY KEY, poster TEXT, title TEXT, path TEXT, failure TEXT,
                                      base_model TEXT, eval_set TEXT, target REAL, pool INT DEFAULT 0,
-                                     supply REAL DEFAULT 0, deadline INT, status TEXT, winner TEXT, learning TEXT,
-                                     epoch INT);
-CREATE TABLE IF NOT EXISTS holdings (bounty INT, holder TEXT, coins REAL, PRIMARY KEY (bounty, holder));
-CREATE TABLE IF NOT EXISTS bases    (bounty INT, holder TEXT, amount INT, PRIMARY KEY (bounty, holder));
+                                     pledged INT DEFAULT 0, deadline INT, status TEXT, winner TEXT, learning TEXT,
+                                     epoch INT, key TEXT, note TEXT);
+CREATE INDEX IF NOT EXISTS bounties_key ON bounties(key, status);
+CREATE TABLE IF NOT EXISTS pledges  (id INTEGER PRIMARY KEY, bounty INT, backer TEXT, amount INT, epoch INT,
+                                     payment INT);
+CREATE INDEX IF NOT EXISTS pledges_bounty ON pledges(bounty);
 CREATE TABLE IF NOT EXISTS fees     (account TEXT PRIMARY KEY, nanos INT);
 CREATE TABLE IF NOT EXISTS events   (id INTEGER PRIMARY KEY, at TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS grants   (account TEXT PRIMARY KEY, micros INT, at TEXT, source TEXT);
@@ -135,16 +137,22 @@ def need_address(a, what):
     return a
 
 
-def wire(obj, key=""):
-    """What goes into JSON for any client: TXC amounts (keys ending in _units, 18 decimals) travel as decimal strings,
-    and so does any other integer JavaScript would round (above 2**53)."""
+def wire(obj):
+    """What goes into JSON for any client: every amount is an integer (msats or sats); one JavaScript would round
+    (2**53 msats and up, about 90,000 BTC) travels as a decimal string."""
     if isinstance(obj, dict):
-        return {k: wire(v, k if str(k).endswith("_units") else key) for k, v in obj.items()}
+        return {k: wire(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [wire(v, key) for v in obj]
-    if isinstance(obj, int) and not isinstance(obj, bool) and (key.endswith("_units") or abs(obj) >= SAFE_INT):
+        return [wire(v) for v in obj]
+    if isinstance(obj, int) and not isinstance(obj, bool) and abs(obj) >= SAFE_INT:
         return str(obj)
     return obj
+
+
+def bounty_key(path, failure="", base_model=""):
+    """What a bounty is for, as the classifier files it: taxonomy branch, failure mode, base model. A new post with the
+    key of an open bounty backs that bounty instead of opening a duplicate."""
+    return "|".join((str(path or "").strip("/"), str(failure or "").strip(), str(base_model or "").strip()))
 FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS trace_fts USING fts5(id UNINDEXED, path, signature, model, task, body)"
 
 
@@ -195,27 +203,39 @@ class SafeDB:
 
 class Exchange:
     """The v0.1 reference node: contributors paid in dollars (micros). Retired as a mainnet path (USDC settlement and
-    x402 gave way to bitcoin over Lightning, SPEC 5); kept as the library's default for its tests and examples. The coin
-    economy (node/coin.py) prices everything in sats."""
-    money = "micros"                              # the unit every amount key ends in: micros here, msats on a coin node
+    x402 gave way to bitcoin over Lightning, SPEC 5); kept as the library's default for its tests and examples. The sats
+    node (node/sats.py, v0.6) pays everything in millisatoshis, with no token."""
+    money = "micros"                              # the unit every amount key ends in: micros here, msats on a sats node
 
     def _fmt(self, amount):
         """An amount for people, in this node's money."""
         return f"${amount / 1e6:,.2f}"
 
     def __init__(self, path=":memory:", *, k=10, reserve_micros=1_000, validators=("0x" + "5" * 40,),
-                 tx_fee_nanos=None, fee_to=None, engine=None, test_credits=0, max_db_bytes=0):
+                 tx_fee_nanos=None, fee_to=None, engine=None, test_credits=0, max_db_bytes=0, unbacked_epochs=3):
         """test_credits: run as a testnet. Each new wallet can take this much test money once (micros here; msats on a
-        coin node), and every spend (coins, bids, metered usage, the transaction fee) must be covered by the wallet's
+        sats node), and every spend (pledges, bids, metered usage, the transaction fee) must be covered by the wallet's
         balance. 0 = settlement is external, the reference behaviour. A node that keeps wallets charges every transaction the
         standard fee (TX_FEE_NANOS unless `tx_fee_nanos` says otherwise) and pays it to `fee_to`, whoever runs it and
-        so pays its electricity ("network" until the operator names an address)."""
+        so pays its electricity ("network" until the operator names an address). unbacked_epochs: a bounty nobody has
+        pledged to expires after this many epochs (and open bounties nobody backs stay out of the default search)."""
         self.path, self.max_db_bytes = path, int(max_db_bytes)
         self.tx_fee_nanos = int(TX_FEE_NANOS if tx_fee_nanos is None and test_credits else tx_fee_nanos or 0)
         self.fee_to = fee_to or "network"
         self.lock = threading.RLock()
         self.db = SafeDB(sqlite3.connect(path, check_same_thread=False), self.lock)
-        self.db.executescript(SCHEMA)
+        try:
+            self.db.executescript(SCHEMA)
+        except sqlite3.OperationalError as e:        # a database from before v0.6 (bounty coins, or v0.5's token)
+            was = None
+            try:
+                was = self.db.execute("SELECT v FROM meta WHERE k='coin_version'").fetchone()
+            except sqlite3.OperationalError:
+                pass
+            self.db.close()
+            what = f"a testnet v{was[0]} coin economy (TXC)" if was else "an older node (before v0.6)"
+            raise ValueError(f"this database holds {what}; v0.6 has no token and pays everything in sats: start it "
+                             "on an empty database") from e
         self.test_credits = int(test_credits)
         self.quiet = False                        # bulk loads (the seed) write one summary event instead of one per row
         self.refile = None                        # status of the last re-classification run
@@ -226,6 +246,7 @@ class Exchange:
             self.fts = False
         self.engine = engine or default_engine()
         self.k, self.reserve, self.validators = k, reserve_micros, list(validators)
+        self.unbacked_epochs = int(unbacked_epochs)
         if self._meta("epoch") is None:
             self._set_meta("epoch", "1")
 
@@ -320,10 +341,12 @@ class Exchange:
 
     def wallet(self, account):
         g = self.db.execute("SELECT micros FROM grants WHERE account=?", (account,)).fetchone()
-        coins = {str(b): round(c, 6) for b, c in self.db.execute(
-            "SELECT bounty, coins FROM holdings WHERE holder=? AND coins > 1e-9", (account,))}
+        pledges = {str(b): int(m) for b, m in self.db.execute(
+            "SELECT p.bounty, SUM(p.amount) FROM pledges p JOIN bounties b ON b.id = p.bounty "
+            "WHERE p.backer=? AND b.status='open' GROUP BY p.bounty", (account,))}
         return {"account": account, "opened": bool(g), f"grant_{self.money}": g[0] if g else 0,
-                f"balance_{self.money}": self._funds(account), "coins": coins, "testnet": bool(self.test_credits)}
+                f"balance_{self.money}": self._funds(account), f"pledged_{self.money}": pledges,
+                "testnet": bool(self.test_credits)}
 
     def events(self, limit=30):
         rows = self.db.execute("SELECT at, text FROM events ORDER BY id DESC LIMIT ?", (min(int(limit), 200),)).fetchall()
@@ -474,7 +497,8 @@ class Exchange:
 
         sort: "relevant" (default with words: full-text rank, a match in the branch name or failure label counts most),
         "new" (default without words) or "bounty" (traces that feed the richest open bounty first). Open bounties on the
-        same branch come back with the results, so a trainer sees supply (traces) and demand (bounties) together.
+        same branch that someone has backed come back with the results, so a trainer sees supply (traces) and demand
+        (bounties) together; GET /v0/bounties lists the unbacked ones too.
         facets=True adds counts per branch and per failure mode, for building a browse tree."""
         q, path = (q or "").strip(), (path or "").strip("/")
         sort = sort or ("relevant" if q else "new")
@@ -490,8 +514,8 @@ class Exchange:
                 mode_counts[m] = mode_counts.get(m, 0) + 1
         if failure:
             rows = [r for r in rows if failure in modes_of(r[3])]
-        open_all = self.bounties(status="open")["bounties"]
-        pool = lambda r: max([b.get(f"pool_{self.money}", b.get("pool_units", 0)) for b in open_all
+        open_all = [b for b in self.bounties(status="open")["bounties"] if b[f"pool_{self.money}"] > 0]   # backed ones
+        pool = lambda r: max([b[f"pool_{self.money}"] for b in open_all
                               if self._feeds(b, r[1], r[2], modes_of(r[3]))] or [0])
         if sort == "relevant":
             rows.sort(key=lambda r: (r[5], -r[4]))
@@ -561,10 +585,17 @@ class Exchange:
         on_branch = path == b["path"] or path.startswith(b["path"] + "/")
         return on_branch and (not b["base_model"] or b["base_model"] == model) and (not b["failure"] or b["failure"] in modes)
 
+    def _seed_amount(self, b):
+        """A post's optional first pledge, in this node's money."""
+        return int(b.get("seed_micros") or b.get("reward_micros") or 0)
+
     def post_bounty(self, b):
-        """Posting is free. A bounty names a taxonomy branch (optionally a failure mode and base model), a hidden eval
-        set by hash and the score a solution must reach, and mints a coin on the bonding curve. `seed_micros` lets the
-        poster buy the first coins in the same call."""
+        """Posting is free (the transaction fee only). A bounty names a taxonomy branch (optionally a failure mode and
+        base model), a hidden eval set by hash and the score a solution must reach. It is a refundable pledge escrow:
+        anyone adds money to it, a solve pays the solver and the traces it was built from, and an unsolved bounty
+        refunds every backer what it put in. Backers get no token, no share and nothing to trade. A post whose branch,
+        failure and model match an open bounty backs that bounty instead of opening a duplicate. `seed_<money>` makes
+        the poster's first pledge in the same call."""
         if not b.get("eval_set") or not b.get("path"):
             raise ValueError("a bounty needs a path and an eval_set hash")
         need_address(b.get("poster"), "poster")
@@ -579,10 +610,22 @@ class Exchange:
         if not 0 < target <= 1:
             raise ValueError("target is a score between 0 and 1")
         epochs = max(0, min(int(b.get("epochs", 4)), 52))
-        seed = int(b.get("seed_micros") or b.get("reward_micros") or 0)
+        seed = self._seed_amount(b)
+        key = bounty_key(path, b.get("failure", ""), b.get("base_model", ""))
         with self.lock:
             if seed > 0:
-                self._need_funds(b["poster"], seed)          # before the bounty exists, so a failed seed leaves nothing
+                self._need_funds(b["poster"], seed)          # before anything is written, so a failed seed leaves nothing
+            same = self.db.execute("SELECT id, deadline FROM bounties WHERE key=? AND status='open' ORDER BY id LIMIT 1",
+                                   (key,)).fetchone()
+            if same:                                         # the same problem is already posted: back it instead
+                self._tx_fee(b["poster"])
+                self.db.commit()
+                out = {"id": same[0], "status": "open", "merged": True, "deadline_epoch": same[1],
+                       "note": f"bounty #{same[0]} is already open for {key.replace('|', ' / ').strip(' /')}: this post "
+                               "backs it instead of opening a duplicate (its poster's hidden eval decides the solve)"}
+                if seed > 0:
+                    out["pledge"] = self.pledge(same[0], b["poster"], seed)
+                return out
             if self.test_credits:
                 n = self.db.execute("SELECT COUNT(*) FROM bounties WHERE poster=? AND status='open'",
                                     (b["poster"],)).fetchone()[0]
@@ -590,129 +633,67 @@ class Exchange:
                     raise ValueError(f"{LIMITS['open_bounties_per_poster']} open bounties per poster")
             self._tx_fee(b["poster"])
             cur = self.db.execute(
-                "INSERT INTO bounties (poster,title,path,failure,base_model,eval_set,target,deadline,status,epoch)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO bounties (poster,title,path,failure,base_model,eval_set,target,deadline,status,epoch,key)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (b["poster"], b.get("title", ""), path, b.get("failure", ""), b.get("base_model", ""),
-                 str(b["eval_set"])[:200], target, self.epoch + epochs, "open", self.epoch))
+                 str(b["eval_set"])[:200], target, self.epoch + epochs, "open", self.epoch, key))
             bid = cur.lastrowid
             self._event(f"bounty #{bid} posted free on {path}: {b.get('title') or 'untitled'}")
             self.db.commit()
-        out = {"id": bid, "status": "open", "deadline_epoch": self.epoch + epochs, f"price_{self.money}": coin.price(0)}
+        out = {"id": bid, "status": "open", "deadline_epoch": self.epoch + epochs,
+               "unbacked_expires_epoch": self.epoch + self.unbacked_epochs}
         if seed > 0:
-            out["seed"] = self.buy_coins(bid, b["poster"], seed)
+            out["pledge"] = self.pledge(bid, b["poster"], seed)
         return out
 
     def _bounty(self, bounty_id):
-        r = self.db.execute("SELECT status, pool, supply FROM bounties WHERE id=?", (bounty_id,)).fetchone()
+        r = self.db.execute("SELECT status, pool, pledged FROM bounties WHERE id=?", (bounty_id,)).fetchone()
         if not r:
             raise KeyError(f"bounty {bounty_id}")
         return r
 
-    def _holding(self, bounty_id, holder):
-        r = self.db.execute("SELECT coins FROM holdings WHERE bounty=? AND holder=?", (bounty_id, holder)).fetchone()
-        return r[0] if r else 0.0
+    def _backers(self, bounty_id):
+        """{backer: what it pledged} for a bounty."""
+        return {a: int(m) for a, m in self.db.execute(
+            "SELECT backer, SUM(amount) FROM pledges WHERE bounty=? GROUP BY backer", (bounty_id,)).fetchall()}
 
-    def _set_holding(self, bounty_id, holder, coins):
-        self.db.execute("INSERT OR REPLACE INTO holdings VALUES (?,?,?)", (bounty_id, holder, max(coins, 0.0)))
-
-    def _basis(self, bounty_id, holder):
-        """What a holder has put into a bounty and not yet taken out: its cost basis."""
-        r = self.db.execute("SELECT amount FROM bases WHERE bounty=? AND holder=?", (bounty_id, holder)).fetchone()
-        return r[0] if r else 0
-
-    def _set_basis(self, bounty_id, holder, amount):
-        self.db.execute("INSERT OR REPLACE INTO bases VALUES (?,?,?)", (bounty_id, holder, max(int(amount), 0)))
-
-    def _refund_weights(self, bounty_id):
-        """Refunds go back by what each holder put in, never by coin count: cheap early coins don't claim a share of
-        later backers' money."""
-        bases = dict(self.db.execute("SELECT holder, amount FROM bases WHERE bounty=? AND amount > 0", (bounty_id,)).fetchall())
-        return bases or dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?", (bounty_id,)).fetchall())
-
-    def buy_coins(self, bounty_id, buyer, micros):
-        """Spend `micros` on the curve. Every micro goes into the bounty's pool."""
-        micros = int(micros)
-        if micros <= 0:
-            raise ValueError("spend must be positive")
-        need_address(buyer, "buyer")
+    def pledge(self, bounty_id, backer, amount):
+        """Add money to a bounty's escrow. It stays there until a solve pays it out or the bounty ends unsolved and it
+        comes back. A pledge buys nothing: no token, no share of the solution's revenue, nothing to sell or transfer."""
+        amount = int(amount)
+        if amount <= 0:
+            raise ValueError("a pledge must be more than 0")
+        need_address(backer, "backer")
         with self.lock:
-            status, pool, supply = self._bounty(bounty_id)
+            status, pool, _ = self._bounty(bounty_id)
             if status != "open":
-                raise ValueError(f"bounty {bounty_id} is {status}; buy its coins from a holder")
-            self._need_funds(buyer, micros)
-            self._tx_fee(buyer)
-            n = coin.coins_for(supply, micros)
-            self._set_holding(bounty_id, buyer, self._holding(bounty_id, buyer) + n)
-            self._set_basis(bounty_id, buyer, self._basis(bounty_id, buyer) + micros)
-            self.db.execute("UPDATE bounties SET pool=pool+?, supply=supply+? WHERE id=?", (micros, n, bounty_id))
-            self._credit(buyer, -micros, f"bounty {bounty_id} coins")
-            self._event(f"bounty #{bounty_id} backed with ${micros / 1e6:,.2f}: {n:,.1f} coins at "
-                        f"${micros / n / 1e6:.4f}; pool ${(pool + micros) / 1e6:,.2f}")
+                raise ValueError(f"bounty {bounty_id} is {status}")
+            self._need_funds(backer, amount)
+            self._tx_fee(backer)
+            self._credit(backer, -amount, f"bounty {bounty_id} pledge")
+            self.db.execute("INSERT INTO pledges (bounty, backer, amount, epoch) VALUES (?,?,?,?)",
+                            (bounty_id, backer, amount, self.epoch))
+            self.db.execute("UPDATE bounties SET pool=pool+?, pledged=pledged+? WHERE id=?", (amount, amount, bounty_id))
+            self._event(f"bounty #{bounty_id} backed with {self._fmt(amount)}; it now holds {self._fmt(pool + amount)}")
             self.db.commit()
-        return {"bounty": bounty_id, "coins": round(n, 6), "avg_price_micros": round(micros / n),
-                "next_price_micros": round(coin.price(supply + n)), "pool_micros": pool + micros}
+        return {"bounty": bounty_id, f"pledged_{self.money}": amount, f"pool_{self.money}": pool + amount,
+                "backers": len(self._backers(bounty_id)), "refund": "everything you pledged comes back if it ends unsolved"}
 
-    def sell_coins(self, bounty_id, seller, coins):
-        """While a bounty is open, sell coins back for what they cost (pro rata), never more: any profit could only come
-        out of later backers' money. The curve decides how many coins a dollar buys, so early backers hold a bigger
-        share of the solution's revenue; that is their reward."""
-        need_address(seller, "seller")
-        with self.lock:
-            status, pool, supply = self._bounty(bounty_id)
-            if status != "open":
-                raise ValueError(f"bounty {bounty_id} is {status}; its coins now earn from the solution")
-            have = self._holding(bounty_id, seller)
-            coins = min(float(coins), have)
-            if coins <= 0:
-                raise ValueError("no coins to sell")
-            self._tx_fee(seller)
-            basis = self._basis(bounty_id, seller)
-            cost = int(basis * coins / have)
-            value = min(cost, pool)
-            self._set_basis(bounty_id, seller, basis - cost)
-            self._set_holding(bounty_id, seller, have - coins)
-            self.db.execute("UPDATE bounties SET pool=pool-?, supply=supply-? WHERE id=?", (value, coins, bounty_id))
-            self._credit(seller, value, f"bounty {bounty_id} sell")
-            self._event(f"{coins:,.1f} coins of bounty #{bounty_id} sold back for what they cost, ${value / 1e6:,.2f}")
-            self.db.commit()
-        return {"bounty": bounty_id, "sold": round(coins, 6), "paid_micros": value,
-                "next_price_micros": round(coin.price(supply - coins))}
-
-    def transfer_coins(self, bounty_id, sender, to, coins):
-        """Move coins between holders, any time. (A live network checks the sender's signature; the contract does.)"""
-        need_address(sender, "from")
-        need_address(to, "to")
-        with self.lock:
-            self._bounty(bounty_id)
-            have = self._holding(bounty_id, sender)
-            coins = float(coins)
-            if coins <= 0 or coins > have + 1e-9:
-                raise ValueError(f"{sender} holds {have:.6f} coins")
-            self._tx_fee(sender)
-            basis = self._basis(bounty_id, sender)                 # the coins carry what they cost
-            moved = int(basis * min(coins / have, 1.0))
-            self._set_basis(bounty_id, sender, basis - moved)
-            self._set_basis(bounty_id, to, self._basis(bounty_id, to) + moved)
-            self._set_holding(bounty_id, sender, have - coins)
-            self._set_holding(bounty_id, to, self._holding(bounty_id, to) + coins)
-            self.db.commit()
-        return {"bounty": bounty_id, "from": sender, "to": to, "coins": coins}
-
-    def holders(self, bounty_id):
-        status, pool, supply = self._bounty(bounty_id)
-        rows = self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=? AND coins > 1e-9 ORDER BY coins DESC",
-                               (bounty_id,)).fetchall()
-        return {"bounty": bounty_id, "status": status, f"pool_{self.money}": pool, "supply": round(supply, 6),
-                f"price_{self.money}": round(coin.price(supply)), "holders": {h: round(c, 6) for h, c in rows}}
+    def backers(self, bounty_id):
+        status, pool, pledged = self._bounty(bounty_id)
+        return {"bounty": bounty_id, "status": status, f"pool_{self.money}": pool, f"pledged_{self.money}": pledged,
+                "backers": self._backers(bounty_id)}
 
     def bounties(self, path="", status=""):
-        rows = self.db.execute("SELECT id,poster,title,path,failure,base_model,eval_set,target,pool,supply,deadline,"
-                               "status,winner,learning FROM bounties WHERE status != 'removed' ORDER BY id").fetchall()
+        rows = self.db.execute("SELECT id,poster,title,path,failure,base_model,eval_set,target,pool,pledged,deadline,"
+                               "status,winner,learning,epoch,note FROM bounties WHERE status != 'removed' ORDER BY id"
+                               ).fetchall()
         keys = ["id", "poster", "title", "path", "failure", "base_model", "eval_set", "target", f"pool_{self.money}",
-                "supply", "deadline_epoch", "status", "winner", "learning"]
+                f"pledged_{self.money}", "deadline_epoch", "status", "winner", "learning", "posted_epoch", "note"]
         out = [dict(zip(keys, r)) for r in rows]
+        counts = dict(self.db.execute("SELECT bounty, COUNT(DISTINCT backer) FROM pledges GROUP BY bounty").fetchall())
         for b in out:
-            b[f"price_{self.money}"] = round(coin.price(b["supply"]))
+            b["backers"] = counts.get(b["id"], 0)
         if status:
             out = [b for b in out if b["status"] == status]
         if path:
@@ -727,8 +708,8 @@ class Exchange:
 
     def claim_bounty(self, bounty_id, learning_id):
         """A learning claims a bounty when its validator attested the bounty's own eval set and reached the target.
-        The pool pays the solver and, through the learning's family tree, the traces it was built from. From then on
-        the bounty's coins earn HOLDER_CUT of every metered use of that learning."""
+        The pledges pay the solver and, through the learning's family tree, the traces it was built from (70 / 20 /
+        5 / 5). Backers get the solution, nothing more."""
         with self.lock:
             row = self.db.execute("SELECT status, eval_set, target, pool, base_model FROM bounties WHERE id=?",
                                   (bounty_id,)).fetchone()
@@ -756,11 +737,15 @@ class Exchange:
                 self._credit(acct, m, f"bounty {bounty_id}")
             self.db.execute("UPDATE bounties SET status='solved', winner=?, learning=? WHERE id=?",
                             (L["trainer"], learning_id, bounty_id))
+            rest = pool - sum(payout.values())
+            if rest > 0:                                         # rounding the tree couldn't place: back to the backers
+                self._refund(bounty_id, rest, "rounding")
+            self.db.execute("UPDATE bounties SET pool=0 WHERE id=?", (bounty_id,))
             self._event(f"bounty #{bounty_id} solved: {a.get('metric') or 'score'} {float(a['after']):.1%} beat the "
-                        f"{target:.1%} target; pool ${pool / 1e6:,.2f} paid; its coins now earn {coin.HOLDER_CUT:.0%} of every use")
+                        f"{target:.1%} target; its {self._fmt(pool)} of pledges paid the solver and the traces")
             self.db.commit()
-        return {"bounty": bounty_id, "status": "solved", "winner": L["trainer"], "pool_micros": pool, "payout": payout,
-                "holders_now_earn": f"{coin.HOLDER_CUT:.0%} of every use of {learning_id[:19]}"}
+        return {"bounty": bounty_id, "status": "solved", "winner": L["trainer"], f"pool_{self.money}": pool,
+                "payout": payout}
 
     def _tree(self):
         trace_info = {tid: {"producer": p, "checker_author": self._checker_author(c)}
@@ -768,14 +753,27 @@ class Exchange:
         learnings = {lid: json.loads(b) for lid, b in self.db.execute("SELECT id, body FROM learnings")}
         return trace_info, learnings
 
+    def _refund(self, bounty_id, amount, why):
+        """Give a bounty's money back to its backers: each what it pledged, pro rata if less than everything is left."""
+        for h, m in pro_rata(amount, self._backers(bounty_id)).items():
+            self._credit(h, m, f"bounty {bounty_id} refund: {why}")
+
     def _expire_bounties(self):
-        """At settlement, a bounty unsolved past its deadline returns its pool to its backers, by what each put in."""
-        for bid, pool in self.db.execute(
-                "SELECT id, pool FROM bounties WHERE status='open' AND deadline < ?", (self.epoch,)).fetchall():
-            for h, m in coin.pro_rata(pool, self._refund_weights(bid)).items():
-                self._credit(h, m, f"bounty {bid} refund")
-            self.db.execute("UPDATE bounties SET status='expired', pool=0 WHERE id=?", (bid,))
-            self._event(f"bounty #{bid} expired unsolved: ${pool / 1e6:,.2f} back to its backers, by what each put in")
+        """At settlement: a bounty unsolved past its deadline gives every backer back what it pledged; one nobody
+        backed within `unbacked_epochs` expires too, and leaves the default search."""
+        for bid, pool, pledged, deadline, posted in self.db.execute(
+                "SELECT id, pool, pledged, deadline, epoch FROM bounties WHERE status='open'").fetchall():
+            unbacked = not pledged and self.epoch - posted >= self.unbacked_epochs
+            if deadline >= self.epoch and not unbacked:
+                continue
+            self._expire(bid, pool, "unbacked" if unbacked and deadline >= self.epoch else "deadline")
+
+    def _expire(self, bid, pool, why):
+        if pool > 0:
+            self._refund(bid, pool, "unsolved")
+        self.db.execute("UPDATE bounties SET status='expired', pool=0, note=? WHERE id=?", (why, bid))
+        self._event(f"bounty #{bid} expired unsolved" + (f": {self._fmt(pool)} back to its backers, each what it put in"
+                                                        if pool else (" with no backers" if why == "unbacked" else "")))
 
     def remove(self, kind, oid):
         """Operator takedown. A bounty is withdrawn and its pool refunded to its backers, by what each put in; a trace
@@ -785,9 +783,8 @@ class Exchange:
                 r = self.db.execute("SELECT status, pool FROM bounties WHERE id=?", (int(oid),)).fetchone()
                 if not r:
                     raise KeyError(f"bounty {oid}")
-                if r[0] == "open":
-                    for h, m in coin.pro_rata(r[1], self._refund_weights(int(oid))).items():
-                        self._credit(h, m, f"bounty {oid} refund")
+                if r[0] == "open" and r[1] > 0:
+                    self._refund(int(oid), r[1], "taken down")
                 self.db.execute("UPDATE bounties SET status='removed', pool=0, title='(removed)' WHERE id=?", (int(oid),))
                 self.db.execute("DELETE FROM events WHERE text LIKE ?", (f"bounty #{int(oid)} %",))
             elif kind == "trace":
@@ -924,20 +921,11 @@ class Exchange:
             e = self.epoch
             self._expire_bounties()
             trace_info, learnings = self._tree()
-            solved = {lid: bid for bid, lid in self.db.execute(
-                "SELECT id, learning FROM bounties WHERE status='solved'").fetchall()}
             for lid, consumer, calls in self.db.execute(
                     "SELECT learning, consumer, SUM(calls) FROM usage WHERE epoch=? GROUP BY learning, consumer", (e,)).fetchall():
                 L = learnings[lid]
                 amount = calls * L["royalty"]["per_call_micros"]
                 self._credit(consumer, -amount, f"usage {lid[:19]}")
-                if lid in solved:      # a bounty's winning learning: its coin holders take their cut off the top
-                    holds = dict(self.db.execute("SELECT holder, coins FROM holdings WHERE bounty=?",
-                                                 (solved[lid],)).fetchall())
-                    cut = coin.pro_rata(int(amount * coin.HOLDER_CUT), holds)
-                    for h, m in cut.items():
-                        self._credit(h, m, f"bounty {solved[lid]} coin")
-                    amount -= sum(cut.values())
                 for acct, m in split_usage(amount, L, trace_info, self.validators, learnings).items():
                     self._credit(acct, m, f"royalty {lid[:19]}")
             self._bill_fees()
@@ -1042,12 +1030,14 @@ STATIC = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8"
           ".mp4": "video/mp4", ".ico": "image/x-icon", ".txt": "text/plain; charset=utf-8"}
 MAX_BODY = 64 * 1024
 # On a public node these stay with the operator: attestations and settlement are not signed yet, so whoever could call
-# them could mint payouts. Coin transfers wait for signed wallets for the same reason.
+# them could steer payouts. Bounty claims and validator stakes wait for signed messages for the same reason.
 ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove",
                 "/v0/admin/reclassify", "/v0/validators", "/v0/decoys", "/v0/decoys/unseal", "/v0/licences/direct",
                 "/v0/admin/btc-price"}
 ADMIN_LEARNING_ACTIONS = {"commits", "reveals"}   # validator messages: operator-relayed until they are signed
-ADMIN_ACTIONS = {"claims", "transfer"}
+ADMIN_ACTIONS = {"claims"}
+GONE = ("bounty coins were removed in v0.6: a bounty is a refundable pledge escrow with no token. Pledge with "
+        "POST /v0/bounties/{id}/pledges {backer, msats or sats}")
 
 
 class RateLimit:
@@ -1078,8 +1068,7 @@ class RateLimit:
 
 def make_handler(ex, public=False, admin_token=None, limiter=None):
     limiter = limiter or (RateLimit() if public else None)
-    coin_mode = getattr(ex, "economy", "") == "coin"
-    to_units = sys.modules[type(ex).__module__].to_units if coin_mode else None     # "12.5" TXC -> base units, exactly
+    sats_mode = getattr(ex, "economy", "") == "sats"
 
     class H(BaseHTTPRequestHandler):
         server_version = "traceX/0.1"
@@ -1183,22 +1172,21 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                 if u.path == "/v0/bounties":
                     return self._send(200, ex.bounties(q.get("path", ""), q.get("status", "")))
                 mv = re.fullmatch(r"/v0/learnings/([^/]+)/verdict", u.path)
-                if mv and coin_mode:
+                if mv and sats_mode:
                     return self._send(200, ex.verdict(mv[1]))
                 if u.path.startswith("/v0/learnings/"):
                     return self._send(200, ex.get_learning(u.path.split("/", 3)[3]))
-                if u.path == "/v0/coin" and coin_mode:
-                    return self._send(200, ex.coin_stats())
+                if u.path == "/v0/economy" and sats_mode:
+                    return self._send(200, ex.economy_stats())
+                if u.path in ("/v0/coin", "/v0/quote"):
+                    return self._send(410, {"error": "v0.6 has no token: there is no coin, pool or price. Everything is "
+                                                     "paid in sats; GET /v0/economy shows the money"})
                 if u.path == "/v0/fees" and hasattr(ex, "fees"):
                     return self._send(200, ex.fees())
-                if u.path == "/v0/validators" and coin_mode:
+                if u.path == "/v0/validators" and sats_mode:
                     return self._send(200, ex.validators_list())
-                if u.path == "/v0/quote" and coin_mode:
-                    side = q.get("side", "buy")
-                    amount = msats_in(q) if side == "buy" else int(q.get("units") or 0)
-                    return self._send(200, ex.quote(side, amount))
                 if u.path == "/v0/learnings":
-                    extra = {"include_pending": q.get("all") in ("1", "true")} if coin_mode else {}
+                    extra = {"include_pending": q.get("all") in ("1", "true")} if sats_mode else {}
                     return self._send(200, ex.find_learnings(q.get("path", ""), q.get("model", ""), q.get("kind", ""),
                                                              float(q.get("min_gain", 0)), min(int(q.get("limit", 20)), 500),
                                                              **extra))
@@ -1210,9 +1198,11 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     return self._send(200, ex.describe())
                 if u.path == "/mcp":
                     return self._send(405, {"error": "use POST /mcp (MCP streamable HTTP, JSON responses)"})
-                mh = re.fullmatch(r"/v0/bounties/(\d+)/holders", u.path)
+                mh = re.fullmatch(r"/v0/bounties/(\d+)/(backers|holders)", u.path)
                 if mh:
-                    return self._send(200, ex.holders(int(mh[1])))
+                    if mh[2] == "holders":
+                        return self._send(410, {"error": GONE})
+                    return self._send(200, ex.backers(int(mh[1])))
                 if u.path.startswith("/v0/provenance/"):
                     return self._send(200, ex.provenance(u.path.split("/", 3)[3]))
                 if u.path.startswith("/v0/balances/"):
@@ -1255,20 +1245,18 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                           "/v0/admin/reclassify": lambda b: refile_in_background(ex, b.get("only", "rules"),
                                                                                   int(b.get("limit") or 0)),
                           "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
-                if coin_mode:
-                    routes.update({"/v0/swap": lambda b: ex.swap(b.get("account"), b.get("side"),
-                                                                 msats_in(b) if b.get("side") == "buy"
-                                                                 else int(b.get("units") or 0)),
-                                   "/v0/credits": lambda b: ex.buy_credits(b.get("account"), msats_in(b),
-                                                                           int(b.get("units") or 0)),
-                                   "/v0/admin/btc-price": lambda b: ex.set_btc_usd(b.get("usd_per_btc")),
+                if self.path in ("/v0/swap", "/v0/credits"):
+                    return self._send(410, {"error": "v0.6 has no token: no swaps and no credits. Every call is paid "
+                                                     "in sats (testnet: POST /v0/faucet; mainnet: Lightning, L402)"})
+                if sats_mode:
+                    routes.update({"/v0/admin/btc-price": lambda b: ex.set_btc_usd(b.get("usd_per_btc")),
                                    "/v0/validators": lambda b: ex.register_validator(b.get("address"),
-                                                                                     int(b.get("stake_units") or 0)),
+                                                                                     msats_in(b, "stake", required=True)),
                                    "/v0/decoys": lambda b: ex.register_decoy(b["learning"], b["digest"], b["funder"]),
                                    "/v0/decoys/unseal": lambda b: ex.unseal_decoy(b["learning"], b["gain"], b["salt"]),
                                    "/v0/licences/direct": lambda b: ex.direct_licence(b["lot"], b["buyer"], b["traces"])})
                 ml = re.fullmatch(r"/v0/learnings/([^/]+)/(commits|reveals|challenges)", self.path)
-                if ml and coin_mode:
+                if ml and sats_mode:
                     lid, act = ml[1], ml[2]
                     admin = act in ADMIN_LEARNING_ACTIONS
                     fn = {"commits": lambda b: ex.commit(lid, b["validator"], b["digest"], b.get("round")),
@@ -1278,22 +1266,21 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                         return self._send(403, {"error": "validator messages are relayed by the operator until they are signed"})
                     return self._send(200, fn(self._body()))
                 fn, admin = routes.get(self.path), self.path in ADMIN_ROUTES
-                m = re.fullmatch(r"/v0/bounties/(\d+)/(claims|buy|sell|transfer)", self.path)
+                m = re.fullmatch(r"/v0/bounties/(\d+)/(claims|pledges|buy|sell|transfer)", self.path)
                 if m:
                     i, act = int(m[1]), m[2]
+                    if act in ("buy", "sell", "transfer"):
+                        return self._send(410, {"error": GONE})
                     admin = act in ADMIN_ACTIONS
-                    fn = {"claims": (lambda b: ex.claim_bounty(i, b["learning"], b.get("attestation"))) if coin_mode
+                    fn = {"claims": (lambda b: ex.claim_bounty(i, b["learning"], b.get("attestation"))) if sats_mode
                           else (lambda b: ex.claim_bounty(i, b["learning"])),
-                          "buy": (lambda b: ex.buy_coins(i, b["buyer"], msats_in(b),
-                                                         units=int(b.get("units") or 0) or to_units(b.get("coins") or 0)))
-                          if coin_mode else (lambda b: ex.buy_coins(i, b["buyer"], b["micros"])),
-                          "sell": lambda b: ex.sell_coins(i, b["seller"], b["coins"]),
-                          "transfer": lambda b: ex.transfer_coins(i, b["from"], b["to"], b["coins"])}[act]
+                          "pledges": (lambda b: ex.pledge(i, b.get("backer"), msats_in(b, required=True)))
+                          if sats_mode else (lambda b: ex.pledge(i, b.get("backer"), b.get("micros") or 0))}[act]
                 if not fn:
                     return self._send(404, {"error": "not found"})
                 if admin and not self._admin():
                     return self._send(403, {"error": "on this public node that call is kept to the operator "
-                                                     "(attestations and transfers are not signed yet)"})
+                                                     "(attestations and claims are not signed yet)"})
                 self._send(200, fn(self._body()))
             except PaymentRequired as e:                 # L402: a Lightning invoice for what is missing, and a macaroon
                 challenge = ex.l402(e.account, e.msats) if hasattr(ex, "l402") else {}
@@ -1317,8 +1304,10 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
 
 def serve(port=8787, db="exchange.db", host="127.0.0.1", public=False, admin_token=None, economy="usdc", **kw):
     if economy == "coin":
-        from coin import CoinExchange                  # the coin economy: node/coin.py
-        ex = CoinExchange(db, **kw)
+        raise ValueError("v0.6 has no coin: run --economy sats (everything paid directly in sats, SPEC 4e)")
+    if economy == "sats":
+        from sats import SatsExchange                  # v0.6: node/sats.py
+        ex = SatsExchange(db, **kw)
     else:
         ex = Exchange(db, **kw)
     srv = ThreadingHTTPServer((host, port), make_handler(ex, public=public, admin_token=admin_token))
@@ -1366,19 +1355,20 @@ if __name__ == "__main__":
     ap.add_argument("--reserve-micros", type=int, default=int(env("TRACEX_RESERVE_MICROS", 1_000)),
                     help="dollar node (v0.1, retired): reserve price per licence in a lot auction")
     ap.add_argument("--reserve-msats", type=int, default=int(env("TRACEX_RESERVE_MSATS", 50_000)),
-                    help="coin node: reserve price per licence in a lot auction, in millisatoshis (50,000 = 50 sats)")
+                    help="sats node: reserve price per licence in a lot auction, in millisatoshis (50,000 = 50 sats)")
     ap.add_argument("--btc-usd", type=int, default=int(env("TRACEX_BTC_USD", 0) or 0),
-                    help="coin node: dollars per bitcoin, for the approximate dollar figures shown beside sats (and the "
+                    help="sats node: dollars per bitcoin, for the approximate dollar figures shown beside sats (and the "
                          "fee re-peg, if on); never used in any amount")
     ap.add_argument("--public", action="store_true", default=env("TRACEX_PUBLIC") == "1",
                     help="rate limits on; settle, clear, checkers, learnings, claims and transfers need TRACEX_ADMIN_TOKEN")
     ap.add_argument("--seed", action="store_true", default=env("TRACEX_SEED") == "1",
                     help="on an empty database, load the example traces, bounties and learnings")
     ap.add_argument("--test-credits", type=int, default=int(env("TRACEX_TEST_CREDITS", 0)),
-                    help="testnet: test money each new wallet can take once, in the node's unit: msats on a coin node "
+                    help="testnet: test money each new wallet can take once, in the node's unit: msats on a sats node "
                          "(30000000 = 30,000 test sats), micros on the dollar node (0 = off)")
-    ap.add_argument("--economy", choices=("usdc", "coin"), default=env("TRACEX_ECONOMY", "usdc"),
-                    help="coin: everything priced in sats; contributors earn TXC, payments buy and burn it (SPEC 4e). "
+    ap.add_argument("--economy", choices=("usdc", "sats", "coin"), default=env("TRACEX_ECONOMY", "usdc"),
+                    help="sats: v0.6, every payment in sats, split at once to the work it paid for; no token (SPEC "
+                         "4e). coin: refused (v0.5's token is gone). "
                          "usdc: the v0.1 dollar node, retired as a mainnet path, kept for the library's tests")
     ap.add_argument("--max-db-mb", type=int, default=int(env("TRACEX_MAX_DB_MB", 0)),
                     help="stop taking new traces and bounties when the database file passes this size (0 = no limit)")
@@ -1392,7 +1382,7 @@ if __name__ == "__main__":
         print("warning: --public without TRACEX_ADMIN_TOKEN: operator calls are switched off", flush=True)
     os.makedirs(os.path.dirname(os.path.abspath(a.db)), exist_ok=True)
     money = ({"reserve_msats": a.reserve_msats, **({"btc_usd": a.btc_usd} if a.btc_usd else {})}
-             if a.economy == "coin" else {"reserve_micros": a.reserve_micros})
+             if a.economy == "sats" else {"reserve_micros": a.reserve_micros})
     ex, srv = serve(a.port, a.db, host=a.host, public=a.public, admin_token=token, k=a.k, economy=a.economy,
                     test_credits=a.test_credits, max_db_bytes=a.max_db_mb * 1024 * 1024, fee_to=a.fee_to, **money)
     if a.seed:

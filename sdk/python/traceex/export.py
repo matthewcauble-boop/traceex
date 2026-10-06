@@ -151,8 +151,8 @@ def model_card(learning, *, title, base_model_license, eval_name, bounty=None, p
              f"**Measured by the validator** on {eval_name} (never trained on): {a['metric']} "
              f"{a['before']:.1%} -> {a['after']:.1%}.", ""]
     if bounty:
-        lines += [f"Funded by bounty #{bounty['id']} ({bounty.get('title', '')}); the bounty's coin holders earn from "
-                  "metered hosted use of these weights.", ""]
+        lines += [f"Funded by bounty #{bounty['id']} ({bounty.get('title', '')}): its backers' pledges paid the "
+                  "solver and the traces it was built from; metered hosted use pays the same family tree.", ""]
     if producers:
         lines += ["Built from fixes contributed by:", ""] + [f"- `{p}`: {n} traces" for p, n in sorted(producers.items())] + [""]
     lines += [f"Learning id `{object_id(dict(learning))}`; artifact `{learning['artifact'].get('hash', '')}`. "
