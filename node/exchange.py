@@ -22,7 +22,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk", "python"))
 from traceex import canonical, object_id  # noqa: E402
@@ -31,6 +31,10 @@ from traceex.auction import Bid, clear_shared  # noqa: E402
 from traceex.royalty import split_trace_sale, split_usage, pro_rata, MAX_DEPTH  # noqa: E402
 from traceex.merkle import leaf, build_tree, proof  # noqa: E402
 from traceex.classify import classify, default_engine, nodes, RulesEngine, TAXONOMY_VERSION  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from registry import Registry  # noqa: E402  (v0.7: the failure registry and fix tracking)
+from leviathan_search import Query, best_snippet, render as render_cards  # noqa: E402  (v0.7: the Leviathan-style index)
 
 # A bounty's pledges, when a learning solves it: the solver is paid most, the traces it was built from still earn.
 # Backers get the solution and nothing else: no token, no share of its revenue, nothing to trade.
@@ -65,7 +69,7 @@ CREATE TABLE IF NOT EXISTS labels   (id TEXT PRIMARY KEY, path TEXT, confidence 
 CREATE TABLE IF NOT EXISTS bounties (id INTEGER PRIMARY KEY, poster TEXT, title TEXT, path TEXT, failure TEXT,
                                      base_model TEXT, eval_set TEXT, target REAL, pool INT DEFAULT 0,
                                      pledged INT DEFAULT 0, deadline INT, status TEXT, winner TEXT, learning TEXT,
-                                     epoch INT, key TEXT, note TEXT);
+                                     epoch INT, key TEXT, note TEXT, failure_id TEXT);
 CREATE INDEX IF NOT EXISTS bounties_key ON bounties(key, status);
 CREATE TABLE IF NOT EXISTS pledges  (id INTEGER PRIMARY KEY, bounty INT, backer TEXT, amount INT, epoch INT,
                                      payment INT);
@@ -77,7 +81,7 @@ CREATE TABLE IF NOT EXISTS grants   (account TEXT PRIMARY KEY, micros INT, at TE
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 PATH = re.compile(r"[a-z_]+(/[a-z_]+){0,5}")
 SORTS = ("relevant", "new", "bounty")
-FTS_WEIGHTS = "0, 4.0, 3.0, 2.0, 2.0, 1.0"        # id, path, signature, model, task, body: a hit in the branch name counts most
+KINDS = ("trace", "failure", "all")
 LIMITS = {"title": 200, "failure": 200, "base_model": 120, "open_bounties_per_poster": 20, "wallets_per_source_day": 3,
           "trace_bytes": 32 * 1024, "task": 80, "model": 120, "checker": 80}
 MODE = re.compile(r"[a-z0-9_:.,-]{1,80}")         # a failure mode label: wrong_answer, role_swap, unresolved:date…
@@ -153,7 +157,6 @@ def bounty_key(path, failure="", base_model=""):
     """What a bounty is for, as the classifier files it: taxonomy branch, failure mode, base model. A new post with the
     key of an open bounty backs that bounty instead of opening a duplicate."""
     return "|".join((str(path or "").strip("/"), str(failure or "").strip(), str(base_model or "").strip()))
-FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS trace_fts USING fts5(id UNINDEXED, path, signature, model, task, body)"
 
 
 class _Rows:
@@ -201,7 +204,7 @@ class SafeDB:
         self.conn.close()
 
 
-class Exchange:
+class Exchange(Registry):
     """The v0.1 reference node: contributors paid in dollars (micros). Retired as a mainnet path (USDC settlement and
     x402 gave way to bitcoin over Lightning, SPEC 5); kept as the library's default for its tests and examples. The sats
     node (node/sats.py, v0.6) pays everything in millisatoshis, with no token."""
@@ -239,16 +242,12 @@ class Exchange:
         self.test_credits = int(test_credits)
         self.quiet = False                        # bulk loads (the seed) write one summary event instead of one per row
         self.refile = None                        # status of the last re-classification run
-        try:
-            self.db.execute(FTS)
-            self.fts = True
-        except sqlite3.OperationalError:          # SQLite built without FTS5: search falls back to LIKE
-            self.fts = False
         self.engine = engine or default_engine()
         self.k, self.reserve, self.validators = k, reserve_micros, list(validators)
         self.unbacked_epochs = int(unbacked_epochs)
         if self._meta("epoch") is None:
             self._set_meta("epoch", "1")
+        self._open_registry()                     # v0.7: the failure registry and the search index (registry.py)
 
     # --- helpers -----------------------------------------------------------------------------------------------
     def _meta(self, k):
@@ -364,7 +363,7 @@ class Exchange:
                 f"pools_paid_{self.money}": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='solved'"),
                 "last_root": {"epoch": r[0], "root": r[1], f"total_{self.money}": r[2]} if r else None,
                 "testnet": bool(self.test_credits), "epoch_hours": getattr(self, "epoch_hours", 0),
-                "fees": self.fees(),
+                "fees": self.fees(), "registry": self.registry_stats(),
                 "classifier": {"engine": self.engine.name,
                                "filed_by": dict(self.db.execute("SELECT engine, COUNT(*) FROM labels GROUP BY engine")),
                                "usage": getattr(self.engine, "usage", None), "refile": self.refile}}
@@ -404,29 +403,23 @@ class Exchange:
         ck = f"{t['checker']['id']}@{t['checker']['version']}"
         lot = f"{t['task']}|{t['base_model']['name']}|{ck}"
         if self.db.execute("SELECT 1 FROM traces WHERE id=?", (tid,)).fetchone():   # before paying to classify it
-            return {"id": tid, "lot": lot, "duplicate": True}
+            return {"id": tid, "lot": lot, "duplicate": True, "failure_id": self._failure_of(tid)}
         c = classify(t, self.engine)            # may call a hosted engine: never while holding the write lock
         with self.lock:
             if self.db.execute("SELECT 1 FROM traces WHERE id=?", (tid,)).fetchone():
-                return {"id": tid, "lot": lot, "duplicate": True}
+                return {"id": tid, "lot": lot, "duplicate": True, "failure_id": self._failure_of(tid)}
             self._tx_fee(t["producer"])
             self.db.execute("INSERT INTO traces VALUES (?,?,?,?,?,?)",
                             (tid, lot, t["producer"], t["checker"]["id"], canonical(t).decode(), self.epoch))
-            self._index(tid, t, c)
+            fid = self._index(tid, t, c)          # label, failure registry and search index: this same transaction
             self._event(f"trace filed under {c['path_str'] or 'uncategorised'}" + (f" · {c['signature']}" if c["signature"] else ""))
             self.db.commit()
-        return {"id": tid, "lot": lot, "epoch": self.epoch, "classified": c, "bounties": self._matching_bounties(c, t)}
+        return {"id": tid, "lot": lot, "epoch": self.epoch, "classified": c, "failure_id": fid,
+                "bounties": self._matching_bounties(c, t, fid)}
 
-    def _index(self, tid, t, c):
-        """Write (or rewrite) a trace's label and full-text row. Callers hold the lock."""
-        self.db.execute("INSERT OR REPLACE INTO labels VALUES (?,?,?,?,?,?,?,?)",
-                        (tid, c["path_str"], c["confidence"], c["engine"], c["signature"], json.dumps(c["failure_modes"]),
-                         t["base_model"]["name"], t["task"]))
-        if self.fts:
-            self.db.execute("DELETE FROM trace_fts WHERE id=?", (tid,))
-            self.db.execute("INSERT INTO trace_fts VALUES (?,?,?,?,?,?)",
-                            (tid, c["path_str"].replace("/", " "), c["signature"], t["base_model"]["name"], t["task"],
-                             t["input"] + " " + " ".join(t["fixed_fields"]).replace("_", " ")))
+    def _failure_of(self, tid):
+        r = self.db.execute("SELECT failure FROM occurrences WHERE trace=?", (tid,)).fetchone()
+        return r[0] if r else None
 
     def reclassify(self, engine=None, only="rules", limit=0, workers=4):
         """Re-file traces with `engine` (the node's own by default). only="rules" re-files what the keyword engine
@@ -486,98 +479,121 @@ class Exchange:
             out.append({"path": p, "description": desc, "traces": n})
         return {"version": TAXONOMY_VERSION, "engine": self.engine.name, "nodes": out}
 
-    WORD = re.compile(r"[\w.:/@+-]*\w[\w.:/@+-]*")
+    def search(self, q="", path="", failure="", model="", limit=20, sort="", offset=0, facets=False, kind="trace",
+               fmt="json"):
+        """Find traces (and failures) by words, taxonomy branch, failure mode and model: the Leviathan-style index
+        (leviathan_search.py). Words are matched with porter stemming, any of them may match, ranked by BM25 (title 2x);
+        the branch and every filter are synthetic tokens inside the match. A branch resolves in tiers and never guesses
+        (several candidates: status ambiguous_branch, with the candidates); when nothing matches inside it, cards from
+        its nearest ancestor (or elsewhere) come back in `other_branches`, marked OTHER.
 
-    @classmethod
-    def _fts_query(cls, q, op=" "):
-        return op.join('"' + w + '"*' for w in cls.WORD.findall(q)[:8])
-
-    def search(self, q="", path="", failure="", model="", limit=20, sort="", offset=0, facets=False):
-        """Find traces by words, taxonomy branch, failure mode and base model.
-
-        sort: "relevant" (default with words: full-text rank, a match in the branch name or failure label counts most),
-        "new" (default without words) or "bounty" (traces that feed the richest open bounty first). Open bounties on the
-        same branch that someone has backed come back with the results, so a trainer sees supply (traces) and demand
-        (bounties) together; GET /v0/bounties lists the unbacked ones too.
-        facets=True adds counts per branch and per failure mode, for building a browse tree."""
-        q, path = (q or "").strip(), (path or "").strip("/")
-        sort = sort or ("relevant" if q else "new")
+        sort: "relevant" (default with words), "new" (default without) or "bounty" (traces that feed the richest open
+        bounty first). kind: "trace" (default), "failure" (the registry) or "all". fmt "text": compact cited cards, what
+        an agent reads. Backed open bounties on the branch come back too, and with words, the top failures they match.
+        facets=True adds counts per branch and per failure mode."""
+        q, path = (q or "").strip(), (path or "").strip().strip("/")
+        words = not Query(q).empty()
+        sort = sort or ("relevant" if words else "new")
         if sort not in SORTS:
             raise ValueError(f"sort is one of {SORTS}")
+        if kind not in KINDS:
+            raise ValueError(f"kind is one of {KINDS}")
         limit, offset = max(1, min(int(limit), 1000)), max(0, int(offset))
-        modes_of = lambda sig: [m.split(":")[0] for m in sig.split()]
-        every = self._candidates(q, model)       # (id, path, model, signature, rowid, rank, task)
-        rows = [r for r in every if not path or r[1] == path or r[1].startswith(path + "/")]
-        mode_counts = {}
-        for r in rows:
-            for m in modes_of(r[3]):
-                mode_counts[m] = mode_counts.get(m, 0) + 1
+        where = {"kind": [("kind", kind)]} if kind != "all" else {}
         if failure:
-            rows = [r for r in rows if failure in modes_of(r[3])]
+            where["failure"] = [("failure", failure)]
+        if model:
+            where["model"] = [("model", model), ("family", model)]
         open_all = [b for b in self.bounties(status="open")["bounties"] if b[f"pool_{self.money}"] > 0]   # backed ones
-        pool = lambda r: max([b[f"pool_{self.money}"] for b in open_all
-                              if self._feeds(b, r[1], r[2], modes_of(r[3]))] or [0])
-        if sort == "relevant":
-            rows.sort(key=lambda r: (r[5], -r[4]))
-        elif sort == "new":
-            rows.sort(key=lambda r: -r[4])
-        else:
-            pools = {r[0]: pool(r) for r in rows} if open_all else {}
-            rows.sort(key=lambda r: (-pools.get(r[0], 0), r[5], -r[4]))
-        page = rows[offset:offset + limit]
-        stored = {i: (lot, body) for i, lot, body in self.db.execute(
-            f"SELECT id, lot, body FROM traces WHERE id IN ({','.join('?' * len(page))})", [r[0] for r in page])} if page else {}
-        hits = []
-        for r in page:
-            tid, p, m, sig, _, rank, task = r
-            lot, body = stored[tid]
-            b = json.loads(body)
-            hit = {"id": tid, "path": p, "signature": sig, "model": m, "task": task, "lot": lot,
-                   "fixed_fields": b["fixed_fields"], "snippet": snippet(b["input"]),
-                   "producer": b["producer"], "privacy": b["privacy"], "created": b.get("created")}
-            if q and self.fts:
-                hit["score"] = round(-rank, 3)
-            feeds = pool(r) if open_all else 0
-            if feeds:
-                hit[f"bounty_pool_{self.money}"] = feeds
-            hits.append(hit)
-        out = {"results": hits, "count": len(hits), "total": len(rows), "sort": sort, "offset": offset,
-               "bounties": [b for b in open_all if not path or path == b["path"] or path.startswith(b["path"] + "/")
-                            or b["path"].startswith(path + "/")]}
+        by_pool = sort == "bounty"
+        res = self.index.search(q, branch=path or None, where=where, sort="newest" if sort == "new" else "relevance",
+                                limit=limit, offset=offset, everything=by_pool)
+        rows = res["rows"]
+        if by_pool:
+            docs = self.index.docs([r[0] for r in rows])
+            pools = {r[0]: self._pool_for(docs[r[0]], open_all) for r in rows}
+            rows = sorted(rows, key=lambda r: -pools[r[0]])[offset:offset + limit]     # stable: ties keep their order
+        hl = Query(q).highlight()
+        boiler = self.index.boilerplate() if hl else frozenset()
+        docs = self.index.docs([r[0] for r in rows] + [r[0] for r in res["other"]])
+        hits = [self._hit(docs[r], rel, hl, boiler, open_all) for r, _, rel in rows]
+        other = [dict(self._hit(docs[r], rel, hl, boiler, open_all), other_branch=True) for r, _, rel in res["other"]]
+        branch = res["branch"]
+        key = branch["key"] if branch else ""
+        first, last = (offset + 1, offset + len(hits)) if hits else (0, 0)
+        out = {"status": res["status"], "query": q, "branch": branch, "candidates": res["candidates"],
+               "results": hits, "count": len(hits), "total": res["total"], "sort": sort, "offset": offset, "kind": kind,
+               "shown": f"{first}-{last} of {res['total']}" if hits else f"0 of {res['total']}",
+               "other_branches": other, "fallback_from": res["fallback_from"], "notes": res["notes"],
+               "bounties": [b for b in open_all if not key or key == b["path"] or key.startswith(b["path"] + "/")
+                            or b["path"].startswith(key + "/")]}
+        if kind == "trace" and res["status"] == "ok" and (words or key):
+            fw = {k: v for k, v in where.items() if k != "kind"}
+            fres = self.index.search(q, branch=key or None, where=dict(fw, kind=[("kind", "failure")]), limit=3,
+                                     fallback=False)
+            fdocs = self.index.docs([r[0] for r in fres["rows"]])
+            out["failures"] = [self._hit(fdocs[r], rel, hl, boiler, open_all) for r, _, rel in fres["rows"]]
         if facets:
-            paths = {}
-            for r in every:
-                paths[r[1]] = paths.get(r[1], 0) + 1
-            out["facets"] = {"paths": paths, "modes": mode_counts}
+            base = {k: v for k, v in where.items() if k != "failure"}
+            paths, _ = self._facet_counts(self.index.matches(q, None, base))
+            _, modes = self._facet_counts(self.index.matches(q, key or None, base)) if res["status"] == "ok" else ({}, {})
+            out["facets"] = {"paths": paths, "modes": modes}
+        if fmt == "text":
+            return {"text": render_cards(dict(out, cards=hits, other_cards=other, indexed=self.index.count(),
+                                              filters={"failure": failure, "model": model,
+                                                       "kind": kind if kind != "trace" else ""}))}
         return out
 
-    def _candidates(self, q, model, cap=50_000):
-        """(id, path, model, signature, rowid, rank, task) for every trace matching the words and model. Rank is FTS5's
-        bm25 (lower is better), 0 without words. When all the words together find nothing, any of them will do."""
-        mwhere, margs = ("AND l.model = ?", [model]) if model else ("", [])
-        if q and self.fts:
-            words = self.WORD.findall(q)
-            for op in ((" ", " OR ") if len(words) > 1 else (" ",)):
-                expr = self._fts_query(q, op)
-                if not expr:
-                    return []
-                try:
-                    rows = self.db.execute(
-                        f"SELECT l.id, l.path, l.model, l.signature, t.rowid, bm25(trace_fts, {FTS_WEIGHTS}), l.task "
-                        f"FROM trace_fts JOIN labels l ON l.id = trace_fts.id JOIN traces t ON t.id = l.id "
-                        f"WHERE trace_fts MATCH ? {mwhere} LIMIT ?", [expr, *margs, cap]).fetchall()
-                except sqlite3.OperationalError:     # a query FTS5 can't parse matches nothing
-                    return []
-                if rows:
-                    return rows
-            return []
-        base = ("SELECT l.id, l.path, l.model, l.signature, t.rowid, 0, l.task FROM labels l "
-                "JOIN traces t ON t.id = l.id WHERE ")
-        if q:                                    # SQLite without FTS5: substring match
-            like = f"%{q}%"
-            return self.db.execute(base + f"(t.body LIKE ? OR l.path LIKE ?) {mwhere} LIMIT ?",
-                                   [like, like, *margs, cap]).fetchall()
-        return self.db.execute(base + f"1=1 {mwhere} LIMIT ?", [*margs, cap]).fetchall()
+    def _facet_counts(self, matches):
+        """{branch: n} and {failure mode: n} over a set of matching records."""
+        paths, modes = {}, {}
+        ids = [m[0] for m in matches]
+        for i in range(0, len(ids), 900):
+            chunk = ids[i:i + 900]
+            for grp, fs in self.db.execute(f"SELECT grp, facets FROM lx_records WHERE rowid IN ({','.join('?' * len(chunk))})",
+                                           chunk).fetchall():
+                paths[grp or ""] = paths.get(grp or "", 0) + 1
+                for f, v in json.loads(fs):
+                    if f == "failure":
+                        modes[v] = modes.get(v, 0) + 1
+        return paths, modes
+
+    def _pool_for(self, doc, open_all):
+        if doc.get("kind") == "failure":
+            return max([b[f"pool_{self.money}"] for b in open_all if b.get("failure_id") == doc["id"]] or [0])
+        return max([b[f"pool_{self.money}"] for b in open_all
+                    if (b.get("failure_id") and b["failure_id"] == doc.get("failure_id"))
+                    or (not b.get("failure_id") and self._feeds(b, doc["path"], doc["model"], doc["modes"]))] or [0])
+
+    def _hit(self, doc, rel, hl, boiler, open_all):
+        """One search result: the API's fields, plus the card an agent reads (title, fields, the matching sentence)."""
+        texts = doc.get("texts") or []
+        if doc.get("kind") == "failure":
+            rate = f" {doc['pass_rate']:.0%}" if doc.get("pass_rate") is not None and doc["status"] == "partly_fixed" else ""
+            fields = {"status": doc["status"].replace("_", " ") + rate,
+                      "seen": f"{doc['occurrences']} case{'s' if doc['occurrences'] != 1 else ''}, "
+                              f"{doc['reporters']} verified reporter{'s' if doc['reporters'] != 1 else ''}",
+                      "family": doc["family"]}
+            hit = {"id": doc["id"], "kind": "failure", "short_id": doc["id"], "path": doc["path"], "title": doc["title"],
+                   "status": doc["status"], "pass_rate": doc.get("pass_rate"), "reporters": doc["reporters"],
+                   "occurrences": doc["occurrences"], "family": doc["family"], "models": doc.get("models", []),
+                   "date": (doc.get("last_seen") or "")[:10] or None, "fields": fields}
+            shown = [doc["title"], *fields.values()]
+        else:
+            fields = {"failure": doc["signature"], "model": doc["model"], "registry": doc.get("failure_id")}
+            hit = {k: doc.get(k) for k in ("id", "path", "signature", "model", "task", "lot", "fixed_fields", "snippet",
+                                           "producer", "privacy", "created", "failure_id")}
+            hit.update(kind="trace", short_id=doc["id"][:23], title=doc["snippet"], fields=fields,
+                       date=(doc.get("created") or "")[:10] or None)
+            shown = [doc["snippet"], *[str(v) for v in fields.values()]]
+            feeds = self._pool_for(doc, open_all) if open_all else 0
+            if feeds:
+                hit[f"bounty_pool_{self.money}"] = feeds
+        if rel is not None:
+            hit["relevance"] = hit["score"] = rel
+        if hl:
+            hit["match"] = best_snippet(texts, hl, shown, 160, boiler)
+        return hit
 
     @staticmethod
     def _feeds(b, path, model, modes):
@@ -596,8 +612,14 @@ class Exchange:
         refunds every backer what it put in. Backers get no token, no share and nothing to trade. A post whose branch,
         failure and model match an open bounty backs that bounty instead of opening a duplicate. `seed_<money>` makes
         the poster's first pledge in the same call."""
+        fid = str(b.get("failure_id") or "").strip().upper()
+        if fid:                                   # v0.7: a bounty on a registry failure takes its branch and mode
+            f = self._failure_row(fid)
+            if not f:
+                raise ValueError(f"unknown failure {fid!r}")
+            b = dict(b, path=f["path"] or "uncategorised", failure=(f["modes"] or [""])[0], base_model="")
         if not b.get("eval_set") or not b.get("path"):
-            raise ValueError("a bounty needs a path and an eval_set hash")
+            raise ValueError("a bounty needs a path (or a failure_id) and an eval_set hash")
         need_address(b.get("poster"), "poster")
         self._room()
         path = str(b["path"]).strip("/")
@@ -611,7 +633,7 @@ class Exchange:
             raise ValueError("target is a score between 0 and 1")
         epochs = max(0, min(int(b.get("epochs", 4)), 52))
         seed = self._seed_amount(b)
-        key = bounty_key(path, b.get("failure", ""), b.get("base_model", ""))
+        key = f"failure|{fid}" if fid else bounty_key(path, b.get("failure", ""), b.get("base_model", ""))
         with self.lock:
             if seed > 0:
                 self._need_funds(b["poster"], seed)          # before anything is written, so a failed seed leaves nothing
@@ -620,8 +642,9 @@ class Exchange:
             if same:                                         # the same problem is already posted: back it instead
                 self._tx_fee(b["poster"])
                 self.db.commit()
+                what = fid or key.replace('|', ' / ').strip(' /')
                 out = {"id": same[0], "status": "open", "merged": True, "deadline_epoch": same[1],
-                       "note": f"bounty #{same[0]} is already open for {key.replace('|', ' / ').strip(' /')}: this post "
+                       "note": f"bounty #{same[0]} is already open for {what}: this post "
                                "backs it instead of opening a duplicate (its poster's hidden eval decides the solve)"}
                 if seed > 0:
                     out["pledge"] = self.pledge(same[0], b["poster"], seed)
@@ -633,15 +656,17 @@ class Exchange:
                     raise ValueError(f"{LIMITS['open_bounties_per_poster']} open bounties per poster")
             self._tx_fee(b["poster"])
             cur = self.db.execute(
-                "INSERT INTO bounties (poster,title,path,failure,base_model,eval_set,target,deadline,status,epoch,key)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO bounties (poster,title,path,failure,base_model,eval_set,target,deadline,status,epoch,key,"
+                "failure_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (b["poster"], b.get("title", ""), path, b.get("failure", ""), b.get("base_model", ""),
-                 str(b["eval_set"])[:200], target, self.epoch + epochs, "open", self.epoch, key))
+                 str(b["eval_set"])[:200], target, self.epoch + epochs, "open", self.epoch, key, fid or None))
             bid = cur.lastrowid
-            self._event(f"bounty #{bid} posted free on {path}: {b.get('title') or 'untitled'}")
+            self._event(f"bounty #{bid} posted free on {fid or path}: {b.get('title') or 'untitled'}")
+            if fid:
+                self._index_failure(fid)
             self.db.commit()
         out = {"id": bid, "status": "open", "deadline_epoch": self.epoch + epochs,
-               "unbacked_expires_epoch": self.epoch + self.unbacked_epochs}
+               "unbacked_expires_epoch": self.epoch + self.unbacked_epochs, "failure_id": fid or None}
         if seed > 0:
             out["pledge"] = self.pledge(bid, b["poster"], seed)
         return out
@@ -686,10 +711,11 @@ class Exchange:
 
     def bounties(self, path="", status=""):
         rows = self.db.execute("SELECT id,poster,title,path,failure,base_model,eval_set,target,pool,pledged,deadline,"
-                               "status,winner,learning,epoch,note FROM bounties WHERE status != 'removed' ORDER BY id"
-                               ).fetchall()
+                               "status,winner,learning,epoch,note,failure_id FROM bounties WHERE status != 'removed' "
+                               "ORDER BY id").fetchall()
         keys = ["id", "poster", "title", "path", "failure", "base_model", "eval_set", "target", f"pool_{self.money}",
-                f"pledged_{self.money}", "deadline_epoch", "status", "winner", "learning", "posted_epoch", "note"]
+                f"pledged_{self.money}", "deadline_epoch", "status", "winner", "learning", "posted_epoch", "note",
+                "failure_id"]
         out = [dict(zip(keys, r)) for r in rows]
         counts = dict(self.db.execute("SELECT bounty, COUNT(DISTINCT backer) FROM pledges GROUP BY bounty").fetchall())
         for b in out:
@@ -701,13 +727,17 @@ class Exchange:
             out = [b for b in out if p == b["path"] or p.startswith(b["path"] + "/") or b["path"].startswith(p + "/")]
         return {"bounties": out}
 
-    def _matching_bounties(self, c, t):
-        return [b["id"] for b in self.bounties(path=c["path_str"], status="open")["bounties"]
-                if (not b["base_model"] or b["base_model"] == t["base_model"]["name"])
-                and (not b["failure"] or b["failure"] in c["failure_modes"].values())]
+    def _matching_bounties(self, c, t, fid=None):
+        """Open bounties a new trace feeds: the ones on its failure, and the ones on its branch, mode and model."""
+        return [b["id"] for b in self.bounties(status="open")["bounties"]
+                if (b["failure_id"] and b["failure_id"] == fid) or (
+                    not b["failure_id"] and (c["path_str"] == b["path"] or c["path_str"].startswith(b["path"] + "/"))
+                    and (not b["base_model"] or b["base_model"] == t["base_model"]["name"])
+                    and (not b["failure"] or b["failure"] in c["failure_modes"].values()))]
 
-    def claim_bounty(self, bounty_id, learning_id):
-        """A learning claims a bounty when its validator attested the bounty's own eval set and reached the target.
+    def claim_bounty(self, bounty_id, learning_id, attestation=None):
+        """A learning claims a bounty when its validator attested the bounty's own eval set and reached the target
+        (or the bounty's poster measured it there: `attestation`, as a failure bounty's automatic payout passes it).
         The pledges pay the solver and, through the learning's family tree, the traces it was built from (70 / 20 /
         5 / 5). Backers get the solution, nothing more."""
         with self.lock:
@@ -723,6 +753,9 @@ class Exchange:
                 raise ValueError("register the learning first")
             L = json.loads(r[0])
             a = L["attestation"]
+            poster = self.db.execute("SELECT poster FROM bounties WHERE id=?", (bounty_id,)).fetchone()[0]
+            if attestation and attestation.get("validator") == poster and attestation.get("eval_set") == eval_set:
+                a = attestation
             if a.get("eval_set") != eval_set:
                 raise ValueError("the attestation is not on this bounty's eval set")
             if float(a["after"]) < target:
@@ -791,8 +824,13 @@ class Exchange:
                 if not self.db.execute("SELECT 1 FROM labels WHERE id=?", (oid,)).fetchone():
                     raise KeyError(f"trace {oid}")
                 self.db.execute("DELETE FROM labels WHERE id=?", (oid,))
-                if self.fts:
-                    self.db.execute("DELETE FROM trace_fts WHERE id=?", (oid,))
+                body = self.db.execute("SELECT body FROM traces WHERE id=?", (oid,)).fetchone()
+                self.index.delete(oid, json.loads(body[0])["input"].splitlines() if body else ())
+                fid = self._failure_of(oid)
+                self.db.execute("DELETE FROM occurrences WHERE trace=?", (oid,))
+                self.db.execute("UPDATE occurrences SET canonical=trace WHERE canonical=?", (oid,))
+                if fid:
+                    self._index_failure(fid)
             else:
                 raise ValueError("kind is 'bounty' or 'trace'")
             self.db.commit()
@@ -919,6 +957,7 @@ class Exchange:
         """Charge metered usage, pay royalties down the family tree, then publish this epoch's Merkle payout root."""
         with self.lock:
             e = self.epoch
+            self._registry_settle()               # v0.7: failure bounties whose fix became payable
             self._expire_bounties()
             trace_info, learnings = self._tree()
             for lid, consumer, calls in self.db.execute(
@@ -1004,7 +1043,11 @@ class Exchange:
                 "taxonomy": TAXONOMY_VERSION, "classifier": self.engine.name, "epoch": self.epoch,
                 "settlement": settlement, "privacy": ["skeleton", "open"],
                 "fee_per_transaction_nanos": self.tx_fee_nanos,
-                "start_here": ["GET /v0/taxonomy", "GET /v0/search", "GET /v0/learnings", "GET /v0/bounties"]}
+                "start_here": ["GET /v0/failures", "GET /v0/search", "GET /v0/taxonomy", "GET /v0/learnings",
+                               "GET /v0/bounties"],
+                "registry": {"failures": "GET /v0/failures?path=&failure=&model=&status=&sort=frequency|growth|bounty|new",
+                             "failure": "GET /v0/failures/{TXF-id} (and /history)", "fixes": "POST /v0/fixes",
+                             "models": "GET /v0/models/{version}/report"}}
 
     def provenance(self, oid, _depth=0):
         r = self.db.execute("SELECT body FROM learnings WHERE id=?", (oid,)).fetchone()
@@ -1033,9 +1076,9 @@ MAX_BODY = 64 * 1024
 # them could steer payouts. Bounty claims and validator stakes wait for signed messages for the same reason.
 ADMIN_ROUTES = {"/v0/epochs/clear", "/v0/epochs/settle", "/v0/checkers", "/v0/learnings", "/v0/admin/remove",
                 "/v0/admin/reclassify", "/v0/validators", "/v0/decoys", "/v0/decoys/unseal", "/v0/licences/direct",
-                "/v0/admin/btc-price"}
+                "/v0/admin/btc-price", "/v0/models"}
 ADMIN_LEARNING_ACTIONS = {"commits", "reveals"}   # validator messages: operator-relayed until they are signed
-ADMIN_ACTIONS = {"claims"}
+ADMIN_ACTIONS = {"claims", "measurements"}       # a bounty poster's measurement, too, until it is signed
 GONE = ("bounty coins were removed in v0.6: a bounty is a refundable pledge escrow with no token. Pledge with "
         "POST /v0/bounties/{id}/pledges {backer, msats or sats}")
 
@@ -1099,6 +1142,12 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
             body = json.dumps(wire(obj), indent=1).encode()
             self.send_response(code)
             self._headers("application/json", len(body), dict({"Cache-Control": "no-store"}, **(extra or {})))
+            self.wfile.write(body)
+
+        def _send_text(self, code, text):
+            body = text.encode()
+            self.send_response(code)
+            self._headers("text/plain; charset=utf-8", len(body), {"Cache-Control": "no-store"})
             self.wfile.write(body)
 
         def _body(self):
@@ -1166,9 +1215,32 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                 if u.path == "/v0/taxonomy":
                     return self._send(200, ex.taxonomy())
                 if u.path == "/v0/search":
-                    return self._send(200, ex.search(q.get("q", ""), q.get("path", ""), q.get("failure", ""),
-                                                      q.get("model", ""), int(q.get("limit", 20)), q.get("sort", ""),
-                                                      int(q.get("offset", 0)), q.get("facets") in ("1", "true")))
+                    fmt = q.get("format", "json")
+                    r = ex.search(q.get("q", ""), q.get("path", ""), q.get("failure", ""), q.get("model", ""),
+                                  int(q.get("limit", 20)), q.get("sort", ""), int(q.get("offset", 0)),
+                                  q.get("facets") in ("1", "true"), q.get("kind", "trace"), fmt)
+                    return self._send_text(200, r["text"]) if fmt == "text" else self._send(200, r)
+                if u.path == "/v0/failures":
+                    return self._send(200, ex.failures(q.get("path", ""), q.get("failure", ""), q.get("model", ""),
+                                                       q.get("status", ""), q.get("sort", "frequency"),
+                                                       int(q.get("limit", 20)), int(q.get("offset", 0))))
+                mf = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)(/history)?", u.path)
+                if mf:
+                    return self._send(200, ex.failure_history(mf[1]) if mf[2] else ex.get_failure(mf[1]))
+                if u.path == "/v0/fixes":
+                    return self._send(200, ex.fixes(q.get("failure", ""), q.get("status", ""), int(q.get("limit", 50))))
+                mx = re.fullmatch(r"/v0/fixes/([A-Za-z0-9-]+)", u.path)
+                if mx:
+                    return self._send(200, ex.get_fix(mx[1]))
+                if u.path == "/v0/models":
+                    return self._send(200, ex.models())
+                mm = re.fullmatch(r"/v0/models/(.+)/report", u.path)
+                if mm:
+                    return self._send(200, ex.model_report(unquote(mm[1])))
+                if u.path.startswith("/v0/traces/"):
+                    return self._send(200, ex.get_trace(unquote(u.path.split("/", 3)[3])))
+                if u.path.startswith("/v0/reporters/") and sats_mode:
+                    return self._send(200, ex.reporter(u.path.split("/", 3)[3]))
                 if u.path == "/v0/bounties":
                     return self._send(200, ex.bounties(q.get("path", ""), q.get("status", "")))
                 mv = re.fullmatch(r"/v0/learnings/([^/]+)/verdict", u.path)
@@ -1244,7 +1316,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                           "/v0/admin/remove": lambda b: ex.remove(b.get("kind"), b.get("id")),
                           "/v0/admin/reclassify": lambda b: refile_in_background(ex, b.get("only", "rules"),
                                                                                   int(b.get("limit") or 0)),
-                          "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else "")}
+                          "/v0/faucet": lambda b: ex.faucet(b.get("address"), self._client() if public else ""),
+                          "/v0/fixes": ex.claim_fix, "/v0/models": ex.register_model}
                 if self.path in ("/v0/swap", "/v0/credits"):
                     return self._send(410, {"error": "v0.6 has no token: no swaps and no credits. Every call is paid "
                                                      "in sats (testnet: POST /v0/faucet; mainnet: Lightning, L402)"})
@@ -1254,7 +1327,23 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                                                                                      msats_in(b, "stake", required=True)),
                                    "/v0/decoys": lambda b: ex.register_decoy(b["learning"], b["digest"], b["funder"]),
                                    "/v0/decoys/unseal": lambda b: ex.unseal_decoy(b["learning"], b["gain"], b["salt"]),
-                                   "/v0/licences/direct": lambda b: ex.direct_licence(b["lot"], b["buyer"], b["traces"])})
+                                   "/v0/licences/direct": lambda b: ex.direct_licence(b["lot"], b["buyer"], b["traces"]),
+                                   "/v0/reporters": lambda b: ex.post_reporter_bond(b.get("address")),
+                                   "/v0/reporters/withdraw": lambda b: ex.withdraw_reporter(b.get("address"))})
+                mfx = re.fullmatch(r"/v0/fixes/([A-Za-z0-9-]+)/(commits|reveals)", self.path)
+                if mfx:                                  # validator messages about a fix: operator-relayed until signed
+                    if not self._admin():
+                        return self._send(403, {"error": "validator messages are relayed by the operator until they are signed"})
+                    b = self._body()
+                    if mfx[2] == "commits":
+                        return self._send(200, ex.commit_fix(mfx[1], b["validator"], b["digest"]))
+                    return self._send(200, ex.reveal_fix(mfx[1], b["validator"], b["measurement"], b.get("salt", "")))
+                mrp = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)/repro", self.path)
+                if mrp:
+                    if not self._admin():
+                        return self._send(403, {"error": "validator messages are relayed by the operator until they are signed"})
+                    b = self._body()
+                    return self._send(200, ex.repro_check(mrp[1], b["validator"], b["results"]))
                 ml = re.fullmatch(r"/v0/learnings/([^/]+)/(commits|reveals|challenges)", self.path)
                 if ml and sats_mode:
                     lid, act = ml[1], ml[2]
@@ -1266,7 +1355,7 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                         return self._send(403, {"error": "validator messages are relayed by the operator until they are signed"})
                     return self._send(200, fn(self._body()))
                 fn, admin = routes.get(self.path), self.path in ADMIN_ROUTES
-                m = re.fullmatch(r"/v0/bounties/(\d+)/(claims|pledges|buy|sell|transfer)", self.path)
+                m = re.fullmatch(r"/v0/bounties/(\d+)/(claims|pledges|measurements|buy|sell|transfer)", self.path)
                 if m:
                     i, act = int(m[1]), m[2]
                     if act in ("buy", "sell", "transfer"):
@@ -1275,7 +1364,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     fn = {"claims": (lambda b: ex.claim_bounty(i, b["learning"], b.get("attestation"))) if sats_mode
                           else (lambda b: ex.claim_bounty(i, b["learning"])),
                           "pledges": (lambda b: ex.pledge(i, b.get("backer"), msats_in(b, required=True)))
-                          if sats_mode else (lambda b: ex.pledge(i, b.get("backer"), b.get("micros") or 0))}[act]
+                          if sats_mode else (lambda b: ex.pledge(i, b.get("backer"), b.get("micros") or 0)),
+                          "measurements": lambda b: ex.poster_measure(i, b["fix"], b["attestation"])}[act]
                 if not fn:
                     return self._send(404, {"error": "not found"})
                 if admin and not self._admin():

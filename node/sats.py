@@ -1,4 +1,5 @@
-"""traceX v0.6: no token. Everything is paid directly in sats, and every payout is a split of a real payment.
+"""traceX v0.7 (the v0.6 economy, plus the failure registry): no token. Everything is paid directly in sats, and every
+payout is a split of a real payment.
 
     python node/exchange.py --economy sats ...        # or TRACEX_ECONOMY=sats
 
@@ -52,9 +53,11 @@ from dataclasses import dataclass
 from exchange import (ADDRESS, BOUNTY_SPLIT, MAX_DEPTH, TX_FEE_MSATS, Exchange, PaymentRequired, need_address,
                       msats_in, split_trace_sale, split_usage, leaf, build_tree, proof, canonical, object_id,
                       clear_shared, Bid)
+from registry import Registry
 from traceex.trace import Learning
 
-VERSION = "0.6"
+VERSION = "0.7"
+UPGRADES_FROM = ("0.6",)       # v0.7 adds the failure registry to a v0.6 database (additive tables, a backfill)
 MSATS_PER_BTC = 100_000_000_000
 BTC_USD = 85_962               # Coinbase spot, 2026-10-05: only for the approximate dollar figures shown beside sats
 BURN = "burn:unspendable"      # forfeits go here; nothing on the node can spend from it
@@ -115,6 +118,9 @@ class Params:
     btc_usd: int = BTC_USD                     # dollars a bitcoin: only for approximate dollar figures (and the re-peg)
     fee_repeg_epochs: int = 0                  # re-peg the fee to fee_target_usd_nanos every N epochs (0: never)
     fee_target_usd_nanos: int = 50_000         # the re-peg's target: $0.00005, at the operator's btc_usd
+    fix_bond_msats: int = 2_000_000            # v0.7: 2,000 sats with each fix claim, destroyed if it fixes none of them
+    reporter_bond_msats: int = 1_000_000       # v0.7: 1,000 sats makes a reporter verified (counted); destroyed if a
+                                               # case it reported does not reproduce
 
 
 SATS_SCHEMA = """
@@ -244,7 +250,7 @@ class SatsExchange(Exchange):
         old = self._meta("coin_version") or ("0.3" if self._meta("pool_coin") else None)
         mine = self._meta("sats_version")
         has_data = self.db.execute("SELECT EXISTS(SELECT 1 FROM traces) OR EXISTS(SELECT 1 FROM ledger)").fetchone()[0]
-        if old or (mine and mine != VERSION) or (not mine and has_data):
+        if old or (mine and mine != VERSION and mine not in UPGRADES_FROM) or (not mine and has_data):
             self.db.close()
             what = f"a testnet v{old} coin economy (TXC)" if old else (f"a v{mine} node" if mine else "an older node")
             raise ValueError(f"this database holds {what}; v{VERSION} has no token and pays everything in sats: start "
@@ -257,8 +263,17 @@ class SatsExchange(Exchange):
         if mine is None:                                        # genesis: nothing exists but the rules
             self._set_meta("sats_version", VERSION)
             self._set_meta("beacon", hashlib.sha256(b"traceX v0.6 genesis").hexdigest())
+        elif mine in UPGRADES_FROM:                             # v0.6 -> v0.7: the registry is built from its traces
+            self._set_meta("sats_version", VERSION)
         self.db.commit()
+        Registry._open_registry(self)
+        if mine in UPGRADES_FROM:
+            self._event(f"node upgraded from v{mine} to v{VERSION}: every stored trace filed in the failure registry",
+                        force=True)
+            self.db.commit()
 
+    def _open_registry(self):
+        """Deferred until the version checks above pass: a database this node refuses is never touched."""
     # --- the ledger: one unit, every entry a move, so the books always sum to zero ------------------------------------
     def _m(self, k):
         return int(self._meta(k) or 0)
@@ -466,6 +481,8 @@ class SatsExchange(Exchange):
             self.db.commit()
         if first:
             out["near_duplicate_of"] = first[0]
+            self._link_copy(out["id"], first[0])       # v0.7: a copy is its original's case in the registry
+            self.db.commit()
         return out
 
     def _canonical(self, tid):
@@ -1212,6 +1229,7 @@ class SatsExchange(Exchange):
                     self._finalize(lid, rnd)
                 else:
                     self._redraw(lid, rnd)
+            self._registry_settle()                        # v0.7: fix rounds that ran out of time, payable bounties
             self._pay_licences()
             self._split_usage(self._split_tree())
             self._release()
@@ -1238,6 +1256,7 @@ class SatsExchange(Exchange):
                 self._assign(lid, 0)
             for lid, rnd in self.db.execute("SELECT learning, round FROM verdicts WHERE status='challenged'").fetchall():
                 self._assign(lid, rnd, exclude=self.assigned(lid, rnd - 1))
+            self._registry_assign()                        # v0.7: validators for fixes, from the new beacon
             summary = {"epoch": e}
             for k in ("paid_in_msats", "paid_out_msats", "refunded_msats", "fees_msats", "forfeited_msats"):
                 summary[k] = self._m(k) - self._m("mark_" + k)          # this epoch's flow
@@ -1331,7 +1350,8 @@ class SatsExchange(Exchange):
                 "escrow_msats": {"payments": self._sum_like("pay:"), "vesting": self._vesting_of(),
                                  "bounty_pledges": int(self.db.execute(
                                      "SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='open'").fetchone()[0]),
-                                 "bonds": self._sum_like("bond:"), "challenge_stakes": self._sum_like("challenge:")},
+                                 "bonds": self._sum_like("bond:"), "challenge_stakes": self._sum_like("challenge:"),
+                                 "fix_bonds": self._sum_like("fixbond:"), "reporter_bonds": self._sum_like("reporter:")},
                 "staked_msats": self._sum_like("stake:"), "validators": len(self._active()),
                 "forfeited_msats": self._bal(BURN), "burn": {"account": BURN, "destination": BURN_DESTINATION,
                                                              "batches": batches},
@@ -1349,6 +1369,7 @@ class SatsExchange(Exchange):
                           "decoy": {"z": self.p.decoy_z, "strikes": self.p.decoy_strikes,
                                     "window_epochs": self.p.strike_window, "slash": self.p.fake_slash},
                           "unbacked_bounty_epochs": self.p.unbacked_epochs,
+                          "fix_bond_msats": self.p.fix_bond_msats, "reporter_bond_msats": self.p.reporter_bond_msats,
                           "invariant": "every payout is a split of a real payment: per payment, payouts <= paid - fee"}}
 
     def stats(self):
@@ -1372,7 +1393,148 @@ class SatsExchange(Exchange):
         d.pop("fee_per_transaction_nanos", None)
         d["validation"] = {"quorum": self.p.quorum, "commit": "POST /v0/learnings/{id}/commits",
                            "reveal": "POST /v0/learnings/{id}/reveals", "challenge": "POST /v0/learnings/{id}/challenges"}
+        d["registry"].update(reporters="POST /v0/reporters {address}: a 1,000-sat bond makes your reports count",
+                             fix_bond_msats=self.p.fix_bond_msats, reporter_bond_msats=self.p.reporter_bond_msats)
         return d
+
+    # --- v0.7: reporters, fix bonds and fix rounds, in sats ------------------------------------------------------------
+    def _verified_set(self):
+        """A verified reporter holds a reporter bond: counting it costs a sybil 1,000 sats an address, destroyed the
+        first time validators find a case it reported does not reproduce."""
+        return {a for (a,) in self.db.execute("SELECT address FROM reporters WHERE bond >= ? AND leaving IS NULL",
+                                              (self.p.reporter_bond_msats,)).fetchall()}
+
+    def _reporter_failures(self, address):
+        return [x for (x,) in self.db.execute(
+            "SELECT DISTINCT o.failure FROM occurrences o LEFT JOIN traces t ON t.id = o.canonical "
+            "WHERE COALESCE(t.producer, o.reporter) = ?", (address,)).fetchall()]
+
+    def post_reporter_bond(self, address):
+        """Hold 1,000 sats in escrow so your reports count as a verified reporter's. Refundable: withdraw, and it comes
+        back vest_epochs later. Destroyed if validators find a case you reported does not reproduce."""
+        need_address(address, "address")
+        bond = self.p.reporter_bond_msats
+        with self.lock:
+            r = self.db.execute("SELECT bond, leaving FROM reporters WHERE address=?", (address,)).fetchone()
+            if r and r[0] >= bond and r[1] is None:
+                return self.reporter(address)
+            top = bond - (r[0] if r else 0)
+            if top > 0:
+                self._need_funds(address, top)
+            self._tx_fee(address)
+            if top > 0:
+                self._move(address, f"reporter:{address}", top, "reporter bond")
+            self.db.execute("INSERT OR REPLACE INTO reporters VALUES (?,?,?,NULL)",
+                            (address, max(bond, r[0] if r else 0), self.epoch))
+            for x in self._reporter_failures(address):
+                self._index_failure(x)
+            self._event(f"a reporter bonded {fmt_sats(bond)}: its reports now count")
+            self.db.commit()
+        return self.reporter(address)
+
+    def withdraw_reporter(self, address):
+        need_address(address, "address")
+        with self.lock:
+            r = self.db.execute("SELECT bond, leaving FROM reporters WHERE address=?", (address,)).fetchone()
+            if not r or r[1] is not None or r[0] <= 0:
+                raise ValueError("no reporter bond to withdraw")
+            self._tx_fee(address)
+            self.db.execute("UPDATE reporters SET leaving=? WHERE address=?", (self.epoch, address))
+            for x in self._reporter_failures(address):
+                self._index_failure(x)
+            self.db.commit()
+        return dict(self.reporter(address), returns_epoch=self.epoch + self.p.vest_epochs)
+
+    def reporter(self, address):
+        r = self.db.execute("SELECT bond, joined, leaving FROM reporters WHERE address=?", (address,)).fetchone()
+        cases = self.db.execute("SELECT COUNT(*), COALESCE(SUM(rejected), 0) FROM occurrences WHERE reporter=?",
+                                (address,)).fetchone()
+        return {"address": address, "bond_msats": self._bal(f"reporter:{address}"), "joined": r[1] if r else None,
+                "leaving": r[2] if r else None, "verified": address in self._verified_set(), "cases": cases[0],
+                "refuted": cases[1], "bond_needed_msats": self.p.reporter_bond_msats}
+
+    def _reporter_fabricated(self, address, tid):
+        bal = self._bal(f"reporter:{address}")
+        if bal > 0:
+            self._forfeit(f"reporter:{address}", bal, "reporter bond", address)
+            self._event(f"a reporter's bond ({fmt_sats(bal)}) was destroyed: a case it reported did not reproduce")
+        self.db.execute("UPDATE reporters SET bond=0 WHERE address=?", (address,))
+        for x in self._reporter_failures(address):
+            self._index_failure(x)
+        return bal
+
+    def _validator_list(self):
+        return [a for a, _ in self._active()] or list(self.validators)
+
+    def _repro_quorum(self):
+        return max(1, self.p.quorum // 2 + 1)
+
+    def _fix_quorum(self):
+        return max(int(self.p.quorum), 0)
+
+    def _commit_required(self):
+        return self.p.quorum > 0
+
+    def _fix_can_pay(self, claimant):
+        self._need_funds(claimant, self.p.fix_bond_msats)
+
+    def _fix_charge(self, claimant, fix_id):
+        self._tx_fee(claimant)
+        bond = self.p.fix_bond_msats
+        if bond:
+            self._move(claimant, f"fixbond:{fix_id}", bond, "fix bond")
+        return bond
+
+    def _fix_bond_settle(self, fix_id, keep):
+        bal = self._bal(f"fixbond:{fix_id}")
+        if bal <= 0:
+            return 0
+        claimant = self.db.execute("SELECT claimant FROM fixes WHERE id=?", (fix_id,)).fetchone()[0]
+        if keep:
+            self._move(f"fixbond:{fix_id}", claimant, bal, "fix bond returned", payout=True)
+        else:
+            self._forfeit(f"fixbond:{fix_id}", bal, "fix bond", fix_id)
+        return bal
+
+    def _fix_assign(self, fix_id, claimant):
+        """Validators for a fix are drawn like a learning's: stake-weighted rendezvous hashing over a beacon published
+        after the claim (beacon_delay), never the claimant itself."""
+        if self.p.quorum <= 0 or self.beacon_delay > 0:
+            return
+        self._draw_fix(fix_id, claimant)
+
+    def _draw_fix(self, fix_id, claimant):
+        if self.db.execute("SELECT 1 FROM fix_assign WHERE fix=?", (fix_id,)).fetchone():
+            return
+        vals = self._eligible(exclude=(claimant,) if claimant else ())
+        if len(vals) < self.p.quorum:
+            return
+        for a, _ in sorted(vals, key=lambda v: self._score("fix:" + fix_id, 0, *v))[:self.p.quorum]:
+            self.db.execute("INSERT INTO fix_assign VALUES (?,?,?)", (fix_id, a, self.epoch))
+
+    def _registry_assign(self):
+        if self.p.quorum <= 0:
+            return
+        for fix_id, claimant in self.db.execute("SELECT id, claimant FROM fixes WHERE status='pending'").fetchall():
+            self._draw_fix(fix_id, claimant if claimant != "operator" else None)
+
+    def _registry_settle(self):
+        """Fix rounds that sat a whole epoch settle with the majority that revealed; leaving reporters get their bonds
+        back after vest_epochs (so a reporter can't dodge a re-check by leaving); payable failure bounties pay."""
+        e = self.epoch
+        for fix_id in [x for (x,) in self.db.execute(
+                "SELECT f.id FROM fixes f WHERE f.status='pending' AND EXISTS (SELECT 1 FROM fix_assign a WHERE a.fix=f.id "
+                "AND a.epoch < ?)", (e,)).fetchall()]:
+            n = self.db.execute("SELECT COUNT(*) FROM fix_reveals WHERE fix=?", (fix_id,)).fetchone()[0]
+            if n >= self.p.quorum // 2 + 1:
+                self._finalize_fix(fix_id)
+        for address, leaving in self.db.execute("SELECT address, leaving FROM reporters WHERE leaving IS NOT NULL AND "
+                                                "leaving + ? <= ?", (self.p.vest_epochs, e)).fetchall():
+            bal = self._bal(f"reporter:{address}")
+            if bal > 0:
+                self._move(f"reporter:{address}", address, bal, "reporter bond returned", payout=True)
+            self.db.execute("DELETE FROM reporters WHERE address=?", (address,))
+        Registry._registry_settle(self)
 
     def find_learnings(self, path="", model="", kind="", min_gain=0.0, limit=20, include_pending=False):
         """Accepted learnings only (unless include_pending), ranked by the federation's median gain."""

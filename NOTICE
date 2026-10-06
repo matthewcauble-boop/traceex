@@ -1,0 +1,25 @@
+traceX
+Copyright 2026 The traceX Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------------------------------------------------
+
+node/leviathan_search.py, the node's search index, is adapted from the design of Leviathan
+(https://github.com/elstongun/leviathan, version 0.1.0, commit eb045bb1892a8542db23a89f528fba67b3c7abbb), licensed
+under the Apache License, Version 2.0. It is a re-implementation in Python, modified for traceX (the changes are listed
+in the module's header); no Leviathan source code is copied verbatim. Leviathan's NOTICE file reads:
+
+    Leviathan
+    Copyright 2026 The Leviathan Authors
+
+    This product includes SQLite (public domain), compiled in via the
+    rusqlite / libsqlite3-sys crates. See THIRD_PARTY.md for all dependencies
+    and their licenses.
+
+traceX uses SQLite (public domain) through Python's standard sqlite3 module.
+
+------------------------------------------------------------------------------------------------------------------------
+
+examples/code_repair uses the MBPP dataset (Google Research, CC BY 4.0) and Qwen2.5-0.5B-Instruct (Alibaba Cloud,
+Apache-2.0); see that example's README files for details.

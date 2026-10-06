@@ -12,6 +12,13 @@ dependencies = []
 
 [project.scripts]
 traceex-mcp = "traceex.mcp:main"
+traceex-outbox = "traceex.outbox:main"
+
+[project.entry-points.pytest11]
+traceex = "traceex.pytest_plugin"
+
+[project.optional-dependencies]
+otel = ["opentelemetry-sdk>=1.20"]
 
 [tool.setuptools]
 packages = ["traceex"]

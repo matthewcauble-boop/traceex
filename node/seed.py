@@ -10,9 +10,17 @@ operator-only calls work); nothing is made up. The demo accounts are the example
 Epoch 1 is then settled, so the node opens on epoch 2 with a published payout root. A database that already holds
 traces is left alone.
 
-On a sats node (node/sats.py, v0.6) the seed also stakes three validators and runs the federation for real: each
+On a sats node (node/sats.py, v0.7) the seed also stakes three validators and runs the federation for real: each
 validator holds its own slice of the held-out data (one airline's email each; a third of the 500 MBPP problems each),
 commits, then reveals its paired measurement. Learnings are validated in epoch 2, so that node opens on epoch 3.
+
+The failure registry (v0.7) fills itself as the traces arrive. The three code producers post reporter bonds, so their
+reports count. Then, measured the same way and from the same recorded runs: LoRA v2 claims the code failures it was
+built from, and each validator measures it on its own third of the held-out problems the base model failed with that
+failure's mode; the flight routing learning claims the flight failures, measured field by field on each validator's
+airline (too few cases to call, so they stay open); LoRA v1, registered as a model version, re-checks every Qwen2.5
+failure; and the maintainer posts a bounty on the TypeError failure, then measures LoRA v2 on its own hidden cases
+(below the target, so it stays open).
 
     python node/seed.py exchange.db        # seed a database file directly
 """
@@ -189,6 +197,9 @@ def seed(ex, url):
         _direct(ex, code_lot, (BIDDER4, BIDDER3))
     for t in lot2:
         Client(url, t["producer"]).submit(t)
+    if sats_mode:                     # v0.7: the producers bond themselves as reporters, so their reports count
+        for p in CODE_PRODUCERS:
+            Client(url, p).reporter_bond()
     ev, r, info = _load("eval-lora-v2.json"), rep["lora-v2"], _load("lora-v2", "training.json")
     att = attest(VALIDATOR, base["eval_set"], "pass@1 with one round of checker feedback, 500 held-out problems",
                  round(rep["base"]["rate"], 4), round(r["rate"], 4))
@@ -259,6 +270,7 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
     the held-out data, commits, and reveals. Accepted learnings earn as people pay to use them."""
     from traceex import Client, first_pass_score
     from sats import attestation_digest
+    claims = registry_claims(ex, url, lid, lid2)          # v0.7: drawn from the beacon this settlement publishes
     ex.settle()
     story = ["3 validators staked 15,000 sats each; each holds its own slice of the held-out data"]
     fields = list(flight.FIELDS)
@@ -304,6 +316,107 @@ def federate(ex, url, flight, model, routed, lid, lid2, fb, rep, flight_parents,
                      "in escrow in case a challenge claws it back")
     story.append("licence money waits for the traces each buyer used: the trainer's learnings name its traces, the "
                  "other buyers named theirs")
+    story += registry_measure(ex, url, claims, flight, model, routed)
+    return story
+
+
+# --- v0.7: the failure registry, measured from the same recorded runs ----------------------------------------------------
+def registry_claims(ex, url, lid, lid2):
+    """Fixes claim failures and a model version is registered (epoch 1); validators are drawn at the settlement."""
+    from traceex import Client
+    from registry import model_family
+    qwen = model_family(QWEN)
+    code = [x for (x,) in ex.db.execute("SELECT id FROM failures WHERE family=? AND path='code/generate' ORDER BY seq",
+                                        (qwen,)).fetchall()]
+    flights = [x for (x,) in ex.db.execute("SELECT id FROM failures WHERE family='needle3' ORDER BY seq").fetchall()]
+    trainer = Client(url, TRAINER)
+    lora = trainer.claim_fix(code, QWEN, kind="learning", learning=lid2,
+                             artifact={"name": "LoRA v2", "uri": f"{REPO}/code_repair/runs/lora-v2"})["id"]
+    routing = trainer.claim_fix(flights, "needle3", kind="learning", learning=lid,
+                                artifact={"name": "Field routing for flight emails"})["id"] if flights else None
+    v1 = ex.register_model({"version": QWEN + "+lora-v1", "parent": QWEN})["recheck"]
+    typeerr = ex.db.execute("SELECT id FROM failures WHERE family=? AND path='code/generate' AND "
+                            "signature='code:runtime_error/TypeError'", (qwen,)).fetchone()
+    bounty = None
+    if typeerr:
+        base = _load("eval-base.json")["per_task"]
+        hidden = sorted((t for t, v in base.items() if not v["passed"] and v.get("mode") == "runtime_error"), key=int)
+        eval_set = "sha256:" + hashlib.sha256(",".join(hidden).encode()).hexdigest()
+        bounty = Client(url, MAINTAINER).post_bounty(title=f"Stop {QWEN} raising TypeError on MBPP-style tasks",
+                                                     failure_id=typeerr[0], eval_set=eval_set, target=0.5,
+                                                     epochs=EPOCHS)["id"]
+        Client(url, LEE).pledge(bounty, msats=2_000_000)
+    return {"lora": lora, "routing": routing, "v1": v1, "bounty": bounty, "typeerr": typeerr[0] if typeerr else None}
+
+
+def registry_measure(ex, url, claims, flight, model, routed):
+    """Each drawn validator measures each claim on its own cases (commit, then reveal): the held-out problems in its
+    third that the base model failed with the failure's mode (code), or the fields of the failure on its own airline's
+    email that the base model got wrong (flight). Real recorded results; nothing is made up."""
+    from traceex import Client, attest, first_pass_score
+    from registry import measurement_digest
+    base, v1, v2 = (_load(f)["per_task"] for f in ("eval-base.json", "eval-lora-v1.json", "eval-lora-v2.json"))
+    mode_of = {x: json.loads(m)[0] for x, m in ex.db.execute("SELECT id, modes FROM failures").fetchall()}
+    sig_of = dict(ex.db.execute("SELECT id, signature FROM failures").fetchall())
+
+    def code_results(fix_id, after, i):
+        out = {}
+        for x in ex.get_fix(fix_id)["claims"]:
+            ids = [t for t, v in base.items() if not v["passed"] and v.get("mode") == mode_of[x["failure"]] and int(t) % 3 == i]
+            if ids:
+                out[x["failure"]] = {"passed": sum(bool(after[t]["passed"]) for t in ids), "n": len(ids)}
+        return out
+
+    airline = dict(zip(SEED_VALIDATORS, sorted(flight.EVAL)))
+
+    def flight_results(fix_id, v):
+        name = airline[v]
+        doc = {name: flight.EVAL[name]}
+        _, bad_b = first_pass_score(doc, model, flight.check, fields=flight.FIELDS, clean=flight.clean)
+        _, bad_a = first_pass_score(doc, routed, flight.check, fields=flight.FIELDS, clean=flight.clean)
+        out = {}
+        for x in ex.get_fix(fix_id)["claims"]:
+            fields = [p.split(":")[0] for p in sig_of[x["failure"]].split()]
+            cases = [f for f in fields if f in bad_b[name]]
+            if cases:
+                out[x["failure"]] = {"passed": sum(f not in bad_a[name] for f in cases), "n": len(cases)}
+        return out
+
+    rounds = [(claims["lora"], lambda v: code_results(claims["lora"], v2, SEED_VALIDATORS.index(v))),
+              (claims["v1"], lambda v: code_results(claims["v1"], v1, SEED_VALIDATORS.index(v)))]
+    if claims["routing"]:
+        rounds.append((claims["routing"], lambda v: flight_results(claims["routing"], v)))
+    for fix_id, measure in rounds:
+        if not fix_id:
+            continue
+        drawn = ex.get_fix(fix_id)["assigned"]
+        ms = {v: {"results": measure(v)} for v in drawn}
+        for v in drawn:
+            ex.commit_fix(fix_id, v, measurement_digest(ms[v], "seed:" + v))
+        for v in drawn:
+            ex.reveal_fix(fix_id, v, ms[v], "seed:" + v)
+    lora = ex.get_fix(claims["lora"])
+    part = [c for c in lora["claims"] if c["status"] == "partly_fixed"]
+    rates = ", ".join(f"{c['pass_rate']:.0%}" for c in part)
+    story = [f"the failure registry filed the {ex.stats()['traces']} traces under {ex.registry_stats()['failures']} "
+             "failures; the three code producers bonded 1,000 sats each as reporters, so their reports count",
+             f"LoRA v2 claimed {len(lora['claims'])} code failures as fix {lora['id']}: validators measured it on "
+             f"their own held-out cases; {len(part)} partly fixed"
+             + (f" ({rates})" if part else "") + ", none fixed",
+             f"{QWEN}+lora-v1 registered as a model version: every Qwen2.5 failure re-checked "
+             f"(GET /v0/models/{{version}}/report)"]
+    if claims["routing"]:
+        story.append("the flight routing learning claimed the flight failures: a few fields per airline, too few cases "
+                     "to call, so they stay open")
+    if claims["bounty"]:
+        base_ids = sorted((t for t, v in base.items() if not v["passed"] and v.get("mode") == "runtime_error"), key=int)
+        after = round(sum(bool(v2[t]["passed"]) for t in base_ids) / len(base_ids), 4)
+        b = ex.bounties()["bounties"]
+        bb = next(x for x in b if x["id"] == claims["bounty"])
+        ex.poster_measure(claims["bounty"], claims["lora"], attest(MAINTAINER, bb["eval_set"], "pass@1, first try",
+                                                                   round(0.0, 4), after))
+        story.append(f"bounty #{claims['bounty']} posted on {claims['typeerr']} (TypeError): its poster measured LoRA v2 "
+                     f"at {after:.0%} on its own hidden cases, target 50%: it stays open, refunded if nobody gets there")
     return story
 
 

@@ -3,7 +3,8 @@
 Vercel serves the website (site/) from its edge and sends /v0, /mcp and /.well-known here (vercel.json). A Vercel
 function keeps no disk between instances, so it can't hold the exchange's wallets and ledger; this one builds the
 seeded testnet (node/seed.py, the same seed the hosted node starts from) when an instance starts and refuses every
-write. Search, bounties, learnings, verdicts, the economy's numbers (in sats) and the read-only MCP tools all work. The live
+write. Search, the failure registry (failures, fixes, model reports), bounties, learnings, verdicts, the economy's numbers
+(in sats) and the read-only MCP tools all work. The live
 exchange, with wallets, runs where its database can live (render.yaml); once it does, point the rewrites in
 vercel.json at it and this function steps aside.
 """
@@ -22,7 +23,9 @@ READ_ONLY = ("this is the read-only preview of the traceX testnet: search and br
              "pledges and sharing open on the live node")
 WRITES = ("faucet", "submit_trace", "bid", "clear", "register_learning", "usage", "settle", "register_checker",
           "post_bounty", "pledge", "claim_bounty", "remove", "reclassify", "register_validator", "commit", "reveal",
-          "challenge", "direct_licence", "register_decoy", "unseal_decoy", "set_btc_usd")
+          "challenge", "direct_licence", "register_decoy", "unseal_decoy", "set_btc_usd",
+          "claim_fix", "commit_fix", "reveal_fix", "register_model", "poster_measure", "repro_check",
+          "post_reporter_bond", "withdraw_reporter")
 
 os.environ.pop("TYPESAFE_API_KEY", None)            # the snapshot is filed by the keyword engine, the same every time
 DB = os.path.join(tempfile.gettempdir(), "tracex-preview.db")

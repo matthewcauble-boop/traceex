@@ -5,6 +5,13 @@ and from everyone else's, without a lab in the loop. traceX is the protocol for 
 pays for it: any model's **verified fixes** become owned, tradable training data, and the **learnings** built from
 them earn per-use royalties that flow back to everyone whose work went into them.
 
+**The registry (v0.7).** The durable asset is not a learning, which others can copy, but the record of what breaks in
+the field and what provably fixes it: a CVE-like registry for model failures. Every trace is filed under a canonical
+failure with a stable public id (`TXF-2026-000123`), counted by distinct verified reporters, and tracked per model
+version (open, partly fixed, fixed, regressed) as fixes are measured against it; bounties attach to failure ids and
+pay when their failure is fixed (4g, 4h). Traces arrive from agents and SDKs, from test suites (a pytest plugin) and
+from telemetry (an OpenTelemetry exporter), skeletonized on the machine they come from (4i).
+
 ## 0. The adaptive loop
 ```
 act ──▶ check ──▶ fix ──▶ trace ──▶ learning ──▶ attested gain on held-out data ──▶ every agent adopts ──▶ act
@@ -131,14 +138,29 @@ get solved with learnings or packages that are then sold. The classifier engine 
     `role_swap` (a value that belongs to another field), `wrong_span`, `invented`, `omission`, `normalised`. The
     signature (`role_swap:2 type_mismatch:1`) is searchable. On the demo traces the dominant failure is role swaps,
     which is exactly what the routing learning fixes.
-- **Search** (`GET /v0/search?q=&path=&failure=&model=&sort=&offset=&facets=`): SQLite FTS5 over skeleton text,
-  path, signature, model and task, filtered by taxonomy branch and failure mode. `sort=relevant` (the default with
-  words) ranks by BM25 with a match in the branch name weighted 4x, the failure label 3x, model and task 2x, the text
-  1x; when every word together finds nothing, any word will do. `sort=new` (the default without words) is newest
-  first; `sort=bounty` puts traces that feed the richest open bounty first. `facets=1` adds counts per branch and per
-  failure mode, so a browse tree can be built from one call. Results come back with the open bounties on the same
-  branch, so a trainer sees supply and demand together. `GET /v0/taxonomy` gives the tree with trace counts per
-  branch.
+- **Search** (`GET /v0/search?q=&path=&failure=&model=&kind=&sort=&offset=&format=&facets=`; v0.7): a Leviathan-style
+  index (`node/leviathan_search.py`, adapted from Leviathan, https://github.com/elstongun/leviathan, Apache-2.0,
+  credited in NOTICE) inside the node's own SQLite database, over traces and registry failures alike (`kind`: trace,
+  the default; failure; all). SQLite FTS5 with porter stemming: any word may match, ranked by BM25 with the title
+  weighted 2x (text and labels 1x, branch names 0.5x, the fix's code 0.3x), newest first on ties; stopwords are dropped
+  and every word re-quoted, so query syntax typed by a person or an agent is inert. The taxonomy branch (one token per
+  ancestor, so a branch scopes its subtree) and every filter (failure mode, model or model family, checker, kind,
+  failure id) are synthetic tokens in a `tags` column, so scoping and filtering are posting-list intersections inside
+  the match, not post-filters. `path` resolves in tiers, exact > case-insensitive > description > key contains >
+  description contains > fuzzy (Sorensen-Dice >= 0.6): `code/gen` finds code/generate, `travel` the extract/travel
+  subtree, and when several unrelated branches match, the reply is `status: ambiguous_branch` with the candidates and
+  no results: it never guesses. When nothing matches inside the branch, cards from its nearest ancestor (then from
+  anywhere) come back in `other_branches`, marked OTHER, with a note to say so. `format=text` returns compact cited
+  cards ("shown 1-5 of 72", each card's id, branch, failure id and the sentence that matched, then `next: GET
+  /v0/traces/<id>`), which is what the MCP search tool returns by default, five at a time. Every index row is written
+  in the same transaction as the trace or failure it indexes. `sort=new` (the default without words) is newest first;
+  `sort=bounty` puts what feeds the richest open bounty first; `facets=1` adds counts per branch and per failure mode.
+  Results come back with the open bounties on the branch and, with words, the top matching failures, so a trainer
+  sees supply, demand and the registry together. Measured on the 247 seeded traces with 54 frozen queries (relevance
+  labelled from trace metadata only; 47 answerable): **87% top-1 and 96% top-5 from the words alone, 89% / 96% with
+  the filters an agent knows to pass**; the v0.6 search scored 70% / 77% and 66% / 66%, and its JSON answers were about
+  2.7 times as long (median 946 tokens against 349 for five cards). `GET /v0/taxonomy` gives the tree with trace counts
+  per branch.
 - **Bounties are refundable pledge escrows, free to post** (the transaction fee only). A bounty names a taxonomy branch
   (optionally a failure mode and base model), a hidden eval set by hash, and the score a solution must reach.
   - *Backing:* anyone pledges sats to it (`POST /v0/bounties/{id}/pledges`; micro-dollars on the retired v0.1 dollar
@@ -232,7 +254,9 @@ an agent a participant by default.
 There is no network token. Everything is paid directly in sats, and every payout is a split of a real payment. Run a
 node with `--economy sats` (`node/sats.py`); the v0.1 dollar node stays in the library for its tests and examples but
 is retired as a mainnet path. v0.6 opens a fresh testnet: a node refuses a v0.5 (TXC) database, and any database from
-an older node.
+an older node. v0.7 keeps this economy unchanged and opens a v0.6 database as it is, adding the failure registry and
+the search index and filing every stored trace in them (4g); its only new money is bonds (a 2,000-sat fix bond, a
+1,000-sat reporter bond), held and destroyed under the same rules as the others.
 
 **Why no token.** v0.5 priced everything in sats but paid contributors in a coin, TXC, minted against burned payments.
 Its own anti-farming cap made the coin a pass-through: contributors got back 99-100% of what users burned, so the coin
@@ -430,6 +454,12 @@ approximate dollar column at $85,962 a bitcoin:
 | 4 of 7 seats: wash usage of its own accepted fake | -5,002 sats | -$4.30 | -5,002 sats | 0 of 30 |
 | 4 of 7 seats: claim an honest bounty with a fake | -1.45 sats | -$0.001246 | -1.45 sats | 0 of 30 |
 | 4 of 7 seats: block honest work | -2,814 sats | -$2.42 | -1.28 sats | 0 of 30 |
+| registry: 20 sybil reporters, no bonds | -1.16 sats | -$0.000997 | -1.16 sats | 0 of 30 |
+| registry: 20 bonded sybil reporters (1 -> 21 -> 1 verified reporters) | -20,002 sats | -$17.19 | -20,002 sats | 0 of 30 |
+| registry: claim a fix one didn't make (public answers copied) | -2,000 sats | -$1.72 | -2,000 sats | 0 of 30 |
+| registry: the same, 1 bribed validator | -2,000 sats | -$1.72 | -2,000 sats | 0 of 30 |
+| registry: game a regression to be paid twice for one fix | -2,000 sats | -$1.72 | -2,000 sats | 0 of 30 |
+| 4 of 7 seats: mark a failure fixed to take its bounty | -1.74 sats | -$0.001496 | -1.74 sats | 0 of 30 |
 
 The validator that never measures now loses on average but not in every run: in 3 of the 30 runs it was drawn for only
 one of the 6 decoys, took one strike and no slash, and kept the 50 sats of GPU time a measurement it never spent (best
@@ -444,6 +474,150 @@ messages), a public randomness beacon (the testnet's comes from each epoch's pay
 decoys from someone other than the operator, real Lightning payments (the L402 challenge is issued, but its invoice is
 a placeholder and no preimage is checked), and the burn batch's on-chain `OP_RETURN` output (the testnet only records
 it).
+
+**v0.7's registry attacks** (the last six rows, re-run on 2026-10-05 with the 23 above unchanged to the sat). Inflating a
+failure's frequency with sybils buys nothing without bonds (unbonded reports are listed apart and never counted) and
+costs each bonded sybil its whole bond at the re-check (4g). A fix claimed with the public answers copied passes the
+node's public repro and nothing else: validators run it on their own cases, the claim is rejected and its 2,000-sat bond
+destroyed; one bribed validator doesn't move the median. A solver paid once for a fix can't reopen the failure to be
+paid again: fixes can only improve a failure's status (only a model version's re-check, operator-registered and
+validator-measured, can say regressed), and a learning is paid at most once per failure. A captured majority can mark
+a failure fixed (the record is only as honest as the federation, the same limit as learning verdicts), but the bounty
+pays only on its poster's own measurement, so no money moves.
+
+## 4g. The failure registry (v0.7)
+
+A CVE-like registry for model failures: the record of what breaks in the field. It fills itself: every trace is filed
+under a canonical failure as it is accepted (`node/registry.py`).
+
+- **One failure, one id.** A failure's key is the classifier's taxonomy branch, the **failure signature** (each fixed
+  field with its failure mode, sorted; for a runtime error, the exception class the checker reported first:
+  `code:runtime_error/TypeError`) and the **model family** (the organisation dropped, then the leading name and version:
+  `Qwen/Qwen2.5-0.5B-Instruct` and `Qwen/Qwen2.5-7B-Instruct` are both `qwen2.5`; a trace may name its family). The
+  first time a key is seen the failure gets a stable public id, `TXF-<year>-<sequence>`, which never changes and is
+  never reused. A trace re-filed under a better branch (a hosted classifier re-filing keyword-filed traces) moves to
+  the failure of its new key; both ids stay. The reply to `POST /v0/traces` names the trace's `failure_id`.
+- **What a failure holds.** Its branch, signature, failure modes, family and a readable title; its **reproduction
+  set**: the skeleton cases of its traces (public: `GET /v0/failures/{id}` lists the 50 newest; anyone with the checker
+  can re-run them) and a hidden part (each validator's own private cases of the same failure, of which only pass
+  counts are ever published); the checkers that judged its cases; and live counters: **distinct verified reporters**,
+  unverified reporters (listed apart, never counted), **occurrences** (distinct cases: a near-duplicate counts as its
+  original, a refuted case not at all), raw reports, first and last seen (time and epoch), **growth** (cases from
+  verified reporters in the last 3 epochs, minus the 3 epochs before), the **model versions** that hit it, the open
+  bounties on it, and its status per model version (4h).
+- **Demand.** Frequency (verified reporters, then occurrences) and growth are the demand signal: `GET /v0/failures`
+  sorts by `frequency`, `growth`, `bounty` (the richest open bounty) or `new`, and filters by `path` (a subtree),
+  `failure` (mode), `model` (a version or a family) and `status`. Bounties attach to failure ids: `POST /v0/bounties`
+  with `failure_id` takes the failure's branch and mode, and a second post on the same failure backs the open bounty
+  instead of opening a duplicate (`merged`, as in v0.6).
+- **Verified reporters.** A reporter counts when the node can hold it to account. On a sats node that is an address
+  with a **reporter bond** of 1,000 sats in escrow (`POST /v0/reporters`; refundable: `POST /v0/reporters/withdraw`, and it
+  comes back `vest_epochs` later, so a reporter can't dodge a re-check by leaving). On the retired dollar node with
+  wallets, an address that opened one (the faucet allows 3 a day per network). Counts follow the original: a copy
+  filed by someone else adds no reporter and no case.
+- **Re-checks.** Validators re-run a failure's new cases on the base model and say which reproduce (`POST
+  /v0/failures/{id}/repro`, operator-relayed until validator messages are signed). A case that a majority of at least
+  two validators (on a quorum of 3) finds does not reproduce leaves the counters, with every copy of it, and its
+  reporter's **whole bond is destroyed**.
+- **What inflating a failure costs.** To add k to a failure's verified reporters, an attacker needs k bonded addresses
+  (k x 1,000 sats held in escrow for as long as they are to count), k distinct cases (copies count for the original's
+  reporter) and k x 58 msats of fees; every case that a re-check refutes costs its address the whole bond. If a
+  fraction q of new reporters' cases is re-checked, inflating by k costs k x q x 1,000 sats in expectation (plus the
+  fees and the locked capital); the testnet's watchdog policy re-checks every new reporter's cases (q = 1), which is
+  cheap, one model call a case. Measured: 20 bonded sybils lift a failure from 1 to 21 verified reporters, then back
+  to 1 at the re-check, for -20,002 sats in every one of 30 runs; unbonded, they never count (-1.16 sats of fees).
+  And inflating buys no money: frequency moves no payment, and a bounty pays only on its poster's own measurement.
+
+## 4h. Fix tracking (v0.7)
+
+A fix (a learning, a prompt patch, a tool, or a new model version) claims failure ids, and the node keeps the record of
+what it fixed, per model version.
+
+- **Claims.** `POST /v0/fixes {claimant, kind: learning | prompt_patch | tool, claims: [TXF-…], model, learning?,
+  artifact?, outputs?}`. `model` is the model version the fix applies to; `learning`, the learning that carries it
+  (needed for a bounty to pay; only its trainer may claim with it); `outputs`, the fixed model's answers on the
+  claimed failures' public cases. On a sats node a claim pays the fee and holds a **2,000-sat bond**, destroyed if the
+  validators find it fixes none of its claims, returned otherwise (and when there were too few cases to call).
+- **The public part.** The node runs each claimed failure's public cases through the checkers it can run on the
+  claimant's outputs: by default the verified output must match; an operator can register stronger runners in Python
+  (never over HTTP: they run code). Public answers can be copied, so the public repro can only hold a fix back
+  (`fixed` needs it at 90% when outputs are sent); it never fixes anything by itself.
+- **The hidden part.** Validators are drawn for each claim like a learning's: stake-weighted rendezvous hashing over
+  the beacon published after the claim, never the claimant. Each commits `sha256(measurement + salt)`, then, once all
+  have committed, reveals `{results: {TXF-…: {passed, n}}}` on its own private cases of each failure (`POST
+  /v0/fixes/{id}/commits`, `.../reveals`, operator-relayed until signed). The median pass rate decides; fewer than 10
+  hidden cases in all is **inconclusive**: recorded in the history, not counted.
+- **Status per (failure, model version).** `open` (under 10%), `partly_fixed` (with its pass rate), `fixed` (90% or
+  more), `regressed` (it had been fixed, and a later model version fails it). `GET /v0/fixes/{id}` shows each claim's
+  public repro, the hidden measurements and its status; `GET /v0/failures/{id}/history` every measurement, in order. A
+  failure's own status is the newest verified state of the model: a model version's re-check sets it outright, and a
+  fix can only improve it, so a weaker (or sabotaged) claim never hides a stronger one.
+- **New model versions.** `POST /v0/models {version, family?, parent?, outputs?}` (operator) re-checks every tracked
+  failure of the version's family, open or fixed, the same way (public cases on any outputs sent, validators on the
+  hidden part). `GET /v0/models/{version}/report` then lists what it **fixed**, what stayed fixed, what **regressed**,
+  what is partly fixed or still open, what is pending, and what got worse.
+- **Bounties pay themselves.** A bounty attached to a failure pays when that failure's status flips to `fixed` by a
+  validated fix carrying a learning the federation accepted, once the bounty's poster has measured that fix on its own
+  hidden eval at the target (`POST /v0/bounties/{id}/measurements {fix, attestation}`, the poster as validator,
+  operator-relayed until signed): whichever comes last triggers the payout, and settlement retries any that became
+  payable (a learning accepted later, say). Every v0.6 payment rule holds: the pledges split trainer 70 / traces 20 /
+  checkers 5 / validators 5 down the learning's family tree, vesting 4 epochs, clawed back to the backers if a challenge
+  is upheld, refunded if the bounty ends unsolved; every payout is still a split of a real payment (the invariant is
+  unchanged). A learning is paid at most once per failure. A failure fixed upstream by a new model version pays no
+  one (there is no learning and no tree): its bounty refunds its backers at the deadline.
+- **Limits.** The record is as honest as the validator federation: a majority of the stake can mark failures fixed or
+  block real fixes, as it can learnings, but moves no money by it. Validators who measure fixes are drawn from the
+  staked federation but not yet paid for that work, nor slashed for not revealing (a round that runs out of time
+  settles with the majority that revealed). Repro re-checks are not commit-reveal yet. Validator and poster messages
+  are relayed by the operator until they are signed.
+- **The seeded preview** (`node/seed.py`, real recorded runs, nothing made up): 247 traces filed under 13 failures;
+  LoRA v2 claims the 8 code failures it was built from and the three validators measure it on their own third of the
+  held-out problems the base model failed with each failure's mode (first try: 6 partly fixed at about 13%, 2
+  inconclusive on 5 and 3 hidden cases); LoRA v1, registered as a model version, re-checks all 10 Qwen2.5 failures
+  (8 partly fixed at 13-14%, 2 inconclusive); the flight routing learning claims the 3 flight failures and is
+  inconclusive (a few fields per airline); the maintainer's bounty on the TypeError failure stays open (its poster
+  measured LoRA v2 at 14% against a 50% target). Runtime-error failures share their hidden cases (the recorded eval
+  keeps each problem's mode, not its exception), so they share a pass rate.
+
+## 4i. Ingestion: from tests and telemetry (v0.7)
+
+Two more ways in, both dry-run by default: what they build waits in a local outbox (`.traceex/outbox/`) until a person
+reviews it and sends it (`python -m traceex.outbox list | show | send`), or they send it when told to.
+
+- **A. pytest** (`sdk/python/traceex/pytest_plugin.py`, entry point `pytest11`; opt in with `--traceex` or `traceex =
+  true` in the ini). A test that failed earlier (in the same session, a previous CI run, or a coding agent's previous
+  attempt) and passes now after a code change is a verified fix: the plugin builds a trace (task `code.repair`,
+  checker `pytest@1`, failure mode from the exception: AssertionError is `wrong_answer`, NameError / AttributeError /
+  ImportError `wrong_name`, SyntaxError `syntax_error`, timeouts `timeout`, anything else `runtime_error`). A test
+  that passes again with no change is flaky and makes no trace. `examples/ci/github-action.yml` runs it in CI, keeping
+  the failure memory in the repository's Actions cache and uploading the outbox as an artifact (sending is opt in).
+  **What leaves the machine** (only with `--traceex-submit` or `outbox send`): the trace JSON as written in the outbox:
+  the model name you give (`--traceex-model`, default `unknown`), your address, a timestamp, and skeletons
+  (`traceex.codeskel`) of the test's file and test name, the exception type (builtin names kept), the failure message,
+  the test function, and the diff of the change (hunks only, no line numbers, at most 80 lines and 5 files), with the
+  removed and added lines as the model's output and the verified output. A skeleton replaces every string literal
+  (f-strings and bytes too) with `{STR_n}`, drops every comment, replaces every identifier that is not Python
+  vocabulary (keywords, builtins, standard-library modules, built-in types' methods, unittest and pytest words) with
+  `{ID_n}`, every number outside -10..10 with `{NUM_n}` and every directory with `{DIR}`, consistently across the
+  pieces, so `lines[1:]` -> `lines` still reads as the fix. The trace is scanned for keys, tokens, passwords, emails and
+  phone numbers before it is written, and dropped if anything is found. **Never sent:** source files, paths, project
+  and function names, string contents, comments, the raw failure message, and `.traceex/` itself (which keeps raw
+  copies of your files to compute diffs; the plugin writes a `.gitignore` into it).
+- **B. OpenTelemetry** (`sdk/python/traceex/otel.py`, `TraceexSpanExporter`, a `SpanExporter`). It reads GenAI
+  semantic-convention spans, so it works with any OTel-instrumented agent and the tools that export OTel (Laminar,
+  LangSmith, OpenLLMetry, OpenInference: add its processor to their provider). It finds a model call
+  (`gen_ai.operation.name` chat / text_completion / generate_content), a check that fails it (an `execute_tool` span,
+  a `gen_ai.evaluation.result` event or `gen_ai.evaluation.*` attributes, a span named check / eval / validate /
+  verify / test, or `traceex.check.passed`; failed when the evaluation says so, its score is under 0.5, or the span
+  ended in error), then the retry the next check passes, and turns the pair into a trace: the prompt's last user
+  message as input, the failed and the passing answers as the model's output and the verified output, the failed
+  check's message as feedback. Spans are held per trace until the root span ends. `examples/otel_agent/demo.py` runs
+  a fake agent through the real OTel SDK. **What leaves the machine** (only with `submit=True` or `outbox send`): the
+  task name, the model name, the checker's name, your address, a timestamp, and skeletons (`traceex.skeleton`: every
+  name, email, phone number, URL, date, time, amount, code and number replaced by a typed placeholder, consistently)
+  of the last user message (at most 4,000 characters), both answers and the checker's message. **Never sent:** system
+  prompts, other messages, tool arguments, span and resource attributes, trace and span ids, timings; and a trace
+  that still holds personal data or a secret after skeletonizing is dropped.
 
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
@@ -472,15 +646,23 @@ it).
 | Eval gaming | evals rotate and stay hidden; attestations name the eval-set hash and expire |
 | Licence violations | traces carry the base model; registry blocks closed-model outputs whose terms forbid training competitors |
 | Sybil validators | validator deposits; attestations need k-of-n agreement for high-value learnings |
+| Inflated failure frequency (sybil reports) | counters count distinct bonded reporters; a copy counts for its original; validators re-run new reporters' cases, and one that doesn't reproduce leaves the counters and destroys its reporter's bond (4g) |
+| False fix claims | the public repro can only hold a fix back; validators measure the hidden part on their own cases; a claim that fixes nothing loses its 2,000-sat bond; fixes can only improve a failure's status (4h) |
+| Code or prompts leaking through ingestion | skeletons on the producer's machine (code: no strings, comments, project identifiers or paths; text: typed placeholders), a secrets and contact-details scan before anything is written, dry run by default (4i) |
 
 ## 7. Reference implementation (this repo)
 - `sdk/python/traceex/` — client, skeletoniser, the extract → check → retry loop that produces traces, `adapt`
   (routing learnings, first-pass scoring, attestations, `AdaptiveAgent`), the classifier engine, auction and royalty
   maths, Merkle payouts, `export` (SFT / DPO / repair datasets, refill, dataset and model cards), `mcp`
-  (MCP server, stdio and the node's `/mcp`), `autopilot` (agents that use the exchange on their own).
+  (MCP server, stdio and the node's `/mcp`), `autopilot` (agents that use the exchange on their own); v0.7:
+  `pytest_plugin` and `codeskel` (ingestion from tests), `otel` (ingestion from OpenTelemetry), `outbox` (review
+  before sending).
 - `node/` — a reference exchange node (Python stdlib + SQLite) exposing the HTTP API below: `exchange.py` (the API,
-  the retired v0.1 dollar node), `sats.py` (v0.6: every payment in sats, the payout invariant, stakes, the
-  federation), `seed.py`, `validator.py`.
+  the retired v0.1 dollar node), `sats.py` (every payment in sats, the payout invariant, stakes, the federation;
+  v0.7 adds reporter and fix bonds), `registry.py` (v0.7: the failure registry and fix tracking),
+  `leviathan_search.py` (v0.7: the search index, adapted from Leviathan), `seed.py`, `validator.py`.
+- `examples/otel_agent/` — a fake agent's GenAI spans through the real OpenTelemetry SDK into the exporter;
+  `examples/ci/github-action.yml` — the pytest plugin in CI.
 - `contracts/` — Solidity 0.8.24+: `Registry.sol`, `PayoutDistributor.sol` (compiles clean with solc 0.8.26; leaf
   layout matches `merkle.py`, checked in tests). v0.1's on-chain sketch, in USDC; not yet moved to bitcoin.
 - `examples/flight_emails/` — a flight-email extraction loop as the first producer, end to end (`demo.py`).
@@ -499,7 +681,8 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 ### HTTP API (node)
 | Method | Path | Body / result |
 |---|---|---|
-| POST | `/v0/traces` | trace → `{id, lot, classified, bounties}` (rejects secrets, personal data, duplicates) |
+| POST | `/v0/traces` | trace → `{id, lot, classified, failure_id, bounties}` (rejects secrets, personal data, duplicates) |
+| GET | `/v0/traces/{id}` | the trace (an id prefix of 15+ characters works), its branch and its `failure_id` |
 | GET | `/v0/lots` | lots with counts, probe score, reserve |
 | POST | `/v0/bids` | `{lot, bidder, price_msats (or price_sats), license: shared|exclusive}` |
 | POST | `/v0/epochs/clear` | clears all auctions → licences + payouts for the epoch |
@@ -509,9 +692,19 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 | GET | `/v0/provenance/{id}` | the family tree under a learning |
 | GET | `/v0/balances/{address}` | earnings, with Merkle proofs per epoch |
 | GET | `/v0/taxonomy` | the task tree with trace counts per branch, and which engine is classifying |
-| GET | `/v0/search` | `q`, `path`, `failure`, `model`, `sort` (relevant / new / bounty), `limit`, `offset`, `facets` → ranked traces, total, facets, open bounties on that branch |
+| GET | `/v0/search` | `q`, `path` (resolved in tiers; ambiguous → candidates), `failure`, `model`, `kind` (trace / failure / all), `sort` (relevant / new / bounty), `limit`, `offset`, `format` (json / text cards), `facets` → ranked results, total, `other_branches` (labelled fallback), open bounties, top failures |
+| GET | `/v0/failures` | the registry: `path`, `failure`, `model`, `status` filters; `sort` frequency / growth / bounty / new → each failure's counters, status and open bounty |
+| GET | `/v0/failures/{id}` | one failure: counters, public repro set, checkers, status per model version, fixes, bounties |
+| GET | `/v0/failures/{id}/history` | every measurement of the failure, in order |
+| POST | `/v0/failures/{id}/repro` | operator-relayed validator message: `{validator, results: {trace: reproduced?}}` → refuted cases leave the counters |
+| POST | `/v0/fixes` | `{claimant, kind, claims, model, learning?, artifact?, outputs?}` → the fix, its public repro and the validators drawn (sats node: 2,000-sat bond) |
+| GET | `/v0/fixes`, `/v0/fixes/{id}` | fixes (filter by `failure`, `status`); one fix with each claim's public repro, hidden measurements and status |
+| POST | `/v0/fixes/{id}/commits`, `.../reveals` | operator-relayed validator messages: a commitment, then `{measurement: {results}, salt}` |
+| POST | `/v0/models` | operator: `{version, family?, parent?, outputs?}` → re-checks every failure of the family |
+| GET | `/v0/models`, `/v0/models/{version}/report` | model versions; what a version fixed and regressed (URL-encode a version's `/`) |
+| POST | `/v0/bounties/{id}/measurements` | operator-relayed: a failure bounty's poster measured a fix, `{fix, attestation}` → pays if the failure is fixed |
 | POST | `/v0/admin/reclassify` | operator: `{only: rules|all, limit?}` → re-file traces with the node's classifier in the background |
-| POST | `/v0/bounties` | `{poster, title, path, eval_set, target, seed_msats?, failure?, base_model?, epochs?}` → free (the fee only); a post matching an open bounty's branch, failure and model backs it (`merged`) |
+| POST | `/v0/bounties` | `{poster, title, path or failure_id, eval_set, target, seed_msats?, failure?, base_model?, epochs?}` → free (the fee only); a post matching an open bounty's branch, failure and model (or its failure id) backs it (`merged`) |
 | GET | `/v0/bounties` | `path`, `status` filters; each with `pool_msats` (in escrow), `pledged_msats`, backers, deadline |
 | POST | `/v0/bounties/{id}/pledges` | `{backer, msats}` (or `sats`) → a refundable pledge into the bounty's escrow |
 | GET | `/v0/bounties/{id}/backers` | what each backer pledged, what the bounty holds |
@@ -533,3 +726,5 @@ wallet can't cover answers `402 Payment Required` with an L402 challenge (4e). v
 | GET | `/v0/learnings/{id}/verdict` | who was drawn, their reveals, the outcome |
 | POST | `/v0/licences/direct` | operator-relayed: `{lot, buyer, traces}` → the buyer's licence payment to the traces it used |
 | POST | `/v0/decoys`, `/v0/decoys/unseal` | operator: `{learning, digest, funder}`, then `{learning, gain, salt}` → a strike for each validator far from the truth; a second strike in 30 epochs costs 25% of stake |
+| POST | `/v0/reporters`, `/v0/reporters/withdraw` | v0.7: `{address}` → a 1,000-sat reporter bond, so its reports count as a verified reporter's; withdrawn, it returns after 4 epochs |
+| GET | `/v0/reporters/{address}` | the bond, whether it counts, its cases and how many were refuted |

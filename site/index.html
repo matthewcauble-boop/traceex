@@ -356,6 +356,36 @@ form input:focus,form select:focus,form textarea:focus{outline:2px solid var(--b
 .post summary{cursor:pointer;font:600 16px var(--font)}
 .reg{margin-top:56px;display:grid;gap:10px}
 .scroll{overflow-x:auto}
+/* v0.7: the failure registry */
+.fails{padding-block:clamp(80px,10vw,140px)}
+.fbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin:44px 0 18px}
+.fsort{display:flex;gap:8px;flex-wrap:wrap}
+.fsort button{all:unset;cursor:pointer;font:500 13px/1 var(--font);padding:10px 14px;border-radius:999px;border:1px solid var(--line);color:var(--text-2);background:#fff}
+.fsort button[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+.fsort button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.fsum{font:500 13px/1.3 var(--font);color:var(--text-2)}
+.ftab{width:100%;border-collapse:collapse;min-width:640px}
+.ftab tbody tr{cursor:pointer}
+.ftab tbody tr:hover td,.ftab tbody tr:focus-visible td{background:var(--surface-2)}
+.ftab tbody tr:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+.ftab td,.ftab th{padding-right:22px}
+.ftab td:last-child,.ftab th:last-child{padding-right:0}
+.ftab th:last-child{font:500 13px/1 var(--font);color:var(--text-3)}
+.ftab td:not(:first-child),.ftab th:not(:first-child){white-space:nowrap;width:1%}
+.fid{font:500 12.5px/1 var(--mono);color:var(--brand);white-space:nowrap}
+.ftab .ft{display:block;margin-top:6px;font-weight:500}
+.ftab .w,.fdetail .w{display:block;font-size:13px;color:var(--text-2);margin-top:4px;font-weight:400}
+.ftab .w.up{color:var(--brand)}
+.pill.part{background:#fff4e0;color:#8a5a00}
+.pill.fix{background:#e6f6ec;color:#0f6b34}
+.pill.reg{background:#fdecec;color:#a11a1a}
+.fdetail{margin-top:22px;border:1px solid var(--line);border-radius:16px;background:#fff;padding:20px 22px;display:grid;gap:14px}
+.fdetail .fhead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.fdetail h4{margin:0;font:600 17px/1.4 var(--font)}
+.frepro{margin:6px 0 0;padding-left:18px;font-size:14px;color:var(--text-2)}
+.frepro i{font-style:normal;color:var(--brand)}
+.flinks a{color:var(--brand)}
+
 .reg .pay td:last-child{font-weight:500}
 .thesis{margin-top:22px;font:500 clamp(20px,2.1vw,28px)/1.32 var(--font);letter-spacing:-.015em;color:var(--text-2);max-width:36ch}
 .thesis b{display:inline-block;margin-top:6px;font-weight:600;color:var(--text)}
@@ -401,7 +431,7 @@ footer a{color:inherit}
 <section class="hero night" id="top" aria-label="traceX">
   <header class="nav">
     <a class="brand" href="#top" aria-label="traceX"><i aria-hidden="true"></i><span class="wm">trace<b>X</b></span></a>
-    <nav aria-label="Sections"><a href="#how">How it works</a><a href="#bounties">Bounties</a><a href="#money">Royalties</a><a href="#open-weights">Open weights</a><a href="#autopilot">Autopilot</a><a class="nav-join" href="#join">Get early access</a></nav>
+    <nav aria-label="Sections"><a href="#how">How it works</a><a href="#failures">Failures</a><a href="#bounties">Bounties</a><a href="#money">Royalties</a><a href="#open-weights">Open weights</a><a href="#autopilot">Autopilot</a><a class="nav-join" href="#join">Get early access</a></nav>
   </header>
   <canvas id="net" aria-hidden="true"></canvas>
   <div class="legend" aria-hidden="true">
@@ -502,10 +532,25 @@ footer a{color:inherit}
 </div>
 </section>
 
+<!-- ============ THE FAILURE REGISTRY (v0.7) ============ -->
+<section class="fails paper" id="failures" aria-labelledby="f-h">
+  <div class="wrap">
+    <div class="kick">03 · The failure registry</div>
+    <h2 class="poster-h" id="f-h" style="margin-top:22px">Every failure gets an id.<br><span class="own">Every fix gets measured.</span></h2>
+    <p class="lede" style="margin-top:22px">Each trace is filed under a canonical failure (its branch, how it failed, the model family) with an id that never changes. Frequency counts distinct reporters who bonded sats to be counted. A fix is measured by validators on their own cases, for each model version: open, partly fixed, fixed, regressed. Bounties attach to failures and pay when theirs is fixed.</p>
+    <div class="fbar">
+      <div class="fsort" role="group" aria-label="Sort failures"><button type="button" aria-pressed="true" data-s="frequency">Most reported</button><button type="button" aria-pressed="false" data-s="growth">Growing</button><button type="button" aria-pressed="false" data-s="bounty">Biggest bounty</button></div>
+      <span class="fsum" id="fsum" aria-live="polite"></span>
+    </div>
+    <div class="scroll"><table class="pay ftab" id="ftab"><thead><tr><th>Failure</th><th>Status</th><th>Reporters</th><th>Cases</th><th>Open bounty</th></tr></thead><tbody><tr><td colspan="5" class="empty">Loading the registry…</td></tr></tbody></table></div>
+    <div class="fdetail" id="fdetail" hidden aria-live="polite"></div>
+  </div>
+</section>
+
 <!-- ============ BOUNTIES: free to post, backed by refundable pledges ============ -->
 <section class="bounty paper" id="bounties" aria-labelledby="b-h">
   <div class="wrap">
-    <div class="kick">03 · Bounties</div>
+    <div class="kick">04 · Bounties</div>
     <h2 class="poster-h" id="b-h" style="margin-top:22px">Post a problem free.<br><span class="own">Back it with sats.</span></h2>
     <div class="b-grid">
       <div style="display:grid;gap:22px">
@@ -565,7 +610,7 @@ footer a{color:inherit}
         <span class="old">63.3%<svg viewBox="0 0 400 40" preserveAspectRatio="none" aria-hidden="true"><path d="M6 28 C 120 12, 260 32, 394 12"/></svg></span>73.3%<small>held-out</small>
       </div>
       <div>
-        <div class="kick">04 · Measured, not promised</div>
+        <div class="kick">05 · Measured, not promised</div>
         <h2 class="poster-h" id="p-h" style="font-size:clamp(34px,4.4vw,64px);margin-top:16px">Three fixes made a stranger's agent better.</h2>
         <div class="bars-key"><span><i style="background:#b8bec9"></i>before</span><span><i style="background:var(--brand)"></i>after the learning</span></div>
         <div class="bars" id="bars" style="margin-top:12px">
@@ -582,7 +627,7 @@ footer a{color:inherit}
 <!-- ============ LOOP ============ -->
 <section class="loop night" aria-labelledby="l-h">
   <div class="wrap">
-    <div class="kick">05 · The loop</div>
+    <div class="kick">06 · The loop</div>
     <h2 class="serif-h" id="l-h" style="margin-top:18px;max-width:18ch">Your checker is the reward function.</h2>
     <div class="loop-grid">
       <div class="orbit" id="orbit"><canvas id="orb" aria-hidden="true"></canvas></div>
@@ -594,7 +639,7 @@ footer a{color:inherit}
 <!-- ============ MONEY ============ -->
 <section class="money night" id="money" aria-labelledby="m-h">
   <div class="wrap">
-    <div class="kick">06 · Royalties</div>
+    <div class="kick">07 · Royalties</div>
     <h2 class="serif-h" id="m-h" style="margin-top:18px;max-width:20ch">Paid down the family tree, settled in one root.</h2>
     <div class="money-grid">
       <div class="treebox"><canvas id="tree-c" width="960" height="720" aria-label="Gold royalties flow from consumers into the learning and down to the traces and their producers"></canvas></div>
@@ -639,7 +684,7 @@ footer a{color:inherit}
 <!-- ============ OPEN WEIGHTS ============ -->
 <section class="ow paper" id="open-weights" aria-labelledby="ow-h">
   <div class="wrap">
-    <div class="kick">07 · Open weights</div>
+    <div class="kick">08 · Open weights</div>
     <h2 class="poster-h" id="ow-h" style="margin-top:22px">Improve the models<br><span class="own">everyone can use.</span></h2>
     <p class="lede" style="margin-top:22px">A verified fix is exactly the training example open models lack: a real input, the model's real failure, and an answer a checker proved right. For code, maths and public text, traces travel in full (secrets and contact details are still refused) and export straight to the formats trainers use.</p>
     <div class="ow-grid">
@@ -670,7 +715,7 @@ footer a{color:inherit}
 <!-- ============ AUTOPILOT ============ -->
 <section class="ap night" id="autopilot" aria-labelledby="ap-h">
   <div class="wrap">
-    <div class="kick">08 · On autopilot</div>
+    <div class="kick">09 · On autopilot</div>
     <h2 class="serif-h" id="ap-h" style="margin-top:18px;max-width:18ch">Agents use it without being told to.</h2>
     <p class="lede" style="margin-top:22px">Connect an agent once. From then on it submits every verified fix, searches the exchange when it keeps failing, adopts learnings that proved themselves, and posts a bounty, free, when a failure keeps coming back that nothing fixes. It only spends what its owner allows.</p>
     <div class="ap-grid">
@@ -698,7 +743,7 @@ agent = AdaptiveAgent(..., autopilot=Autopilot(client, task=..., base_model=...)
 <!-- ============ JOIN ============ -->
 <section class="join paper" id="join" aria-labelledby="j-h">
   <div class="wrap">
-    <div class="kick">09 · Early access</div>
+    <div class="kick">10 · Early access</div>
     <h2 class="poster-h" id="j-h" style="margin-top:22px">Learning after they ship.<br><span class="own">Get early access.</span></h2>
     <p class="lede" style="margin-top:20px">The live exchange opens in stages. Leave your email and we'll bring you in.</p>
     <form class="signup" data-from="join" novalidate>
@@ -738,7 +783,7 @@ agent = AdaptiveAgent(..., autopilot=Autopilot(client, task=..., base_model=...)
     <div class="status">
       <h3>v0.1, live as a testnet</h3>
       <ul>
-        <li><b>Built:</b> spec, Python SDK, the exchange node (website, API and MCP endpoint in one process), classifier engine (TypeSafe Jev, keyword fallback) with ranked search, a sats-only economy with federated validation and an attack simulation, refundable bounty pledges, MCP server and autopilot, open-weights pipeline (LoRA on Qwen2.5), two contracts tested on a local EVM, two demos, 126 tests.</li>
+        <li><b>Built:</b> spec, Python SDK, the exchange node (website, API and MCP endpoint in one process), classifier engine (TypeSafe Jev, keyword fallback) with ranked search, a sats-only economy with federated validation and an attack simulation, refundable bounty pledges, MCP server and autopilot, open-weights pipeline (LoRA on Qwen2.5), a failure registry with fix tracking per model version and bounties that pay when their failure is fixed, Leviathan-style search, ingestion from pytest and OpenTelemetry, two contracts tested on a local EVM, three demos, 140 tests.</li>
         <li><b>Priced in bitcoin:</b> testnet v0.6 pays everything in sats, and there is no token. Each paid use splits traces 60 / trainer 25 / checkers 10 / validators 5, the one fee is 58 msats a transaction, and a bounty pledge comes back in full if nobody solves it. Each wallet gets 30,000 test sats once, with a Merkle payout root every epoch. Payments arrive over Lightning with L402; on the testnet the 402's invoice is a placeholder.</li>
         <li><b>Not live yet:</b> real Lightning payments, real-money settlement, signed wallets and validator signatures, contract audit.</li>
       </ul>
@@ -1229,6 +1274,7 @@ async function nodeLoad(full) {
   live.account = w.opened ? {balance: w.balance_msats, pledged: w.pledged_msats || {}, vesting: w.vesting_msats || 0} : null;
   if (full && window.__tx) window.__tx.refresh();      // re-run the visible search so new traces show up
   stats(); renderBoard(); renderLearnings(); renderFeed(); renderWallet();
+  if (full) loadFailures();
 }
 function rowFromHit(t) {
   const sig = {}; sigModes(t.signature).forEach(m => { m = esc(m); sig[m] = (sig[m] || 0) + 1; });
@@ -1376,8 +1422,93 @@ function bindForms() {
     f.querySelector('#f-feedback').value = 'not the departure time on the outbound line'; };
   const so = $('#share-open'); if (so) so.onclick = () => { const f = $('#share-form'); f.hidden = !f.hidden; so.textContent = f.hidden ? 'Share a fix' : 'Close'; };
 }
+
+/* ---- v0.7: the failure registry (GET /v0/failures; the seeded registry when no node answers) ---- */
+const FSAMPLE = [{"id":"TXF-2026-000004","title":"wrong answer in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"partly_fixed","pass_rate":0.14285714285714285,"reporters":3,"unverified":0,"occurrences":180,"growth":180,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"partly_fixed","pass_rate":0.13186813186813187,"n":274,"validated":true},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.14285714285714285,"n":274,"validated":true}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a python function to find the minimun number of subsets with distinct elements.","Write a function to convert the given tuples into set.","Write a function that matches a string that has an a followed by zero or more b's by using regex."]},{"id":"TXF-2026-000005","title":"runtime error (TypeError) in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"partly_fixed","pass_rate":0.12903225806451613,"reporters":3,"unverified":0,"occurrences":24,"growth":24,"bounty":2000000,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a function to count coin change.","Write a python function to find lcm of two positive integers.","Write a function to find all anagrams of a string in a given list of strings using lambda function."]},{"id":"TXF-2026-000010","title":"runtime error (NameError) in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"partly_fixed","pass_rate":0.12903225806451613,"reporters":3,"unverified":0,"occurrences":9,"growth":9,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a function to compute the value of ncr mod p.","Write a function to calculate the sum of all digits of the base to the specified power.","Write a function to calculate the sum of all digits of the base to the specified power."]},{"id":"TXF-2026-000007","title":"runtime error (IndexError) in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"partly_fixed","pass_rate":0.12903225806451613,"reporters":3,"unverified":0,"occurrences":7,"growth":7,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a function to find the number which occurs for odd number of times in the given array.","Write a function to find the number which occurs for odd number of times in the given array.","Write a function to find the second smallest number in a list."]},{"id":"TXF-2026-000009","title":"wrong answer in code · extract/commerce/receipt · qwen2.5","path":"extract/commerce/receipt","family":"qwen2.5","status":"partly_fixed","pass_rate":0.14285714285714285,"reporters":3,"unverified":0,"occurrences":6,"growth":6,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.14285714285714285,"n":274,"validated":true}],"fixes":["TXFIX-2026-000003"],"repro":["Write a function to count repeated items of a tuple.","Write a function to count repeated items of a tuple.","Write a function to count repeated items of a tuple."]},{"id":"TXF-2026-000008","title":"syntax error in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"open","pass_rate":null,"reporters":2,"unverified":0,"occurrences":7,"growth":7,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"open","pass_rate":0.0,"n":5,"validated":false},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"open","pass_rate":0.0,"n":5,"validated":false}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a function to check whether the given ip address is valid or not using regex.","Write a function to check whether the given ip address is valid or not using regex.","Write a function to check whether the given ip address is valid or not using regex."]},{"id":"TXF-2026-000011","title":"wrong name in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"open","pass_rate":null,"reporters":2,"unverified":0,"occurrences":4,"growth":4,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"open","pass_rate":0.25,"n":3,"validated":false},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"open","pass_rate":0.25,"n":3,"validated":false}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a python function to check whether the count of divisors is even or odd.","Write a function to zip two given lists of lists.","Write a python function to calculate the product of all the numbers of a given tuple."]},{"id":"TXF-2026-000006","title":"runtime error (ValueError) in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"partly_fixed","pass_rate":0.12903225806451613,"reporters":2,"unverified":0,"occurrences":2,"growth":2,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a function to compute the value of ncr mod p.","Write a function to group a sequence of key-value pairs into a dictionary of lists using collections module."]},{"id":"TXF-2026-000001","title":"role swap in destination_airport_code, wrong span in outbound_departure_time, type mismatch in outbound_flight_number, role swap in return_departure_time, type mismatch in return_flight_number · extract/travel/flight · needle3","path":"extract/travel/flight","family":"needle3","status":"open","pass_rate":null,"reporters":1,"unverified":0,"occurrences":1,"growth":1,"bounty":0,"models":["needle3"],"by_model":[{"model":"needle3","kind":"learning","fix":"TXFIX-2026-000002","status":"open","pass_rate":0.5,"n":6,"validated":false}],"fixes":["TXFIX-2026-000002"],"repro":["Subject: Your trip confirmation: {CODE_2} to {CODE_3}"]},{"id":"TXF-2026-000002","title":"role swap in outbound_departure_time, role swap in return_departure_time · extract/travel/flight · needle3","path":"extract/travel/flight","family":"needle3","status":"open","pass_rate":null,"reporters":1,"unverified":0,"occurrences":1,"growth":1,"bounty":0,"models":["needle3"],"by_model":[{"model":"needle3","kind":"learning","fix":"TXFIX-2026-000002","status":"open","pass_rate":0.75,"n":3,"validated":false}],"fixes":["TXFIX-2026-000002"],"repro":["Your eTicket itinerary and receipt. Confirmation Number: {CODE_1}"]},{"id":"TXF-2026-000003","title":"role swap in destination_airport_code, type mismatch in outbound_flight_number, wrong span in return_flight_number · extract/travel/flight · needle3","path":"extract/travel/flight","family":"needle3","status":"open","pass_rate":null,"reporters":1,"unverified":0,"occurrences":1,"growth":1,"bounty":0,"models":["needle3"],"by_model":[{"model":"needle3","kind":"learning","fix":"TXFIX-2026-000002","status":"open","pass_rate":0.0,"n":3,"validated":false}],"fixes":["TXFIX-2026-000002"],"repro":["DELTA {CODE_4} LINES  |  Booking reference: {CODE_1}"]},{"id":"TXF-2026-000012","title":"runtime error (KeyError) in code · code/generate · qwen2.5","path":"code/generate","family":"qwen2.5","status":"partly_fixed","pass_rate":0.12903225806451613,"reporters":1,"unverified":0,"occurrences":1,"growth":1,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct","kind":"learning","fix":"TXFIX-2026-000001","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true},{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.12903225806451613,"n":77,"validated":true}],"fixes":["TXFIX-2026-000001","TXFIX-2026-000003"],"repro":["Write a function to convert a roman numeral to an integer."]},{"id":"TXF-2026-000013","title":"wrong answer in code · code/repair · qwen2.5","path":"code/repair","family":"qwen2.5","status":"partly_fixed","pass_rate":0.14285714285714285,"reporters":1,"unverified":0,"occurrences":1,"growth":1,"bounty":0,"models":["Qwen/Qwen2.5-0.5B-Instruct"],"by_model":[{"model":"Qwen/Qwen2.5-0.5B-Instruct+lora-v1","kind":"model","fix":"TXFIX-2026-000003","status":"partly_fixed","pass_rate":0.14285714285714285,"n":274,"validated":true}],"fixes":["TXFIX-2026-000003"],"repro":["Write a function to find the fixed point in the given array."]}];
+let fsort = 'frequency';
+const pct = r => r == null ? '' : Math.round(r * 100) + '%';
+function fpill(st, rate) {
+  const cls = {partly_fixed: 'part', fixed: 'fix', regressed: 'reg'}[st] || '';
+  return '<span class="pill ' + cls + '">' + esc(st === 'partly_fixed' ? 'partly fixed ' + pct(rate) : st) + '</span>';
+}
+function fsorted(list) {
+  const key = {frequency: f => [-f.reporters, -f.occurrences], growth: f => [-f.growth, -f.reporters],
+               bounty: f => [-f.bounty, -f.reporters]}[fsort];
+  return list.slice().sort((a, b) => { const x = key(a), y = key(b); return x[0] - y[0] || x[1] - y[1] || (a.id < b.id ? -1 : 1); });
+}
+function renderFailures(list, total, statuses) {
+  const tb = $('#ftab tbody'); if (!tb) return;
+  tb.innerHTML = list.length ? list.map(f => '<tr data-id="' + esc(f.id) + '" tabindex="0"><td><span class="fid">' + esc(f.id) +
+      '</span><span class="ft">' + esc(String(f.title).split(' · ')[0]) + '</span><span class="w">' + esc(f.path || 'uncategorised') +
+      ' · ' + esc(f.family) + (f.models && f.models.length ? ' · ' + f.models.length + ' model version' + (f.models.length > 1 ? 's' : '') : '') +
+      '</span></td><td>' + fpill(f.status, f.pass_rate) + '</td><td>' + f.reporters +
+      (f.unverified ? '<span class="w">+' + f.unverified + ' unverified</span>' : '') + '</td><td>' + f.occurrences +
+      (f.growth > 0 ? '<span class="w up">+' + f.growth + ' lately</span>' : '') + '</td><td>' +
+      (f.bounty ? money(f.bounty) : '<span class="w">none</span>') + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">No failures filed yet.</td></tr>';
+  const s = statuses || {}, sum = $('#fsum');
+  if (sum) sum.textContent = (total != null ? total : list.length) + ' failures · ' + (s.partly_fixed || 0) + ' partly fixed · ' +
+    (s.fixed || 0) + ' fixed · ' + (s.regressed || 0) + ' regressed';
+  tb.querySelectorAll('tr[data-id]').forEach(tr => {
+    tr.onclick = () => showFailure(tr.dataset.id);
+    tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showFailure(tr.dataset.id); } };
+  });
+}
+async function loadFailures() {
+  if (live.mode === 'node') {
+    try {
+      const d = await api.get('/v0/failures?limit=12&sort=' + fsort);
+      renderFailures(d.failures.map(f => ({id: f.id, title: f.title, path: f.path, family: f.family, status: f.status,
+        pass_rate: f.pass_rate, reporters: f.reporters, unverified: f.reporters_unverified, occurrences: f.occurrences,
+        growth: f.growth, bounty: f.open_bounty_msats || 0, models: Object.keys(f.models || {})})), d.total, d.statuses);
+    } catch (e) { /* a node without the registry (before v0.7): keep the seeded view */ if (!$('#ftab tbody tr[data-id]')) renderSample(); }
+    return;
+  }
+  renderSample();
+}
+function renderSample() {
+  const st = {}; FSAMPLE.forEach(f => { st[f.status] = (st[f.status] || 0) + 1; });
+  renderFailures(fsorted(FSAMPLE).slice(0, 12), FSAMPLE.length, st);
+}
+async function showFailure(id) {
+  const box = $('#fdetail'); if (!box) return;
+  const node = live.mode === 'node';
+  let f = FSAMPLE.find(x => x.id === id);
+  if (node) {
+    try {
+      const d = await api.get('/v0/failures/' + encodeURIComponent(id));
+      f = {id: d.id, title: d.title, status: d.status, pass_rate: d.pass_rate, by_model: d.by_model, fixes: d.fixes,
+           repro: d.repro.public.slice(0, 3).map(r => r.snippet), reporters: d.reporters, occurrences: d.occurrences};
+    } catch (e) { if (!f) return; }
+  }
+  if (!f) return;
+  const rows = (f.by_model || []).map(r => '<tr><td>' + esc(r.model) + '<span class="w">' +
+      esc(r.kind === 'model' ? 'model version re-check' : String(r.kind || '').replace('_', ' ') + ' fix ' + r.fix) + '</span></td><td>' +
+      (r.validated ? fpill(r.status, r.pass_rate) : '<span class="pill">inconclusive</span>') + '</td><td>' + (r.n || 0) + ' hidden cases</td></tr>').join('');
+  const enc = encodeURIComponent(f.id);
+  box.innerHTML = '<div class="fhead"><h4><span class="fid">' + esc(f.id) + '</span><br>' + esc(f.title) + '</h4>' +
+    '<button type="button" class="btn ghost sm" id="fclose">Close</button></div>' +
+    '<p class="w">' + f.reporters + ' verified reporter' + (f.reporters === 1 ? '' : 's') + ' · ' + f.occurrences + ' distinct case' +
+    (f.occurrences === 1 ? '' : 's') + ' · now ' + esc(String(f.status).replace('_', ' ')) + (f.status === 'partly_fixed' ? ' ' + pct(f.pass_rate) : '') + '</p>' +
+    (rows ? '<div class="scroll"><table class="pay"><thead><tr><th>Model version · fix</th><th>Status</th><th>Measured on</th></tr></thead><tbody>' +
+      rows + '</tbody></table></div>' : '<p class="w">No fix has been measured on it yet.</p>') +
+    (f.repro && f.repro.length ? '<div><span class="w">Repro cases (public skeletons; validators keep their own cases private)</span><ul class="frepro">' +
+      f.repro.map(s => '<li>' + snip(s) + '</li>').join('') + '</ul></div>' : '') +
+    (node ? '<p class="flinks"><a href="/v0/failures/' + enc + '">Full record</a> · <a href="/v0/failures/' + enc + '/history">History</a>' +
+      (f.fixes || []).map(x => ' · <a href="/v0/fixes/' + encodeURIComponent(x) + '">' + esc(x) + '</a>').join('') + '</p>'
+      : '<p class="w">Fixes claimed: ' + esc((f.fixes || []).join(', ') || 'none yet') + '</p>');
+  box.hidden = false;
+  $('#fclose').onclick = () => { box.hidden = true; };
+}
+function bindFailures() {
+  document.querySelectorAll('.fsort button').forEach(b => b.onclick = () => {
+    fsort = b.dataset.s;
+    document.querySelectorAll('.fsort button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    loadFailures();
+  });
+}
 async function start() {
-  bindForms(); renderWallet(); renderLearnings();
+  bindForms(); renderWallet(); renderLearnings(); bindFailures(); loadFailures();
   const node = await detectNode();
   if (node) {
     live.mode = 'node'; live.uid = myAddress();

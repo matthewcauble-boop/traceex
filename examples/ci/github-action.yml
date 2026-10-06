@@ -1,0 +1,68 @@
+# traceX in CI (ingestion path A): copy to .github/workflows/traceex.yml in your repository.
+#
+# What it does: runs your tests with the traceX pytest plugin. A test that failed in an earlier run on this branch and
+# passes now, after a code change, becomes a skeleton trace (no source code, strings, comments, paths or project names:
+# see "What leaves the machine" in sdk/python/traceex/pytest_plugin.py). By default nothing is sent: the traces are
+# uploaded as a build artifact ("traceex-outbox") for a person to review.
+#
+# The plugin remembers failures in .traceex/, which also holds raw copies of your files (to compute diffs). This
+# workflow keeps that folder in the Actions cache of this repository only; it is never uploaded anywhere else.
+#
+# To send reviewed traces automatically on pushes to main, set the repository variable TRACEX_SUBMIT to 1 and the
+# secrets TRACEX_NODE (the node's URL) and TRACEX_ADDRESS (your wallet: where royalties go). Optional variable
+# TRACEX_MODEL names the model that writes your code (an agent's model), so failures are filed under its family.
+name: traceex
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Remember failures from earlier runs of this branch
+        uses: actions/cache/restore@v4
+        with:
+          path: .traceex
+          key: traceex-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: traceex-${{ github.ref_name }}-
+
+      - name: Install
+        run: |
+          pip install pytest "traceex @ git+https://github.com/matthewcauble-boop/traceex#subdirectory=sdk/python"
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Test (failures are remembered; tests fixed by a change become traces in the outbox)
+        run: pytest --traceex --traceex-model "${{ vars.TRACEX_MODEL || 'unknown' }}"
+
+      - name: Keep the failure memory for the next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .traceex
+          key: traceex-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Upload the outbox for review (nothing has been sent)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceex-outbox
+          path: .traceex/outbox/*.json
+          if-no-files-found: ignore
+
+      - name: Send the traces (opt in)
+        if: ${{ always() && vars.TRACEX_SUBMIT == '1' && github.event_name == 'push' && github.ref_name == 'main' }}
+        env:
+          TRACEX_NODE: ${{ secrets.TRACEX_NODE }}
+          TRACEX_ADDRESS: ${{ secrets.TRACEX_ADDRESS }}
+        run: python -m traceex.outbox send --dir .traceex/outbox --node "$TRACEX_NODE" --address "$TRACEX_ADDRESS" --yes

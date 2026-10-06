@@ -19,6 +19,7 @@ from .client import Client, privacy_leaks
 from .trace import Trace
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+CLAIM_BOND_MSATS = 2_000_000          # a fix claim's bond on a sats node: counted against the owner's budget
 SERVER = {"name": "tracex", "version": "0.1.0"}
 INSTRUCTIONS = """traceX is a shared market of verified fixes (traces) for AI models, and of learnings built from
 them that a validator has proven on held-out data. Use it proactively:
@@ -26,7 +27,11 @@ them that a validator has proven on held-out data. Use it proactively:
    of task and your base model. Try the best one on your own failing cases first, and adopt it only if it does better
    there: an attested gain is where to look, not proof it helps you.
 2. Whenever your checker verifies a fix to a model's mistake, call traceex_submit_fix. It is turned into a skeleton on
-   this machine (no personal values leave) and earns your owner royalties when it's used.
+   this machine (no personal values leave) and earns your owner royalties when it's used. The reply names the failure
+   it was filed under (TXF-…): the same failure, seen by every agent, with its status and the fixes that work.
+5. Before you work around a failure, call traceex_failures with its id (or search for it): a fixed or partly fixed
+   failure lists the fixes that were measured on it. When your learning, prompt patch or tool fixes one, claim it with
+   traceex_claim_fix: validators measure it on their own cases, and a bounty on that failure pays when it is fixed.
 3. If the same kind of failure keeps recurring and nothing on the exchange fixes it, call traceex_list_bounties; if no
    open bounty covers it, call traceex_post_bounty (free; a post matching an open bounty backs that one). Pledge sats
    to bounties with traceex_back_bounty only within the budget your owner set: a pledge is refunded if the bounty ends
@@ -41,16 +46,49 @@ TOOLS = [
                     "branch. Call first to learn the path for the kind of work you do.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "traceex_search",
-     "description": "Search verified fixes (traces) by words, taxonomy path, failure mode (role_swap, wrong_answer, "
-                    "runtime_error, …) and base model. Ranked by relevance when you give words, newest first "
-                    "otherwise; sort 'bounty' puts traces that feed the richest open bounty first. Open bounties on "
-                    "the same branch come back too.",
+     "description": "Search the registry of model failures (TXF ids, with their status) and the verified fixes "
+                    "(traces) filed under them, by words, taxonomy path (a partial name works; several matches come "
+                    "back as candidates to choose from), failure mode (role_swap, wrong_answer, runtime_error, …) and "
+                    "model. Returns compact cited cards (shown N of M); format 'json' for the full records. Ranked "
+                    "by relevance when you give words, newest first otherwise; sort 'bounty' puts what feeds the "
+                    "richest open bounty first. Cards from other branches are marked OTHER.",
      "inputSchema": {"type": "object", "properties": {"q": S("words to match"), "path": S("taxonomy branch"),
-                                                      "failure": S("failure mode"), "model": S("base model name"),
+                                                      "failure": S("failure mode"), "model": S("model name or family"),
+                                                      "kind": {"type": "string", "enum": ["all", "failure", "trace"],
+                                                               "description": "what to search", "default": "all"},
+                                                      "format": {"type": "string", "enum": ["text", "json"],
+                                                                 "default": "text"},
                                                       "sort": {"type": "string", "enum": ["relevant", "new", "bounty"],
                                                                "description": "result order"},
-                                                      "limit": N("max results", default=20),
+                                                      "limit": N("max results", default=5),
                                                       "offset": N("skip this many results (paging)", default=0)}}},
+    {"name": "traceex_failures",
+     "description": "The failure registry: known model failures, each with a stable id (TXF-…), its distinct verified "
+                    "reporters, occurrences, the model versions it hits, and its status per model version (open, "
+                    "partly_fixed with a pass rate, fixed, regressed). Pass `id` for one failure with its repro set, "
+                    "statuses and fixes; otherwise filter by path, failure mode, model, status and sort by frequency, "
+                    "growth or bounty.",
+     "inputSchema": {"type": "object", "properties": {"id": S("a failure id, TXF-…"), "path": S("taxonomy branch"),
+                                                      "failure": S("failure mode"), "model": S("model or family"),
+                                                      "status": S("open | partly_fixed | fixed | regressed"),
+                                                      "sort": {"type": "string",
+                                                               "enum": ["frequency", "growth", "bounty", "new"]},
+                                                      "limit": N("max results", default=10)}}},
+    {"name": "traceex_claim_fix",
+     "description": "Claim that your fix (a learning, prompt patch or tool) applied to a model version fixes one or more "
+                    "registry failures (TXF ids). Validators drawn at random measure it on their own cases of each "
+                    "failure; a fix that fixes none of them loses its bond (2,000 sats on a sats node). Spends money: "
+                    "only within your owner's budget.",
+     "inputSchema": {"type": "object", "required": ["claims", "model"],
+                     "properties": {"claims": {"type": "array", "items": {"type": "string"},
+                                               "description": "failure ids, TXF-…"},
+                                    "model": S("the model version the fix applies to"),
+                                    "kind": {"type": "string", "enum": ["learning", "prompt_patch", "tool"],
+                                             "default": "learning"},
+                                    "learning": S("the learning that carries the fix (needed for a bounty to pay)"),
+                                    "outputs": {"type": "object",
+                                                "description": "{trace id: your fixed model's output} on the claimed "
+                                                               "failures' public cases"}}}},
     {"name": "traceex_find_learnings",
      "description": "Call this whenever your checks keep failing on a kind of task: attested learnings (LoRA weights, "
                     "routing policies, rules, decoding recipes) for that taxonomy path and base model, biggest proven "
@@ -118,8 +156,23 @@ class ClientBackend:
         if name == "traceex_taxonomy":
             return c.taxonomy()
         if name == "traceex_search":
-            return c.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""), int(a.get("limit", 20)),
-                            a.get("sort", ""), int(a.get("offset", 0)))
+            return c.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""),
+                            int(a.get("limit", 5)), a.get("sort", ""), int(a.get("offset", 0)), kind=a.get("kind", "all"),
+                            fmt=a.get("format", "text"))
+        if name == "traceex_failures":
+            if a.get("id"):
+                return c.failure(a["id"])
+            return c.failures(a.get("path", ""), a.get("failure", ""), a.get("model", ""), a.get("status", ""),
+                              a.get("sort", "frequency"), int(a.get("limit", 10)))
+        if name == "traceex_claim_fix":
+            if self.unit == "msats" and self.spent + CLAIM_BOND_MSATS > self.budget:
+                raise PermissionError(f"over budget: a fix claim holds a {CLAIM_BOND_MSATS:,}-msat bond and this agent "
+                                      f"may spend {self.budget - self.spent} more msats (owner sets --max-spend-msats)")
+            out = c.claim_fix(a["claims"], a["model"], a.get("kind", "learning"), a.get("learning"),
+                              outputs=a.get("outputs"))
+            if self.unit == "msats":
+                self.spent += CLAIM_BOND_MSATS
+            return out
         if name == "traceex_find_learnings":
             return c.find_learnings(a.get("path", ""), a.get("model", ""), a.get("kind", ""), float(a.get("min_gain", 0)))
         if name == "traceex_list_bounties":
@@ -162,8 +215,18 @@ class NodeBackend:
         if name == "traceex_taxonomy":
             return ex.taxonomy()
         if name == "traceex_search":
-            return ex.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""), int(a.get("limit", 20)),
-                             a.get("sort", ""), int(a.get("offset", 0)))
+            return ex.search(a.get("q", ""), a.get("path", ""), a.get("failure", ""), a.get("model", ""),
+                             int(a.get("limit", 5)), a.get("sort", ""), int(a.get("offset", 0)), kind=a.get("kind", "all"),
+                             fmt=a.get("format", "text"))
+        if name == "traceex_failures":
+            if a.get("id"):
+                return ex.get_failure(a["id"])
+            return ex.failures(a.get("path", ""), a.get("failure", ""), a.get("model", ""), a.get("status", ""),
+                               a.get("sort", "frequency"), int(a.get("limit", 10)))
+        if name == "traceex_claim_fix":
+            return ex.claim_fix({"claimant": _need(a, "address"), "claims": a["claims"], "model": a["model"],
+                                 "kind": a.get("kind", "learning"), "learning": a.get("learning"),
+                                 "outputs": a.get("outputs")})
         if name == "traceex_find_learnings":
             return ex.find_learnings(a.get("path", ""), a.get("model", ""), a.get("kind", ""), float(a.get("min_gain", 0)))
         if name == "traceex_list_bounties":
@@ -205,7 +268,7 @@ def _remote_tools():
     for t in TOOLS:
         t = json.loads(json.dumps(t))
         if t["name"] in ("traceex_post_bounty", "traceex_back_bounty", "traceex_submit_fix", "traceex_report_usage",
-                         "traceex_balance"):
+                         "traceex_balance", "traceex_claim_fix"):
             t["inputSchema"]["properties"]["address"] = S("your wallet address (0x…)")
         if t["name"] == "traceex_submit_fix":
             t["inputSchema"]["properties"]["trace"] = {"type": "object", "description": "a trace already built by the SDK"}
@@ -241,6 +304,8 @@ def handle(msg, backend):
             return err(-32602, f"unknown tool {name}")
         try:
             result = backend.call(name, args)
+            if isinstance(result, dict) and set(result) == {"text"}:      # compact cards: the text is the answer
+                return ok({"content": [{"type": "text", "text": result["text"]}], "structuredContent": result})
             return ok({"content": [{"type": "text", "text": json.dumps(result, indent=1, default=str)}],
                        "structuredContent": result if isinstance(result, dict) else {"result": result}})
         except Exception as e:                        # tool errors are results the agent can read and react to

@@ -23,7 +23,7 @@ class Client:
         register learnings, claim bounties)."""
         self.endpoint, self.address, self.timeout, self.token = endpoint.rstrip("/"), address, timeout, token
 
-    def _call(self, method, path, body=None):
+    def _call(self, method, path, body=None, text=False):
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -31,7 +31,8 @@ class Client:
                                      data=json.dumps(body).encode() if body is not None else None, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                return json.loads(r.read() or b"{}")
+                raw = r.read()
+                return {"text": raw.decode()} if text else json.loads(raw or b"{}")
         except urllib.error.HTTPError as e:
             if e.code == 402:   # L402: a Lightning invoice and a macaroon; a Lightning-backed client pays and retries
                 raise PaymentRequired(json.loads(e.read() or b"{}"), e.headers.get("WWW-Authenticate", ""))
@@ -66,21 +67,94 @@ class Client:
     def taxonomy(self):
         return self._call("GET", "/v0/taxonomy")
 
-    def search(self, q="", path="", failure="", model="", limit=20, sort="", offset=0, facets=False):
-        """sort: "relevant" (default with words), "new" (default without), or "bounty"."""
+    def search(self, q="", path="", failure="", model="", limit=20, sort="", offset=0, facets=False, kind="", fmt=""):
+        """sort: "relevant" (default with words), "new" (default without), or "bounty". kind: "trace" (the node's
+        default), "failure" or "all". fmt="text": compact cited cards (returned as {"text": ...})."""
         qs = urllib.parse.urlencode({k: v for k, v in dict(q=q, path=path, failure=failure, model=model, limit=limit,
-                                                           sort=sort, offset=offset, facets=int(facets)).items() if v})
-        return self._call("GET", f"/v0/search?{qs}")
+                                                           sort=sort, offset=offset, facets=int(facets), kind=kind,
+                                                           format=fmt).items() if v})
+        return self._call("GET", f"/v0/search?{qs}", text=fmt == "text")
 
-    def post_bounty(self, *, title, path, eval_set, target, seed_micros=0, failure="", base_model="", epochs=4,
-                    seed_msats=0):
+    # --- the failure registry and fix tracking (v0.7) ----------------------------------------------------------------
+    def failures(self, path="", failure="", model="", status="", sort="frequency", limit=20, offset=0):
+        """Known failures (TXF ids), sorted by frequency (distinct verified reporters), growth, bounty or new."""
+        qs = urllib.parse.urlencode({k: v for k, v in dict(path=path, failure=failure, model=model, status=status,
+                                                           sort=sort, limit=limit, offset=offset).items() if v})
+        return self._call("GET", f"/v0/failures?{qs}")
+
+    def failure(self, failure_id):
+        return self._call("GET", f"/v0/failures/{failure_id}")
+
+    def failure_history(self, failure_id):
+        return self._call("GET", f"/v0/failures/{failure_id}/history")
+
+    def trace(self, trace_id):
+        return self._call("GET", f"/v0/traces/{trace_id}")
+
+    def claim_fix(self, claims, model, kind="learning", learning=None, artifact=None, outputs=None):
+        """Claim that a fix (learning, prompt_patch or tool) applied to `model` fixes these failure ids. Validators
+        drawn at random measure it on their own cases; on a sats node the claim holds a 2,000-sat bond, destroyed if it
+        fixes none of them. outputs: {trace id: the fixed model's output} on the claimed failures' public cases."""
+        body = {"claimant": self.address, "kind": kind, "claims": list(claims), "model": model}
+        for k, v in (("learning", learning), ("artifact", artifact), ("outputs", outputs)):
+            if v:
+                body[k] = v
+        return self._call("POST", "/v0/fixes", body)
+
+    def fix(self, fix_id):
+        return self._call("GET", f"/v0/fixes/{fix_id}")
+
+    def fixes(self, failure="", status=""):
+        qs = urllib.parse.urlencode({k: v for k, v in dict(failure=failure, status=status).items() if v})
+        return self._call("GET", f"/v0/fixes?{qs}")
+
+    def register_model(self, version, family=None, parent=None, outputs=None):
+        """Operator: a new model version; every tracked failure of its family is re-checked."""
+        body = {"version": version}
+        for k, v in (("family", family), ("parent", parent), ("outputs", outputs)):
+            if v:
+                body[k] = v
+        return self._call("POST", "/v0/models", body)
+
+    def model_report(self, version):
+        return self._call("GET", f"/v0/models/{urllib.parse.quote(version, safe='')}/report")
+
+    def commit_fix(self, fix_id, digest):
+        return self._call("POST", f"/v0/fixes/{fix_id}/commits", {"validator": self.address, "digest": digest})
+
+    def reveal_fix(self, fix_id, measurement, salt=""):
+        return self._call("POST", f"/v0/fixes/{fix_id}/reveals",
+                          {"validator": self.address, "measurement": measurement, "salt": salt})
+
+    def measure_fix_for_bounty(self, bounty_id, fix_id, attestation):
+        """A failure bounty's poster: its own measurement of a fix on its hidden eval (operator-relayed)."""
+        return self._call("POST", f"/v0/bounties/{bounty_id}/measurements", {"fix": fix_id, "attestation": attestation})
+
+    def repro_check(self, failure_id, results):
+        """A validator: {trace id: True if it reproduced on the base model} for a failure's public cases."""
+        return self._call("POST", f"/v0/failures/{failure_id}/repro", {"validator": self.address, "results": results})
+
+    def reporter_bond(self):
+        """Sats node: hold the 1,000-sat reporter bond, so your reports count toward failures' verified reporters."""
+        return self._call("POST", "/v0/reporters", {"address": self.address})
+
+    def withdraw_reporter(self):
+        return self._call("POST", "/v0/reporters/withdraw", {"address": self.address})
+
+    def reporter(self, address=None):
+        return self._call("GET", f"/v0/reporters/{address or self.address}")
+
+    def post_bounty(self, *, title, path="", eval_set, target, seed_micros=0, failure="", base_model="", epochs=4,
+                    seed_msats=0, failure_id=""):
         """Free to post (the transaction fee only). A bounty is a refundable pledge escrow: seed_msats (a sats node) or
         seed_micros (the dollar node) makes the poster's first pledge. A post matching an open bounty's branch, failure
         and model backs that bounty instead (the reply says `merged`)."""
         seed = {"seed_msats": int(seed_msats)} if seed_msats else ({"seed_micros": seed_micros} if seed_micros else {})
-        return self._call("POST", "/v0/bounties", dict(seed, poster=self.address, title=title, path=path,
-                                                       eval_set=eval_set, target=target, failure=failure,
-                                                       base_model=base_model, epochs=epochs))
+        body = dict(seed, poster=self.address, title=title, path=path, eval_set=eval_set, target=target,
+                    failure=failure, base_model=base_model, epochs=epochs)
+        if failure_id:                    # v0.7: a bounty on a registry failure; it pays when that failure is fixed
+            body["failure_id"] = failure_id
+        return self._call("POST", "/v0/bounties", body)
 
     def pledge(self, bounty_id, msats=0, *, micros=0):
         """Pledge to a bounty: msats on a sats node (micros on the retired v0.1 dollar node). Refunded in full if the

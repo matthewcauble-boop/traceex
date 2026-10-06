@@ -1,5 +1,5 @@
-"""Farming attacks against traceX v0.6 (no token: every payment in sats, every payout a split of a real payment), each
-run on a real node (node/sats.py), with its profit or loss.
+"""Farming attacks against traceX v0.7 (no token: every payment in sats, every payout a split of a real payment; plus
+the failure registry), each run on a real node (node/sats.py), with its profit or loss.
 
     python examples/farming/attacks.py              # every attack once, with what happened
     python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
@@ -17,6 +17,11 @@ staked), less GPU time. "vs honest" compares with the same trainer doing honest 
 same one measuring). Results are in sats, with a dollar equivalent at $85,962 a bitcoin (Coinbase spot, 2026-10-05)
 that is only approximate. v0.5's attacks on the token (pool pumps, dumps, TWAP lag, cheap credits, inflated mints,
 curve gaming, coin pump-and-dump, the operator's emission share) are gone with the token.
+
+v0.7 adds attacks on the failure registry: inflating a failure's frequency with sybil reporters (with and without
+reporter bonds; validators re-run new reporters' cases on the base model and refute the fabricated ones), claiming a
+fix for a failure one didn't fix (copying the public answers), with one bribed validator and with a majority, and
+gaming a regression to be paid twice for one fix.
 """
 import json
 import math
@@ -29,6 +34,7 @@ ROOT = os.path.join(HERE, "..", "..")
 sys.path[:0] = [os.path.join(ROOT, "sdk", "python"), os.path.join(ROOT, "node")]
 from traceex import Trace, Learning, attest  # noqa: E402
 from sats import SatsExchange, Params, attestation_digest, decoy_digest, tolerance  # noqa: E402
+from registry import measurement_digest  # noqa: E402
 
 A = lambda c: "0x" + c * 40
 V = lambda i: "0x" + f"{0xa0 + i:02x}" * 20
@@ -77,6 +83,7 @@ def node(seed=7, attacker_validators=0, lazy=()):
     ex.register_checker("unit-tests", HONEST)
     ex.register_checker("attacker-tests", ATTACKER)
     ex.corrupt, ex.lazy, ex.measured = set(vals[:attacker_validators]), set(lazy), {}
+    ex.genuine = set()                                     # registry cases that really reproduce on the base model
     return ex
 
 
@@ -516,6 +523,168 @@ def sybil(ex):
     return f"10 trainers, 10 payers ({paid} paid 10,000 sats each to the sybils' own accepted learnings) and 5 minimum-stake validators"
 
 
+# --- v0.7: the failure registry ---------------------------------------------------------------------------------------
+def case(producer, i):
+    """One reported case of a TypeError failure on code generation (the same failure, case after case)."""
+    return Trace.from_fix(task="code.python", base_model="qwen",
+                          input=f"Write a function number {i} that merges two tuples into a list.",
+                          model_output={"code": "return a + list(b)"}, verified_output={"code": f"return list(a) + list(b)  # {i}"},
+                          checker="unit-tests@1", producer=producer, created="2026-10-04T00:00:00Z", privacy="open",
+                          failure_modes={"code": "runtime_error"},
+                          feedback=[f'TypeError: can only concatenate tuple (not "list") to tuple (case {i})'])
+
+
+def honest_failure(ex, n=3):
+    """A failure an honest, bonded reporter really hits: n genuine cases."""
+    ex.post_reporter_bond(HONEST)
+    ids = [ex.submit_trace(dict(case(HONEST, i)))["id"] for i in range(n)]
+    ex.genuine |= set(ids)
+    return ex._failure_of(ids[0])
+
+
+def recheck(ex, fid):
+    """The watchdog's re-check: two honest validators re-run a failure's unchecked cases on the base model. Genuine
+    cases reproduce; fabricated ones don't, and each costs its reporter its bond."""
+    cases = [t for (t,) in ex.db.execute("SELECT trace FROM occurrences WHERE failure=? AND rejected=0 AND reproduced IS "
+                                         "NULL", (fid,)).fetchall()]
+    honest = [v for v in ex._validator_list() if v not in ex.corrupt and v not in ex.lazy][:2]
+    for v in honest:
+        for k in range(0, len(cases), 50):
+            ex.repro_check(fid, v, {t: t in ex.genuine for t in cases[k:k + 50]})
+
+
+def measure_fix(ex, fix_id, truth, claimed=None, n=40):
+    """Drawn validators measure a fix on their own n cases of each failure: honest ones find the true pass rate (with
+    sampling noise and 50 sats of GPU each), bribed ones report what the attacker says. Commit, then reveal."""
+    rng = random.Random(f"{ex.seed}|{fix_id}")
+    reports = {}
+    for v in ex.get_fix(fix_id)["assigned"]:
+        honest = v not in ex.corrupt and v not in ex.lazy
+        res = {}
+        for fid, rate in truth.items():
+            res[fid] = ({"passed": sum(rng.random() < rate for _ in range(n)), "n": n} if honest
+                        else {"passed": round((claimed or truth)[fid] * n), "n": n})
+        if honest:
+            ex.measured[v] = ex.measured.get(v, 0) + 1
+        reports[v] = {"results": res}
+        ex.commit_fix(fix_id, v, measurement_digest(reports[v], "s" + v))
+    for v, m in reports.items():
+        ex.reveal_fix(fix_id, v, m, "s" + v)
+
+
+def sybil_reports(bonded):
+    def attack(ex):
+        """20 sybil addresses each report a fabricated case of an honest failure, hoping to push it up the frequency
+        ranking (where bounties and autopilots look). Unbonded reports don't count; bonded ones count until the
+        watchdog's re-check finds they don't reproduce, which destroys each sybil's 1,000-sat bond."""
+        fid = honest_failure(ex)
+        honest_count = ex.get_failure(fid)["reporters"]
+        sybils = ["0x" + f"5{i:02x}5" * 10 for i in range(20)]
+        start, funded = worth(ex, [ATTACKER]), 0
+        for i, s in enumerate(sybils):
+            need = (ex.p.reporter_bond_msats if bonded else 0) + 2 * ex.tx_fee_msats
+            fund(ex, s, need)
+            funded += need
+            if bonded:
+                ex.post_reporter_bond(s)
+            ex.submit_trace(dict(case(s, 100 + i)))              # distinct, fabricated: never reproduces
+        peak = ex.get_failure(fid)["reporters"]
+        ex.settle()
+        recheck(ex, fid)
+        after = ex.get_failure(fid)["reporters"]
+        pnl = worth(ex, [ATTACKER] + sybils) - start - funded
+        return (f"verified reporters {honest_count} -> {peak} after the 20 reports"
+                + (" (unbonded reports don't count)" if not bonded else "") + f" -> {after} after the re-check; "
+                + ("each sybil's 1,000-sat bond destroyed" if bonded else "each report paid its fee"), pnl)
+    return attack
+
+
+def false_fix(ex):
+    """An honest bounty (20,000 sats) waits on a failure. The attacker claims a prompt patch fixes it, sending the
+    public repro answers copied from the traces (the node's checker passes them all). Validators run the patch on their
+    own cases: it fixes nothing."""
+    fid = honest_failure(ex)
+    b = ex.post_bounty({"poster": POSTER, "failure_id": fid, "eval_set": "sha256:poster-cases", "target": 0.8,
+                        "title": "stop the TypeError"})
+    ex.pledge(b["id"], BACKER, 20_000_000)
+    outputs = {t: json.loads(body)["verified_output"] for t, body in ex.db.execute(
+        "SELECT o.trace, t.body FROM occurrences o JOIN traces t ON t.id = o.trace WHERE o.failure=?", (fid,)).fetchall()}
+    fx = ex.claim_fix({"claimant": ATTACKER, "kind": "prompt_patch", "claims": [fid], "model": "qwen", "outputs": outputs})
+    ex.settle()                                                  # validators drawn from the next beacon
+    measure_fix(ex, fx["id"], {fid: 0.0}, claimed={fid: 1.0})
+    f = ex.get_fix(fx["id"])
+    return (f"public repro {f['claims'][0]['public_repro']['passed']}/{f['claims'][0]['public_repro']['n']} (copied "
+            f"answers), validators' median {f['claims'][0]['pass_rate']:.0%}: the claim is {f['status']}, the failure "
+            f"stays {ex.get_failure(fid)['status']}, its 2,000-sat bond is destroyed and the bounty is untouched")
+
+
+def majority_false_fix(ex):
+    """With 4 of 7 validator seats: a fake learning accepted, a fix claimed with it, its validators report it fixed.
+    The record says fixed (the limit: a captured majority can corrupt the record), but the bounty pays only on its
+    poster's own measurement, which finds nothing."""
+    fid = honest_failure(ex)
+    b = ex.post_bounty({"poster": POSTER, "failure_id": fid, "eval_set": "sha256:poster-cases", "target": 0.8,
+                        "title": "stop the TypeError"})
+    ex.pledge(b["id"], BACKER, 20_000_000)
+    own = parents_of(ex, producer=ATTACKER, checker="attacker-tests@1")
+    for k in range(6):
+        lid = submit(ex, ATTACKER, own, 0.30, f"fake-{k}")
+        ex.settle()
+        validate(ex, lid, 0.0, claim=0.30)
+        if ex.verdict(lid)["status"] == "accepted":
+            break
+    fx = ex.claim_fix({"claimant": ATTACKER, "kind": "learning", "claims": [fid], "model": "qwen", "learning": lid})
+    ex.settle()
+    for k in range(6):                                           # hoping the draw is its own majority
+        measure_fix(ex, fx["id"], {fid: 0.0}, claimed={fid: 1.0})
+        if ex.get_fix(fx["id"])["status"] != "pending":
+            break
+    st = ex.get_failure(fid)["status"]
+    try:
+        ex.poster_measure(b["id"], fx["id"], attest(POSTER, "sha256:poster-cases", "pass@1", 0.0, 0.0))
+    except ValueError:
+        pass
+    paid = ex.bounties(status="")["bounties"][0]["status"]
+    return f"its fix is recorded {st}; the poster's own measurement finds 0%, so the 20,000-sat bounty is {paid}"
+
+
+def regression_game(ex):
+    """A solver whose real learning fixed a failure, and was paid its bounty, tries to be paid again: it claims a
+    broken patch on the same failure to make it look regressed (so backers pledge again), then posts a bounty of its
+    own on it and claims it with the same learning. Fixes can only improve a failure's status (only a model version's
+    re-check, operator-registered and validator-measured, can say regressed), and a learning is paid once per
+    failure."""
+    fid = honest_failure(ex)
+    b1 = ex.post_bounty({"poster": POSTER, "failure_id": fid, "eval_set": "sha256:poster-cases", "target": 0.8,
+                         "title": "stop the TypeError"})
+    ex.pledge(b1["id"], BACKER, 20_000_000)
+    lid = accepted(ex, ATTACKER, parents_of(ex), "real")
+    fx = ex.claim_fix({"claimant": ATTACKER, "kind": "learning", "claims": [fid], "model": "qwen", "learning": lid})
+    ex.settle()
+    measure_fix(ex, fx["id"], {fid: 0.95})
+    ex.poster_measure(b1["id"], fx["id"], attest(POSTER, "sha256:poster-cases", "pass@1", 0.0, 0.9))
+    for _ in range(ex.p.vest_epochs + 1):                        # its honest pay comes home before the attack
+        ex.settle()
+    mid = worth(ex, [ATTACKER])
+    broken = ex.claim_fix({"claimant": ATTACKER, "kind": "prompt_patch", "claims": [fid], "model": "qwen"})
+    ex.settle()
+    measure_fix(ex, broken["id"], {fid: 0.0})
+    status = ex.get_failure(fid)["status"]
+    b2 = ex.post_bounty({"poster": ATTACKER, "failure_id": fid, "eval_set": "sha256:mine", "target": 0.5,
+                         "title": "regressed?", "seed_sats": 5_000})
+    ex.claim_fix({"claimant": ATTACKER, "kind": "learning", "claims": [fid], "model": "qwen", "learning": lid})
+    ex.settle()
+    again = [f for f in ex.fixes(failure=fid)["fixes"] if f["status"] == "pending"]
+    for f in again:
+        measure_fix(ex, f["id"], {fid: 0.95})
+        ex.poster_measure(b2["id"], f["id"], attest(ATTACKER, "sha256:mine", "pass@1", 0.0, 0.9))
+    for _ in range(ex.p.vest_epochs + 3):
+        ex.settle()
+    paid = next(x for x in ex.bounties(status="")["bounties"] if x["id"] == b2["id"])["status"]
+    return (f"after its honest payout, its broken patch leaves the failure {status}; its own bounty on it ends {paid} "
+            "(one payout per failure and learning), its pledge refunded", worth(ex, [ATTACKER]) - mid)
+
+
 ATTACKS = [
     ("Trace spam", trace_spam, 0),
     ("Stuff an honest lot with junk", stuff_lot, 0),
@@ -540,6 +709,12 @@ ATTACKS = [
     ("Majority: wash its own fake", majority_wash, 4),
     ("Majority: take an honest bounty", majority_bounty, 4),
     ("Majority: block honest work", majority_grief, 4),
+    ("Registry: 20 sybil reporters, no bonds", sybil_reports(False), 0),
+    ("Registry: 20 bonded sybil reporters", sybil_reports(True), 0),
+    ("Registry: claim a fix it didn't make", false_fix, 0),
+    ("Registry: false fix, 1 bribed validator", false_fix, 1),
+    ("Registry: game a regression, paid twice?", regression_game, 0),
+    ("Majority: mark fixed to take its bounty", majority_false_fix, 4),
 ]
 REAL = {"Wash usage (self-dealing)", "Self-funded bounty", "Pad a real learning, honest audits",
         "Pad a real learning, lazy audits", "Wrap honest traces in its own learning", "(honest trainer, for scale)"}

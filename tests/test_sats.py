@@ -891,7 +891,8 @@ class Seed(unittest.TestCase):
         self.assertEqual((ex.epoch, e["validators"]), (3, 3))
         self.assertGreater(e["paid_out_msats"], 0)                            # the host's usage, paid to the tree
         self.assertGreater(e["escrow_msats"]["vesting"], 0)                   # the traces' part, in escrow
-        self.assertEqual([b["status"] for b in ex.bounties()["bounties"]], ["open", "open"])
+        self.assertEqual([b["status"] for b in ex.bounties()["bounties"]], ["open", "open", "open"])   # v0.7: + a failure's
+        self.assertEqual(ex.bounties()["bounties"][2]["failure_id"][:4], "TXF-")
         self.assertTrue(ex.audit()["balanced"])
 
 

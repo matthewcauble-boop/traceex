@@ -20,6 +20,51 @@ act ──▶ check ──▶ fix ──▶ trace ──▶ learning ──▶ a
 
 ▶ **[Watch the 53-second explainer](video/tracex-explainer.mp4)** · open [`site/index.html`](site/index.html) for the interactive overview · read the [protocol spec](SPEC.md)
 
+## The failure registry (v0.7)
+
+What lasts is not a learning, which others can copy, but the record of what breaks in the field and what provably
+fixes it: **a CVE-like registry for model failures.**
+
+- **Every failure gets a stable id.** Each incoming trace is filed under a canonical failure keyed by its taxonomy
+  branch, its failure signature (each fixed field and how it failed; a runtime error's exception class) and the model
+  family: `TXF-2026-000005` is "runtime error (TypeError) in code · code/generate · qwen2.5", however many agents hit
+  it and on whichever Qwen2.5 size. The reply to every submitted trace names its `failure_id`.
+- **Counted by people who can be held to account.** A failure's frequency is its distinct *verified* reporters (a
+  1,000-sat reporter bond on a sats node), plus occurrences, first and last seen, growth over the last 3 epochs, and the
+  model versions that hit it. Copies count for their original. Validators re-run new reporters' cases; one that doesn't
+  reproduce leaves the counters and costs its reporter the bond.
+- **Fixes are measured, per model version.** A fix (a learning, prompt patch or tool) claims failure ids
+  (`POST /v0/fixes`); the node re-runs the public repro cases on the outputs sent, and validators drawn at random
+  measure the hidden part on their own cases, commit, then reveal. Each (failure, model version) is `open`,
+  `partly_fixed` (with its pass rate), `fixed` or `regressed`. Registering a new model version re-checks every failure
+  of its family and reports what it fixed and what regressed (`GET /v0/models/{version}/report`).
+- **Bounties attach to failures and pay themselves** when their failure flips to fixed by a validated fix whose
+  learning the federation accepted and whose result the bounty's poster confirmed on its own hidden eval; every v0.6
+  payment rule and the payout invariant still hold.
+
+```bash
+curl "$NODE/v0/failures?sort=frequency"                     # the registry: most-reported first (or growth, bounty)
+curl "$NODE/v0/failures/TXF-2026-000005"                    # its repro set, statuses per model version, fixes, bounties
+curl "$NODE/v0/search?q=type+error&kind=all&format=text"    # compact cited cards, traces and failures together
+```
+
+Two ways in besides the SDK, both dry-run by default (what they build waits in `.traceex/outbox/` until you review it
+with `python -m traceex.outbox list | show | send`):
+
+- **pytest** (`pip install` the SDK, then `pytest --traceex`): a test that failed earlier and passes after a code change
+  becomes a trace. What can leave your machine is only a skeleton: string literals, comments, paths and every identifier
+  that isn't Python vocabulary are replaced (`{STR_1}`, `{ID_2}`, `{DIR}`), numbers outside -10..10 too; the diff's
+  structure stays (`lines[1:]` → `lines`). See [`examples/ci/github-action.yml`](examples/ci/github-action.yml) for CI.
+- **OpenTelemetry** (`TraceexSpanExporter`): add it to any OTel-instrumented agent's tracer provider (Laminar,
+  LangSmith, OpenLLMetry and OpenInference export OTel too). It spots "model answer, a check fails it, a retry the
+  check passes" in GenAI semantic-convention spans and builds a skeleton trace (names, emails, dates, amounts and codes
+  replaced on your machine). `python examples/otel_agent/demo.py` runs it on a fake agent.
+
+Exactly what each path sends, and never sends, is in SPEC 4i and at the top of
+[`pytest_plugin.py`](sdk/python/traceex/pytest_plugin.py) and [`otel.py`](sdk/python/traceex/otel.py). Search is a
+Leviathan-style index ([elstongun/leviathan](https://github.com/elstongun/leviathan), Apache-2.0; see [NOTICE](NOTICE)):
+87% of the frozen evaluation queries find their answer first and 96% in the top five, against 70% / 77% before.
+
 ## Run a public exchange
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/matthewcauble-boop/traceex)
@@ -70,8 +115,10 @@ python examples/farming/attacks.py --decoys     # the decoy test's false-positiv
 python examples/scaling/simulate.py             # payouts scale linearly with paid usage, up to $1B (1.16T sats) a day
 ```
 
-All 22 strategies lose against honest work on average over 30 random runs, including owning most of the validator
-stake; 21 lose in every run. The lazy validator came out ahead of its honest twin in 3 of 30 runs, when it was drawn
+All 28 strategies lose against honest work on average over 30 random runs, including owning most of the validator
+stake; 27 lose in every run. v0.7 adds six against the registry: sybil reporters with and without bonds, a fix claimed
+with copied answers (alone, with a bribed validator, and with a majority after a bounty) and a gamed regression; each
+loses in all 30 runs. The lazy validator came out ahead of its honest twin in 3 of 30 runs, when it was drawn
 for only one decoy (one miss is a strike, not a slash, so an honest validator's unlucky draw no longer costs it 25%).
 A majority can still block honest work, because it controls the vote, but no verdict moves money to it. Rules and
 numbers: SPEC sections 4e and 4f.
@@ -123,8 +170,9 @@ claude mcp add tracex -- python -m traceex.mcp \
     --node https://<exchange-node> --address 0xYourWallet --max-spend-msats 1000000   # 1,000-sat budget for bounties
 ```
 
-The server runs on your machine (so fixes become skeletons before anything is sent) and gives the agent nine tools:
-`traceex_search`, `traceex_find_learnings`, `traceex_list_bounties`, `traceex_post_bounty`, `traceex_back_bounty`,
+The server runs on your machine (so fixes become skeletons before anything is sent) and gives the agent eleven tools:
+`traceex_search` (compact cards over failures and traces, five at a time), `traceex_failures`, `traceex_claim_fix`,
+`traceex_find_learnings`, `traceex_list_bounties`, `traceex_post_bounty`, `traceex_back_bounty`,
 `traceex_submit_fix`, `traceex_report_usage`, `traceex_taxonomy`, `traceex_balance`. Its instructions tell the agent
 to search before giving up, adopt learnings that proved themselves, submit every verified fix, and post a bounty when
 a failure keeps coming back. Every node also speaks MCP at `POST /mcp` (nothing to install:
@@ -200,7 +248,11 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
 | `sdk/python/traceex/` | the SDK, standard library only: skeletons, traces, the check loop, adaptation, the classifier engine, auctions, royalties, Merkle payouts, client, `export` (SFT / DPO / repair datasets, cards), `mcp` (MCP server), `autopilot` |
 | `node/exchange.py` | the exchange node: HTTP API, MCP endpoint and website in one process, SQLite. `python node/exchange.py --port 8787`; `--public --seed --economy sats --test-credits 30000000` for a hosted testnet (30,000 test sats a wallet) |
 | `node/seed.py` | loads the two worked examples into an empty node (first boot of a public exchange); on a sats node it also stakes three validators and runs the federation on real held-out slices |
-| `node/sats.py`, `node/validator.py` | v0.6, no token: payments in sats with the payout invariant, the 60/25/10/5 split, escrow and vesting, pledge bounties, stakes and forfeits, federated validation, decoys, licence escrow, challenges; and a validator's commit/reveal tool |
+| `node/sats.py`, `node/validator.py` | no token: payments in sats with the payout invariant, the 60/25/10/5 split, escrow and vesting, pledge bounties, stakes and forfeits, federated validation, decoys, licence escrow, challenges, v0.7's reporter and fix bonds; and a validator's commit/reveal tool |
+| `node/registry.py` | v0.7: the failure registry (canonical failures, stable ids, counters) and fix tracking (claims, validator rounds, statuses per model version, model re-checks, bounties that pay themselves) |
+| `node/leviathan_search.py` | v0.7: the search index, adapted from Leviathan (Apache-2.0, see NOTICE): FTS5 + porter, branch and filter tokens, tiered branch resolution, labelled fallback, cited cards |
+| `sdk/python/traceex/pytest_plugin.py`, `codeskel.py`, `otel.py`, `outbox.py` | v0.7 ingestion: the pytest plugin and code skeletons, the OpenTelemetry exporter, the review outbox |
+| `examples/otel_agent/`, `examples/ci/` | a fake agent's GenAI spans through the exporter; the plugin in a GitHub Action |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real sats node, with profit or loss |
 | `examples/scaling/` | `simulate.py`: payouts are the same share of paid usage from $10 to $1B a day |
 | `examples/fees/` | `measure.py`: what each kind of transaction costs in electricity, and so the standard fee |
@@ -219,13 +271,16 @@ standard-library keyword engine otherwise (one request per level of the tree, ea
 on the beam; a daily request cap for public nodes; `POST /v0/admin/reclassify` re-files keyword-filed traces once a
 key is added). How the model failed is read exactly from the placeholders, no model needed: `type_mismatch`,
 `role_swap`, `wrong_span`, `invented`, `omission`, `normalised`; checkers can name their own (`wrong_answer`,
-`runtime_error`). Search by words, branch, failure mode and base model, ranked by relevance (a match in the branch or
-failure label counts most), newest first, or by the richest open bounty a trace feeds; facets give counts per branch
-and failure mode for browsing. Open bounties on the same branch come back with the results.
+`runtime_error`). Search by words, branch, failure mode and model, over traces and registry failures: ranked by
+relevance (BM25 over porter-stemmed words, the title weighted most), newest first, or by the richest open bounty; a
+partial branch name resolves (`code/gen`), an ambiguous one comes back as candidates, and an empty branch falls back to
+its nearest ancestor with the cards marked OTHER; facets give counts per branch and failure mode. Open bounties on the
+same branch come back with the results.
 
 ## Status
 
-v0.1 protocol; sats economy testnet v0.6 (no token). The hosted exchange runs as a testnet (test sats only).
+v0.1 protocol; sats economy testnet v0.7 (no token; the v0.6 economy plus the failure registry, fix tracking and
+ingestion from tests and telemetry). The hosted exchange runs as a testnet (test sats only).
 Everything is paid in bitcoin: sats over Lightning with L402 is the specified mainnet payment path (USDC, x402 and v0.5's
 TXC are retired). The contracts are the v0.1 on-chain sketch: they have run on a local EVM but are **unaudited**, still
 use a mock USDC token, and have not been moved to a bitcoin-side settlement; don't put real money in them. Not built yet: signed
