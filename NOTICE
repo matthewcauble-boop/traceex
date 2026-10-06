@@ -23,3 +23,34 @@ traceX uses SQLite (public domain) through Python's standard sqlite3 module.
 
 examples/code_repair uses the MBPP dataset (Google Research, CC BY 4.0) and Qwen2.5-0.5B-Instruct (Alibaba Cloud,
 Apache-2.0); see that example's README files for details.
+
+------------------------------------------------------------------------------------------------------------------------
+
+sdk/python/traceex/tropic.py (step graphs, tropical prefix/suffix values, frontier choice, prefix-suffix composition
+with replay and verification, and the basis of verified paths for maximum-likelihood training), node/composition.py,
+and examples/tropical_composition (whose countdown.py ports TROPIC's Countdown generator and step environment) are
+adapted from TROPIC, the reference code of "Tropical Reinforcement Learning" by Arip Asadulaev, Aladin Djuhera, Karim
+Salta, Holger Boche, Fakhri Karray and Martin Takac (MBZUAI, TUM), arXiv:2610.02478,
+https://github.com/machinestein/Tropical-Reinforcement-Learning (commit 75106338f320a4c093ea7c1fcfc9fcfc6a5acd20),
+in particular ragen/tropic/graph.py, ragen/tropic/collector.py, ragen/tropic/batch.py and ragen/env/countdown/. The
+changes for traceX are listed at the top of tropic.py and in examples/tropical_composition/NOTICE. TROPIC is
+distributed under the MIT licence, whose notice reads:
+
+    Copyright 2025 RAGEN Team
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+    the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+    THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+examples/tropical_composition runs Qwen2.5-0.5B-Instruct (Alibaba Cloud, Apache-2.0); its weights are downloaded
+separately and are not part of this repository.

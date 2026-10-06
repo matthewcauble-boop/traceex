@@ -182,6 +182,8 @@ class Registry:
         self.checker_runners = getattr(self, "checker_runners", {})
         if self.index.count("trace") == 0 and self.db.execute("SELECT 1 FROM labels LIMIT 1").fetchone():
             self._rebuild_registry()
+        if hasattr(self, "_open_composition"):
+            self._open_composition()                 # v0.8: step graphs (node/composition.py)
         self.db.commit()
 
     def _rebuild_registry(self):
@@ -422,6 +424,10 @@ class Registry:
                         "ORDER BY epoch, model", (f["id"],)).fetchall()]
         fixes = [x for (x, claims) in self.db.execute("SELECT id, claims FROM fixes ORDER BY seq").fetchall()
                  if f["id"] in json.loads(claims)]
+        if hasattr(self, "_fragment_cases"):            # v0.8: failed attempts filed as step traces
+            steps = self._fragment_cases(f["id"])
+            if steps:
+                s = dict(s, step_trace_cases=steps)
         return dict(s, repro={"cases": s["occurrences"], "public": repro,
                               "hidden": "each validator's own private cases of this failure; only their pass counts are "
                                         "published"},
@@ -449,9 +455,13 @@ class Registry:
         tid, body = rows[0]
         lab = self.db.execute("SELECT path, signature, engine FROM labels WHERE id=?", (tid,)).fetchone()
         occ = self.db.execute("SELECT failure, canonical, rejected FROM occurrences WHERE trace=?", (tid,)).fetchone()
-        return {"id": tid, "trace": json.loads(body), "path": lab[0], "signature": lab[1], "classified_by": lab[2],
-                "failure_id": occ[0] if occ else None, "copy_of": occ[1] if occ and occ[1] != tid else None,
-                "refuted": bool(occ[2]) if occ else False}
+        joined = self._join_of(tid) if hasattr(self, "_join_of") else None
+        out = {"id": tid, "trace": json.loads(body), "path": lab[0], "signature": lab[1], "classified_by": lab[2],
+               "failure_id": occ[0] if occ else (joined or {}).get("failure_id"),
+               "copy_of": occ[1] if occ and occ[1] != tid else None, "refuted": bool(occ[2]) if occ else False}
+        if joined:
+            out["composed"] = joined
+        return out
 
     # --- reporters: refuting fabricated cases ----------------------------------------------------------------------------
     def _validator_ok(self, validator):

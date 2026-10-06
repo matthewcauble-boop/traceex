@@ -34,6 +34,7 @@ from traceex.classify import classify, default_engine, nodes, RulesEngine, TAXON
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from registry import Registry  # noqa: E402  (v0.7: the failure registry and fix tracking)
+from composition import Composition  # noqa: E402  (v0.8: step graphs and cross-agent composition, after TROPIC)
 from leviathan_search import Query, best_snippet, render as render_cards  # noqa: E402  (v0.7: the Leviathan-style index)
 
 # A bounty's pledges, when a learning solves it: the solver is paid most, the traces it was built from still earn.
@@ -204,7 +205,7 @@ class SafeDB:
         self.conn.close()
 
 
-class Exchange(Registry):
+class Exchange(Registry, Composition):
     """The v0.1 reference node: contributors paid in dollars (micros). Retired as a mainnet path (USDC settlement and
     x402 gave way to bitcoin over Lightning, SPEC 5); kept as the library's default for its tests and examples. The sats
     node (node/sats.py, v0.6) pays everything in millisatoshis, with no token."""
@@ -363,7 +364,7 @@ class Exchange(Registry):
                 f"pools_paid_{self.money}": one("SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='solved'"),
                 "last_root": {"epoch": r[0], "root": r[1], f"total_{self.money}": r[2]} if r else None,
                 "testnet": bool(self.test_credits), "epoch_hours": getattr(self, "epoch_hours", 0),
-                "fees": self.fees(), "registry": self.registry_stats(),
+                "fees": self.fees(), "registry": self.registry_stats(), "composition": self.composition_stats(),
                 "classifier": {"engine": self.engine.name,
                                "filed_by": dict(self.db.execute("SELECT engine, COUNT(*) FROM labels GROUP BY engine")),
                                "usage": getattr(self.engine, "usage", None), "refile": self.refile}}
@@ -784,7 +785,7 @@ class Exchange(Registry):
         trace_info = {tid: {"producer": p, "checker_author": self._checker_author(c)}
                       for tid, p, c in self.db.execute("SELECT id, producer, checker FROM traces")}
         learnings = {lid: json.loads(b) for lid, b in self.db.execute("SELECT id, body FROM learnings")}
-        return trace_info, learnings
+        return self._join_credit(trace_info), learnings     # v0.8: a path trace pays the step traces it is built from
 
     def _refund(self, bounty_id, amount, why):
         """Give a bounty's money back to its backers: each what it pledged, pro rata if less than everything is left."""
@@ -873,6 +874,7 @@ class Exchange(Registry):
                 traces = self.db.execute("SELECT id, producer, checker FROM traces WHERE lot=? ORDER BY id", (lot,)).fetchall()
                 if not winners or not traces:
                     continue
+                credit = self._join_credit({t[0]: {"producer": t[1]} for t in traces})
                 for w in winners:
                     self.db.execute("INSERT INTO licences VALUES (?,?,?,?,?)", (lot, w, price, e, json.dumps([t[0] for t in traces])))
                     self._credit(w, -price, f"licence {lot}")
@@ -880,8 +882,11 @@ class Exchange(Registry):
                     for i, (tid, producer, checker) in enumerate(traces):
                         amt = per + (dust if i == 0 else 0)
                         author = self._checker_author(checker)
-                        for acct, m in split_trace_sale(amt, producer, author, self.validators).items():
+                        sale = split_trace_sale(amt, credit[tid]["producer"], author, self.validators)
+                        for acct, m in sale.items():
                             self._credit(acct, m, f"sale {tid[:19]}")
+                        if amt - sum(sale.values()) > 0:  # v0.8: a path trace with no passing trace: back to the buyer
+                            self._credit(w, amt - sum(sale.values()), f"licence {lot}: share with no payee")
                 out.append({"lot": lot, "winners": winners, "price_micros": price, "traces": len(traces)})
                 self._event(f"lot {lot.split('|')[0]} cleared: {len(winners)} licence{'s' if len(winners) != 1 else ''} "
                             f"at ${price / 1e6:,.2f}, paid to {len(traces)} traces' producers")
@@ -965,8 +970,11 @@ class Exchange(Registry):
                 L = learnings[lid]
                 amount = calls * L["royalty"]["per_call_micros"]
                 self._credit(consumer, -amount, f"usage {lid[:19]}")
-                for acct, m in split_usage(amount, L, trace_info, self.validators, learnings).items():
+                paid = split_usage(amount, L, trace_info, self.validators, learnings)
+                for acct, m in paid.items():
                     self._credit(acct, m, f"royalty {lid[:19]}")
+                if amount - sum(paid.values()) > 0:      # v0.8: a share with no one to pay goes back to the consumer
+                    self._credit(consumer, amount - sum(paid.values()), f"usage {lid[:19]}: share with no payee")
             self._bill_fees()
             # debits were collected up front (a payment channel); the root pays out every credit, gross
             payouts = {a: m for a, m in self.db.execute(
@@ -1047,7 +1055,10 @@ class Exchange(Registry):
                                "GET /v0/bounties"],
                 "registry": {"failures": "GET /v0/failures?path=&failure=&model=&status=&sort=frequency|growth|bounty|new",
                              "failure": "GET /v0/failures/{TXF-id} (and /history)", "fixes": "POST /v0/fixes",
-                             "models": "GET /v0/models/{version}/report"}}
+                             "models": "GET /v0/models/{version}/report"},
+                "step_traces": {"file": "POST /v0/failures/{TXF-id}/fragments (steps/0.1: replayed, then composed)",
+                                "restart_from": "GET /v0/failures/{TXF-id}/frontier",
+                                "verified_paths": "GET /v0/failures/{TXF-id}/joins (and /graphs, /basis)"}}
 
     def provenance(self, oid, _depth=0):
         r = self.db.execute("SELECT body FROM learnings WHERE id=?", (oid,)).fetchone()
@@ -1059,6 +1070,10 @@ class Exchange(Registry):
                     "parents": parents}
         r = self.db.execute("SELECT producer, lot FROM traces WHERE id=?", (oid,)).fetchone()
         if r:
+            j = self._join_of(oid)
+            if j:                                  # v0.8: a verified path composed from step traces
+                return {"id": oid, "type": "trace", "composed": True, "lot": r[1], "failure_id": j["failure_id"],
+                        "origin": j["origin"], "fragments": j["fragments"], "producers": j["producers"]}
             return {"id": oid, "type": "trace", "producer": r[0], "lot": r[1]}
         raise KeyError(oid)
 
@@ -1224,6 +1239,13 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     return self._send(200, ex.failures(q.get("path", ""), q.get("failure", ""), q.get("model", ""),
                                                        q.get("status", ""), q.get("sort", "frequency"),
                                                        int(q.get("limit", 20)), int(q.get("offset", 0))))
+                mg = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)/(graphs|frontier|joins|basis)", u.path)
+                if mg:                                   # v0.8: step graphs, where to restart, verified paths
+                    if mg[2] == "frontier":
+                        return self._send(200, ex.frontier(mg[1], q.get("root", ""), int(q.get("k", 5))))
+                    if mg[2] == "basis":
+                        return self._send(200, ex.tropic_basis(mg[1], max(1, min(int(q.get("size", 2)), 16))))
+                    return self._send(200, ex.step_graphs(mg[1]) if mg[2] == "graphs" else ex.joins(mg[1]))
                 mf = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)(/history)?", u.path)
                 if mf:
                     return self._send(200, ex.failure_history(mf[1]) if mf[2] else ex.get_failure(mf[1]))
@@ -1338,6 +1360,9 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     if mfx[2] == "commits":
                         return self._send(200, ex.commit_fix(mfx[1], b["validator"], b["digest"]))
                     return self._send(200, ex.reveal_fix(mfx[1], b["validator"], b["measurement"], b.get("salt", "")))
+                mfr = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)/fragments", self.path)
+                if mfr:                                  # v0.8: a step trace, replayed and composed on arrival
+                    return self._send(200, ex.submit_fragment(mfr[1], self._body()))
                 mrp = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)/repro", self.path)
                 if mrp:
                     if not self._admin():

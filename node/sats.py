@@ -621,6 +621,7 @@ class SatsExchange(Exchange):
             for acct, m in split_trace_sale(per + (dust if i == 0 else 0), info["producer"], info["checker_author"],
                                             vals).items():
                 self._disburse(pid, acct, m, f"licence: {tid[:19]}")
+        self._refund_payment(pid, "licence share with no one to pay")   # v0.8: a path trace with no passing trace
         self.db.execute("UPDATE licence_escrow SET paid=1 WHERE id=?", (rid,))
         self._event(f"licence money for lot {lot.split('|')[0]}: {fmt_sats(held)} to the {len(used)} "
                     f"trace{'s' if len(used) != 1 else ''} its buyer used")

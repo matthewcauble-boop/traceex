@@ -65,6 +65,37 @@ Exactly what each path sends, and never sends, is in SPEC 4i and at the top of
 Leviathan-style index ([elstongun/leviathan](https://github.com/elstongun/leviathan), Apache-2.0; see [NOTICE](NOTICE)):
 87% of the frozen evaluation queries find their answer first and 96% in the top five, against 70% / 77% before.
 
+## Step traces and cross-agent composition (v0.8 draft, after TROPIC)
+
+Most attempts at a failure fail, but they still hold valid steps, and another agent's attempt may hold the steps that
+finish from where one stopped. Following **TROPIC** ([Tropical Reinforcement Learning](https://arxiv.org/abs/2610.02478),
+Asadulaev, Djuhera, Salta, Boche, Karray, Takac; [code](https://github.com/machinestein/Tropical-Reinforcement-Learning),
+MIT; see [NOTICE](NOTICE)), an agent can file each attempt, passing or not, as a **step trace** under a failure id. The
+node replays it in the failure's own environment (registered by the operator; steps that don't replay are refused),
+keeps one step graph per case, tells agents where to restart (`GET /v0/failures/{id}/frontier`: states someone reached
+and nobody finished from), and joins the best prefixes and suffixes from different contributors at shared states,
+replaying every join before filing it as a verified **path trace**. Failed attempts are **unpaid reports**: they
+count in the failure registry and their steps serve restarts and path search, but they never earn. A path trace's
+share of any payment is split equally over the passing step traces it uses, per whole trace (each counted only for
+steps it filed first), never by step count, so padding earns nothing; a path with no passing trace pays nobody and the
+share goes back to the payer. A learning kind `tropic` trains by maximum likelihood on
+the best verified paths (`traceex.tropic.export_tropic`, or the TROPIC trainer's own checkpoint format).
+
+```bash
+curl -X POST "$NODE/v0/failures/TXF-2026-000005/fragments" -d @attempt.json   # steps/0.1: root, steps, producer
+curl "$NODE/v0/failures/TXF-2026-000005/frontier"                             # where to restart
+curl "$NODE/v0/failures/TXF-2026-000005/joins"                                # verified paths and who they credit
+```
+
+**Measured** ([`examples/tropical_composition`](examples/tropical_composition), pre-registered, Qwen2.5-0.5B, 400
+Countdown problems, three agents, one RTX 3060): with one shared step graph, 25 problems (6.3%, 95% CI 4.3-9.1%) were
+solved only by joining two agents' steps (33 in the replicate), every one of them using a step from a failed attempt;
+but at equal sampling
+budget the shared graph did **not** solve more problems overall than the three agents running the same loop alone
+(16.3% against 15.0%, +1.3 points, 95% CI -2.3 to +4.8, McNemar p = 0.57). The details and the replicate are in that
+example's README. Every composition attack in `examples/farming/attacks.py` loses, except padding a trace with loops
+or a detour, which earns exactly what the unpadded trace earns (SPEC 4j).
+
 ## Run a public exchange
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/matthewcauble-boop/traceex)
@@ -253,6 +284,8 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
 | `node/leviathan_search.py` | v0.7: the search index, adapted from Leviathan (Apache-2.0, see NOTICE): FTS5 + porter, branch and filter tokens, tiered branch resolution, labelled fallback, cited cards |
 | `sdk/python/traceex/pytest_plugin.py`, `codeskel.py`, `otel.py`, `outbox.py` | v0.7 ingestion: the pytest plugin and code skeletons, the OpenTelemetry exporter, the review outbox |
 | `examples/otel_agent/`, `examples/ci/` | a fake agent's GenAI spans through the exporter; the plugin in a GitHub Action |
+| `sdk/python/traceex/tropic.py`, `node/composition.py` | v0.8 draft: step graphs, tropical values, frontier, composition with replay, failed attempts as unpaid reports, per-trace credit to passing step traces, the `tropic` export (after TROPIC, MIT, see NOTICE) |
+| `examples/tropical_composition/` | the pre-registered test: does joining fragments across agents solve problems no single agent solved? (Countdown, Qwen2.5-0.5B) |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real sats node, with profit or loss |
 | `examples/scaling/` | `simulate.py`: payouts are the same share of paid usage from $10 to $1B a day |
 | `examples/fees/` | `measure.py`: what each kind of transaction costs in electricity, and so the standard fee |

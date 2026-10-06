@@ -20,11 +20,21 @@ def _apportion(amount, weights):
     return {k: v for k, v in out.items() if v}
 
 
+def _pay(out, payee, amount):
+    """Credit `amount` to a payee: an address, or {address: weight} for a path trace composed from several
+    contributors' step traces (v0.8), apportioned exactly, so the parts sum to `amount`."""
+    if isinstance(payee, dict):
+        for a, m in _apportion(amount, payee).items():
+            out[a] += m
+    elif amount:
+        out[payee] += amount
+
+
 def split_trace_sale(amount, producer, checker_author, validators):
-    """One trace's share of an auction payment."""
+    """One trace's share of an auction payment. `producer` may be {address: weight} (a composed path trace)."""
     parts = _apportion(amount, TRACE_SALE_SPLIT)
     out = defaultdict(int)
-    out[producer] += parts.get("producer", 0)
+    _pay(out, producer, parts.get("producer", 0))
     out[checker_author] += parts.get("checker", 0)
     for v, m in _apportion(parts.get("validators", 0), {v: 1 for v in validators}).items():
         out[v] += m
@@ -49,7 +59,7 @@ def split_usage(amount, learning, trace_info, validators, learning_info=None, _d
     for share, role in (("traces", "producer"), ("checkers", "checker_author")):
         for pid, m in _apportion(parts.get(share, 0), parents).items():
             if pid in trace_info:
-                out[trace_info[pid][role]] += m
+                _pay(out, trace_info[pid][role], m)
             elif learning_info and pid in learning_info and _depth < MAX_DEPTH:      # a parent learning: recurse
                 for a, mm in split_usage(m, learning_info[pid], trace_info, validators, learning_info, _depth + 1).items():
                     out[a] += mm

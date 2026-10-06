@@ -1,0 +1,47 @@
+examples/tropical_composition, and the traceX code it exercises (sdk/python/traceex/tropic.py, node/composition.py),
+adapt TROPIC: "Tropical Reinforcement Learning", Arip Asadulaev, Aladin Djuhera, Karim Salta, Holger Boche, Fakhri
+Karray, Martin Takac (MBZUAI, TUM), arXiv:2610.02478.
+Code: https://github.com/machinestein/Tropical-Reinforcement-Learning, commit 75106338f320a4c093ea7c1fcfc9fcfc6a5acd20,
+MIT licence (notice below).
+
+What is taken, and what changed:
+  * countdown.py ports ragen/env/countdown/generate.py (the problem generator, unchanged, same seeds) and the step
+    semantics of ragen/env/countdown/tropic_env.py and state.py (one exact binary operation per step, the state as the
+    target plus the sorted multiset of live numbers). Changed: a lenient answer parser (the first "a op b" in the last
+    <answer> tag, else in the reply), the same for every agent, because an untrained 0.5B model rarely answers in
+    TROPIC's strict format; an independent expression verifier was added.
+  * The step graph, the L-best prefix/suffix recursion in the max-plus semiring, candidates(), certify(),
+    choose_frontier() and select_basis() follow ragen/tropic/graph.py; admit() and the restart rule follow
+    ragen/tropic/collector.py; export_tropic() weights follow ragen/tropic/batch.py (basis_rows). Changed: edges are
+    environment steps (state, action, next state) that several contributors can file, with their provenance; frontier
+    choice skips dead ends instead of falling back to the root; a fixed scorer (the base model with one prompt, on a
+    canonical "<answer>a op b</answer>" completion) replaces TROPIC's rescoring under the current actor, because no
+    training happens here; and the agent's prompt holds the current state only, as in TROPIC's single-turn mode.
+  * TROPIC's instruction text for Countdown (config/_4_countdown_tropic.yaml) is used verbatim as agent A's system
+    prompt and as the scorer's prompt.
+
+    Copyright 2025 RAGEN Team
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+    the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+    THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+Qwen2.5-0.5B-Instruct (Alibaba Cloud) is used under Apache-2.0, downloaded separately.
+
+Citation:
+  @article{asadulaev2026tropical,
+    title   = {Tropical Reinforcement Learning},
+    author  = {Asadulaev, Arip and Djuhera, Aladin and Salta, Karim and Boche, Holger and Karray, Fakhri and Takac, Martin},
+    journal = {arXiv preprint arXiv:2610.02478},
+    year    = {2026}
+  }

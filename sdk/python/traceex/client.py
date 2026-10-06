@@ -88,6 +88,28 @@ class Client:
     def failure_history(self, failure_id):
         return self._call("GET", f"/v0/failures/{failure_id}/history")
 
+    # --- v0.8: step traces and composition ----------------------------------------------------------------------------
+    def submit_fragment(self, fragment):
+        """File one attempt's steps (traceex.tropic.fragment) under its failure; the node replays it in the failure's
+        environment, composes, and answers with any new verified paths. Refused here if it carries secrets (or, at
+        privacy 'skeleton', personal data)."""
+        from .tropic import fragment_leaks
+        leaks = fragment_leaks(fragment)
+        if leaks:
+            raise ValueError(f"refusing to send a step trace with secrets or personal data: {leaks[:3]}")
+        return self._call("POST", f"/v0/failures/{fragment['failure_id']}/fragments", fragment)
+
+    def step_graphs(self, failure_id):
+        return self._call("GET", f"/v0/failures/{failure_id}/graphs")
+
+    def frontier(self, failure_id, root="", k=5):
+        """States worth restarting from on a failure's cases (another agent's attempt got there, nobody finished)."""
+        return self._call("GET", f"/v0/failures/{failure_id}/frontier?" + urllib.parse.urlencode({"root": root, "k": k}))
+
+    def joins(self, failure_id):
+        """The failure's verified paths, each with the step traces (and producers) it credits."""
+        return self._call("GET", f"/v0/failures/{failure_id}/joins")
+
     def trace(self, trace_id):
         return self._call("GET", f"/v0/traces/{trace_id}")
 

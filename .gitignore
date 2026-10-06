@@ -11,3 +11,4 @@ examples/code_repair/runs/dataset/*.jsonl
 examples/code_repair/runs_*.log
 .vercel
 .traceex/
+examples/tropical_composition/results/run_*.json

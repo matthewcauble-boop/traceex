@@ -691,6 +691,11 @@ class Attacks(unittest.TestCase):
         for name, pnl, extra, note in rows:
             if name.startswith("(honest"):
                 self.assertEqual(extra, 0)
+            elif name in attacks.NEUTRAL:
+                # v0.8: padding a passing step trace (loops, or a detour nobody shortens) leaves the same single passing
+                # trace, the same parents and the same fee as the unpadded twin; payment is per whole trace, so the
+                # difference is exactly 0 by construction, never a gain
+                self.assertEqual(extra, 0, f"{name} should earn exactly what the unpadded twin earns: {note}")
             else:
                 self.assertLess(extra, 0, f"{name} should lose money against honest work: {note}")
 

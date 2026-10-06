@@ -1,0 +1,528 @@
+{
+ "run_r0": {
+  "problems": 400,
+  "solved": {
+   "direct (one attempt, any agent, wave 0)": {
+    "k": 12,
+    "n": 400,
+    "rate": 0.03,
+    "ci95": [
+     0.0172,
+     0.0517
+    ]
+   },
+   "isolated (any agent's own graph)": {
+    "k": 60,
+    "n": 400,
+    "rate": 0.15,
+    "ci95": [
+     0.1183,
+     0.1883
+    ]
+   },
+   "posthoc (isolated steps pooled afterwards)": {
+    "k": 60,
+    "n": 400,
+    "rate": 0.15,
+    "ci95": [
+     0.1183,
+     0.1883
+    ]
+   },
+   "pooled (shared graph)": {
+    "k": 65,
+    "n": 400,
+    "rate": 0.1625,
+    "ci95": [
+     0.1296,
+     0.2018
+    ]
+   }
+  },
+  "solved_by_agent": {
+   "direct": {
+    "A": 9,
+    "B": 0,
+    "C": 3
+   },
+   "isolated": {
+    "A": 44,
+    "B": 2,
+    "C": 20
+   }
+  },
+  "primary": {
+   "pooled_minus_isolated": 0.0125,
+   "ci95_bootstrap": [
+    -0.0225,
+    0.0475
+   ],
+   "pooled_only": 27,
+   "isolated_only": 22,
+   "mcnemar_p": 0.568172
+  },
+  "posthoc_minus_isolated": 0,
+  "exhaustive_checks": {
+   "iso_exhaustive_equals_iso": true,
+   "pooled_exhaustive_minus_pooled": 0
+  },
+  "cross_only": {
+   "k": 25,
+   "share_of_problems": {
+    "k": 25,
+    "n": 400,
+    "rate": 0.0625,
+    "ci95": [
+     0.0427,
+     0.0906
+    ]
+   },
+   "share_of_pooled_solved": [
+    0.2759,
+    0.5062
+   ],
+   "agents_needed": {
+    "2": 25
+   },
+   "step_source_fragments": {
+    "2": 17,
+    "3": 7,
+    "4": 1
+   },
+   "using_a_failed_attempts_steps": 25,
+   "failed_step_source_fragments_total": 34,
+   "step_source_fragments_total": 59,
+   "paid_passing_traces": {
+    "1": 25
+   }
+  },
+  "best_path_mixes_agents": {
+   "pooled": {
+    "k": 34,
+    "of_solved": 65
+   },
+   "posthoc": {
+    "k": 7,
+    "of_solved": 60
+   }
+  },
+  "pooled_first_solve_origin": {
+   "root": 12,
+   "restart": 53
+  },
+  "pooled_first_solve_mixed_agents": 35,
+  "by_size": {
+   "3": {
+    "direct": 7,
+    "iso": 30,
+    "posthoc": 30,
+    "pooled": 41,
+    "cross_only": 12,
+    "n": 100
+   },
+   "4": {
+    "direct": 4,
+    "iso": 20,
+    "posthoc": 20,
+    "pooled": 18,
+    "cross_only": 10,
+    "n": 100
+   },
+   "5": {
+    "direct": 1,
+    "iso": 10,
+    "posthoc": 10,
+    "pooled": 4,
+    "cross_only": 2,
+    "n": 100
+   },
+   "6": {
+    "direct": 0,
+    "iso": 0,
+    "posthoc": 0,
+    "pooled": 2,
+    "cross_only": 1,
+    "n": 100
+   }
+  },
+  "compute": {
+   "model_calls": 59154,
+   "restart_calls_by_condition": {
+    "isolated": 25111,
+    "pooled": 24571
+   },
+   "generated_tokens": 1808831,
+   "scored_steps": 9901,
+   "seconds": 1754.0
+  },
+  "examples": {
+   "p0014": {
+    "path": [
+     "16 + 20",
+     "8 + 4",
+     "36 + 12"
+    ],
+    "steps": 3,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "A": 1,
+     "C": 2
+    },
+    "paid_by_agent": {
+     "C": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0017": {
+    "path": [
+     "4 * 17",
+     "12 + 68"
+    ],
+    "steps": 2,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "A": 1,
+     "C": 1
+    },
+    "paid_by_agent": {
+     "C": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0066": {
+    "path": [
+     "20 - 13",
+     "9 + 19",
+     "20 + 28",
+     "48 + 7"
+    ],
+    "steps": 4,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "B": 1,
+     "C": 3
+    },
+    "paid_by_agent": {
+     "C": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0082": {
+    "path": [
+     "3 * 14",
+     "9 + 14",
+     "23 + 42"
+    ],
+    "steps": 3,
+    "agents_needed": 2,
+    "credited_fragments": 3,
+    "credited_failed_fragments": 2,
+    "step_sources_by_agent": {
+     "C": 1,
+     "A": 2
+    },
+    "paid_by_agent": {
+     "A": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0099": {
+    "path": [
+     "4 + 20",
+     "24 - 18"
+    ],
+    "steps": 2,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "A": 1,
+     "C": 1
+    },
+    "paid_by_agent": {
+     "C": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   }
+  }
+ },
+ "run_r1": {
+  "problems": 400,
+  "solved": {
+   "direct (one attempt, any agent, wave 0)": {
+    "k": 10,
+    "n": 400,
+    "rate": 0.025,
+    "ci95": [
+     0.0136,
+     0.0454
+    ]
+   },
+   "isolated (any agent's own graph)": {
+    "k": 63,
+    "n": 400,
+    "rate": 0.1575,
+    "ci95": [
+     0.1251,
+     0.1964
+    ]
+   },
+   "posthoc (isolated steps pooled afterwards)": {
+    "k": 63,
+    "n": 400,
+    "rate": 0.1575,
+    "ci95": [
+     0.1251,
+     0.1964
+    ]
+   },
+   "pooled (shared graph)": {
+    "k": 65,
+    "n": 400,
+    "rate": 0.1625,
+    "ci95": [
+     0.1296,
+     0.2018
+    ]
+   }
+  },
+  "solved_by_agent": {
+   "direct": {
+    "A": 8,
+    "B": 1,
+    "C": 1
+   },
+   "isolated": {
+    "A": 44,
+    "B": 6,
+    "C": 21
+   }
+  },
+  "primary": {
+   "pooled_minus_isolated": 0.005,
+   "ci95_bootstrap": [
+    -0.0325,
+    0.045
+   ],
+   "pooled_only": 32,
+   "isolated_only": 30,
+   "mcnemar_p": 0.899076
+  },
+  "posthoc_minus_isolated": 0,
+  "exhaustive_checks": {
+   "iso_exhaustive_equals_iso": true,
+   "pooled_exhaustive_minus_pooled": 0
+  },
+  "cross_only": {
+   "k": 33,
+   "share_of_problems": {
+    "k": 33,
+    "n": 400,
+    "rate": 0.0825,
+    "ci95": [
+     0.0593,
+     0.1136
+    ]
+   },
+   "share_of_pooled_solved": [
+    0.3892,
+    0.6254
+   ],
+   "agents_needed": {
+    "2": 32,
+    "3": 1
+   },
+   "step_source_fragments": {
+    "3": 12,
+    "2": 20,
+    "4": 1
+   },
+   "using_a_failed_attempts_steps": 33,
+   "failed_step_source_fragments_total": 47,
+   "step_source_fragments_total": 80,
+   "paid_passing_traces": {
+    "1": 33
+   }
+  },
+  "best_path_mixes_agents": {
+   "pooled": {
+    "k": 38,
+    "of_solved": 65
+   },
+   "posthoc": {
+    "k": 6,
+    "of_solved": 63
+   }
+  },
+  "pooled_first_solve_origin": {
+   "root": 10,
+   "restart": 55
+  },
+  "pooled_first_solve_mixed_agents": 37,
+  "by_size": {
+   "3": {
+    "direct": 9,
+    "iso": 38,
+    "posthoc": 38,
+    "pooled": 41,
+    "cross_only": 17,
+    "n": 100
+   },
+   "4": {
+    "direct": 1,
+    "iso": 24,
+    "posthoc": 24,
+    "pooled": 18,
+    "cross_only": 11,
+    "n": 100
+   },
+   "5": {
+    "direct": 0,
+    "iso": 1,
+    "posthoc": 1,
+    "pooled": 4,
+    "cross_only": 4,
+    "n": 100
+   },
+   "6": {
+    "direct": 0,
+    "iso": 0,
+    "posthoc": 0,
+    "pooled": 2,
+    "cross_only": 1,
+    "n": 100
+   }
+  },
+  "compute": {
+   "model_calls": 59143,
+   "restart_calls_by_condition": {
+    "isolated": 25084,
+    "pooled": 24676
+   },
+   "generated_tokens": 1819197,
+   "scored_steps": 9949,
+   "seconds": 1759.9
+  },
+  "examples": {
+   "p0005": {
+    "path": [
+     "9 + 12",
+     "18 + 6",
+     "21 + 24"
+    ],
+    "steps": 3,
+    "agents_needed": 2,
+    "credited_fragments": 3,
+    "credited_failed_fragments": 2,
+    "step_sources_by_agent": {
+     "B": 1,
+     "A": 2
+    },
+    "paid_by_agent": {
+     "A": 1.0
+    },
+    "origins": [
+     "composition",
+     "restart"
+    ]
+   },
+   "p0017": {
+    "path": [
+     "4 * 17",
+     "12 + 68"
+    ],
+    "steps": 2,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "C": 1,
+     "A": 1
+    },
+    "paid_by_agent": {
+     "A": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0024": {
+    "path": [
+     "10 / 5",
+     "5 - 2",
+     "3 - 2"
+    ],
+    "steps": 3,
+    "agents_needed": 2,
+    "credited_fragments": 3,
+    "credited_failed_fragments": 2,
+    "step_sources_by_agent": {
+     "A": 2,
+     "C": 1
+    },
+    "paid_by_agent": {
+     "C": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0033": {
+    "path": [
+     "4 + 19",
+     "18 + 23"
+    ],
+    "steps": 2,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "A": 1,
+     "C": 1
+    },
+    "paid_by_agent": {
+     "C": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   },
+   "p0042": {
+    "path": [
+     "4 - 1",
+     "3 * 4"
+    ],
+    "steps": 2,
+    "agents_needed": 2,
+    "credited_fragments": 2,
+    "credited_failed_fragments": 1,
+    "step_sources_by_agent": {
+     "C": 1,
+     "A": 1
+    },
+    "paid_by_agent": {
+     "A": 1.0
+    },
+    "origins": [
+     "restart"
+    ]
+   }
+  }
+ }
+}

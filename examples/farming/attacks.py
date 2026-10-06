@@ -1,5 +1,6 @@
-"""Farming attacks against traceX v0.7 (no token: every payment in sats, every payout a split of a real payment; plus
-the failure registry), each run on a real node (node/sats.py), with its profit or loss.
+"""Farming attacks against traceX v0.8 (no token: every payment in sats, every payout a split of a real payment; plus
+the failure registry and, v0.8, step traces and their composition), each run on a real node (node/sats.py), with its
+profit or loss.
 
     python examples/farming/attacks.py              # every attack once, with what happened
     python examples/farming/attacks.py --seeds 30   # each on 30 random draws: mean, best run, how often it paid
@@ -22,6 +23,14 @@ v0.7 adds attacks on the failure registry: inflating a failure's frequency with 
 reporter bonds; validators re-run new reporters' cases on the base model and refute the fabricated ones), claiming a
 fix for a failure one didn't fix (copying the public answers), with one bribed validator and with a majority, and
 gaming a regression to be paid twice for one fix.
+
+v0.8 adds attacks on step traces and composition (SPEC 4j): fake step traces meant to sit in joins (refused on replay
+in the failure's own environment), valid junk steps, re-filed and reworded copies of honest steps, steps valid only
+under the attacker's own rules or checker, two colluding accounts wash-paying a learning on their own join, splitting
+one's work into many step traces, padding a join with loops or with a detour, and filing the failed attempt a winning
+path starts with. Failed attempts are unpaid reports and payment is per whole passing trace, for the transitions it
+filed first, so two rows (NEUTRAL: padding with loops, a detour nobody shortens) earn exactly what the same work
+without padding earns, 0 by construction, and every other row loses.
 """
 import json
 import math
@@ -684,6 +693,244 @@ def regression_game(ex):
     return (f"after its honest payout, its broken patch leaves the failure {status}; its own bounty on it ends {paid} "
             "(one payout per failure and learning), its pledge refunded", worth(ex, [ATTACKER]) - mid)
 
+# --- v0.8: step traces and composition -------------------------------------------------------------------------------
+from traceex import tropic as TR  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "examples", "tropical_composition"))
+import countdown as CD  # noqa: E402
+
+ACCOMPLICE = A("a")
+CASE = {"target": 24, "nums": [2, 3, 4]}                      # 2 * 3 = 6, 6 * 4 = 24
+LONG = {"target": 10, "nums": [1, 2, 3, 4]}                   # 1 + 2 = 3, 3 + 3 = 6, 6 + 4 = 10
+
+
+def line_step(state, action):
+    """A number line with detours: +1, -1, +2, from 0 to 20; the goal is a position."""
+    d = {"+1": 1, "-1": -1, "+2": 2}.get(action)
+    p = None if d is None else state["pos"] + d
+    return {"pos": p, "goal": state["goal"]} if p is not None and 0 <= p <= 20 else None
+
+
+def line_check(state):
+    return state["pos"] == state["goal"]
+
+
+def steps_node(ex):
+    """The failures' environments (operator-registered) and two failures: a Countdown one and a number-line one."""
+    ex.register_checker("countdown", HONEST)
+    ex.register_checker("line", HONEST)
+    ex.register_env("countdown@1", CD.step, CD.check, CD.alive)
+    ex.register_env("line@1", line_step, line_check)
+    fids = {}
+    for name, ck in (("countdown", "countdown@1"), ("line", "line@1")):
+        t = Trace.from_fix(task=f"plan.{name}", base_model="qwen", input=f"Reach the target in the {name} puzzle.",
+                           model_output={"answer": "wrong"}, verified_output={"answer": f"right {name}"}, checker=ck,
+                           producer=HONEST, created="2026-10-06T00:00:00Z", privacy="open",
+                           failure_modes={"answer": "wrong_answer"})
+        fids[name] = ex.submit_trace(dict(t))["failure_id"]
+    return fids
+
+
+def walk(step, state, actions):
+    out = []
+    for a in actions:
+        state = step(state, a)
+        out.append({"action": a, "state": state, "success": (CD.check if step is CD.step else line_check)(state)})
+    return out
+
+
+def stamp(i):
+    return f"2026-10-06T{i // 3600:02d}:{i // 60 % 60:02d}:{i % 60:02d}Z"
+
+
+def file_steps(ex, fid, who, actions, root, start=None, kind="countdown", lie=None, i=0):
+    step = CD.step if kind == "countdown" else line_step
+    begin = start["state"] if start else root
+    steps = lie if lie is not None else walk(step, begin, actions)
+    f = TR.fragment(failure_id=fid, task=f"plan.{kind}", base_model="qwen", checker=f"{kind}@1", root=root,
+                    steps=steps, producer=who, start=start, created=stamp(i))
+    return ex.submit_fragment(fid, f)
+
+
+def at(root, actions, kind="countdown"):
+    """A restart point: the state after `actions` from the root, at that depth."""
+    step = CD.step if kind == "countdown" else line_step
+    state = root
+    for a in actions:
+        state = step(state, a)
+    return {"state": state, "depth": len(actions)}
+
+
+def honest_case(ex, fid, finisher=BUYER):
+    """Honest agents on the Countdown case: HONEST's attempt fails after one step; another agent restarts from the
+    frontier and finishes. The verified path credits both."""
+    root = CD.root(CASE)
+    file_steps(ex, fid, HONEST, ["2 * 3"], root)
+    return file_steps(ex, fid, finisher, ["6 * 4"], root, start=at(root, ["2 * 3"]))
+
+
+def tropic_learning(ex, fid, trainer=BUYER, name="tropic", pay=True):
+    """An honest trainer's tropic learning on the failure's basis paths, validated, then paid for by a real user."""
+    parents = [b["trace"] for b in ex.tropic_basis(fid)["basis"]]
+    att = attest(V(0), "sha256:claim", "pass@1", 0.30, round(0.30 + TRUE_GAIN, 4))
+    L = Learning.build(kind="tropic", task="plan.countdown", base_model="qwen", artifact={"uri": name, "hash": None},
+                       parents=[(p, 1) for p in parents], trainer=trainer, attestation=att, per_call_msats=200)
+    lid = ex.register_learning(L)["id"]
+    ex.settle()
+    validate(ex, lid, TRUE_GAIN, TRUE_GAIN)
+    if pay:
+        use(ex, lid, TRUE_GAIN)
+    return lid
+
+
+def steps_fake(ex):
+    fids = steps_node(ex)
+    root, refused = CD.root(CASE), 0
+    for i in range(1_000):                 # a one-step "win" the environment never produces, to sit in every join
+        lie = [{"action": f"{2 + i % 2} * 3", "state": {"target": 24, "nums": ["24"]}, "success": True}]
+        refused += not file_steps(ex, fids["countdown"], ATTACKER, None, root, lie=lie, i=i)["accepted"]
+    honest_case(ex, fids["countdown"])
+    tropic_learning(ex, fids["countdown"])
+    return f"1,000 step traces with transitions the environment never makes; {refused} refused on replay, each paid its fee"
+
+
+def steps_junk(ex):
+    fids = steps_node(ex)
+    root = CD.root(CASE)
+    moves = ["2 + 3", "2 + 4", "3 + 4", "3 - 2", "4 - 3", "4 - 2", "2 - 3", "3 - 4", "2 - 4", "3 / 4", "4 / 2", "2 / 3"]
+    filed = 0
+    for i in range(200):                   # valid moves that lead nowhere, to sit in the graph and in any join
+        filed += file_steps(ex, fids["countdown"], ATTACKER, [moves[i % len(moves)]], root, i=i)["accepted"]
+    honest_case(ex, fids["countdown"])
+    tropic_learning(ex, fids["countdown"])
+    return (f"200 valid but useless step traces on an honest case ({filed} filed, each paid its fee); "
+            "the verified path and the learning's money go to the steps that reach the goal")
+
+
+def steps_copies(ex):
+    fids = steps_node(ex)
+    root = CD.root(CASE)
+    honest_case(ex, fids["countdown"])
+    for i in range(10):                    # the honest path filed again, and reworded (3 * 2, 4 * 6): the same transitions
+        for acts in (["2 * 3", "6 * 4"], ["3 * 2", "4 * 6"]):
+            file_steps(ex, fids["countdown"], ATTACKER, acts, root, i=i + 1)
+    tropic_learning(ex, fids["countdown"])
+    return ("re-files and rewords the honest solution's steps after it was filed: a passing trace is paid only for "
+            "transitions it filed first, so its re-filed and reworded steps earn nothing")
+
+
+def steps_own_rules(ex):
+    fids = steps_node(ex)
+    root = CD.root(CASE)
+    refused = 0
+    for i in range(100):                   # its own rules: a number that isn't on the board; passes only its own checker
+        lie = [{"action": "3 * 8", "state": {"target": 24, "nums": ["2", "24"]}, "success": False},
+               {"action": f"24 * {1 + i % 2}", "state": {"target": 24, "nums": [str(24 * (1 + i % 2))]},
+                "success": i % 2 == 0}]
+        refused += not file_steps(ex, fids["countdown"], ATTACKER, None, root, lie=lie, i=i)["accepted"]
+    own = TR.fragment(failure_id=fids["countdown"], task="plan.countdown", base_model="qwen", checker="attacker-tests@1",
+                      root=root, steps=walk(CD.step, root, ["2 * 3"]), producer=ATTACKER)
+    try:
+        ex.submit_fragment(fids["countdown"], own)
+        mine = "accepted"
+    except ValueError:
+        mine = "refused (no environment for its checker)"
+    honest_case(ex, fids["countdown"])
+    tropic_learning(ex, fids["countdown"])
+    return (f"100 step traces valid only under its own rules: {refused} refused on replay in the failure's environment; "
+            f"filed under its own checker: {mine}")
+
+
+def steps_collusion(ex):
+    """Two accounts compose their own join on their own case, train a real tropic learning on it, and wash-pay it."""
+    fund(ex, ACCOMPLICE, 200_000_000)
+    mine = [ATTACKER, ACCOMPLICE]
+    start = worth(ex, mine)
+    fids = steps_node(ex)
+    ex.register_checker("countdown", ATTACKER)          # even with the checker author's cut its own
+    root = CD.root(CASE)
+    file_steps(ex, fids["countdown"], ATTACKER, ["2 * 3"], root)
+    file_steps(ex, fids["countdown"], ACCOMPLICE, ["6 * 4"], root, start=at(root, ["2 * 3"]))
+    lid = tropic_learning(ex, fids["countdown"], trainer=ATTACKER, name="collude", pay=False)
+    if ex.verdict(lid)["status"] == "accepted":
+        ex.usage({"learning": lid, "consumer": ACCOMPLICE, "calls": 500_000})   # 100,000 sats of wash usage
+    for _ in range(ex.p.vest_epochs + 2):
+        ex.settle()
+    gpu = sum(ex.measured.get(v, 0) for v in mine) * GPU
+    return ("two colluding accounts file complementary steps, train a real tropic learning on their join and pay "
+            "100,000 sats to use it: every share but the validators' comes back", worth(ex, mine) - start - gpu)
+
+
+def _split_world(seed, split):
+    ex = node(seed)
+    fids = steps_node(ex)
+    root = CD.root(LONG)
+    start = worth(ex, [ATTACKER])
+    file_steps(ex, fids["countdown"], HONEST, ["1 + 2"], root)
+    one = at(root, ["1 + 2"])
+    if split:                              # its two steps as two step traces (a second fee), to be counted twice?
+        file_steps(ex, fids["countdown"], ATTACKER, ["3 + 3"], root, start=one)
+        file_steps(ex, fids["countdown"], ATTACKER, ["6 + 4"], root, start=at(root, ["1 + 2", "3 + 3"]))
+    else:
+        file_steps(ex, fids["countdown"], ATTACKER, ["3 + 3", "6 + 4"], root, start=one)
+    tropic_learning(ex, fids["countdown"])
+    for _ in range(ex.p.vest_epochs + 2):
+        ex.settle()
+    assert ex.audit()["balanced"]
+    return worth(ex, [ATTACKER]) - start
+
+
+def steps_split(ex):
+    diff = _split_world(ex.seed, True) - _split_world(ex.seed, False)
+    return ("splits its real two-step finish into two step traces: the first piece is a failed attempt (unpaid), the "
+            "second its one passing trace, so it earns what one step trace earns, less a second fee", diff)
+
+
+def steps_failed_on_path(ex):
+    """It files the failed attempt whose step the winning path starts with (before the honest agents), hoping a failed
+    attempt on a verified path gets paid."""
+    fids = steps_node(ex)
+    root = CD.root(CASE)
+    file_steps(ex, fids["countdown"], ATTACKER, ["2 * 3"], root)
+    file_steps(ex, fids["countdown"], BUYER, ["6 * 4"], root, start=at(root, ["2 * 3"]))
+    tropic_learning(ex, fids["countdown"])
+    return ("files the failed attempt whose step every verified path starts with; failed attempts are unpaid reports: "
+            "it counts in the registry, earns nothing, and paid its fee")
+
+
+def _line_world(seed, acts, rescue=False):
+    ex = node(seed)
+    fids = steps_node(ex)
+    root = {"pos": 0, "goal": 3}
+    start = worth(ex, [ATTACKER])
+    file_steps(ex, fids["line"], HONEST, ["+1"], root, kind="line")
+    one = at(root, ["+1"], kind="line")
+    file_steps(ex, fids["line"], ATTACKER, acts, root, start=one, kind="line")
+    if rescue:                             # an honest agent later restarts from the same frontier and goes straight there
+        file_steps(ex, fids["line"], WATCHDOG, ["+2"], root, start=one, kind="line")
+    tropic_learning(ex, fids["line"])
+    for _ in range(ex.p.vest_epochs + 2):
+        ex.settle()
+    assert ex.audit()["balanced"]
+    return worth(ex, [ATTACKER]) - start
+
+
+def steps_padding(ex):
+    diff = _line_world(ex.seed, ["+1", "-1", "+1", "-1", "+2"]) - _line_world(ex.seed, ["+2"])
+    return ("pads its finish with loops (+1 -1 +1 -1, then +2): credit is per whole passing trace, so the padded trace "
+            "earns exactly what its direct twin earns (and the node also files the path with its loops cut)", diff)
+
+
+def steps_detour(ex):
+    diff = _line_world(ex.seed, ["+1", "+2", "-1"], rescue=True) - _line_world(ex.seed, ["+2"], rescue=True)
+    return ("pads its finish with a loop-free detour (+1 +2 -1 instead of +2); an honest agent's direct finish from the "
+            "same frontier is another passing trace, and the detour gains nothing", diff)
+
+
+def steps_detour_alone(ex):
+    diff = _line_world(ex.seed, ["+1", "+2", "-1"]) - _line_world(ex.seed, ["+2"])
+    return ("the same detour when nobody files a shorter way (it paid under per-step credit): the detour is "
+            "still one passing trace, paid exactly what the direct finish is", diff)
+
 
 ATTACKS = [
     ("Trace spam", trace_spam, 0),
@@ -715,7 +962,21 @@ ATTACKS = [
     ("Registry: false fix, 1 bribed validator", false_fix, 1),
     ("Registry: game a regression, paid twice?", regression_game, 0),
     ("Majority: mark fixed to take its bounty", majority_false_fix, 4),
+    ("Steps: 1,000 fake step traces", steps_fake, 0),
+    ("Steps: 200 valid junk steps", steps_junk, 0),
+    ("Steps: re-file and reword honest steps", steps_copies, 0),
+    ("Steps: replay only under its own rules", steps_own_rules, 0),
+    ("Steps: collusion, wash-pay own join", steps_collusion, 0),
+    ("Steps: split own work into fragments", steps_split, 0),
+    ("Steps: pad a join with loops", steps_padding, 0),
+    ("Steps: pad with a detour, honest rescue", steps_detour, 0),
+    ("Steps: pad with a detour, nobody shorter", steps_detour_alone, 0),
+    ("Steps: failed attempt on the winning path", steps_failed_on_path, 0),
 ]
+# Earn exactly what the same work filed without padding earns: one passing trace, one fee, the same parents, so the
+# difference is provably 0 (credit is per whole passing trace; nothing about a trace's length moves money).
+NEUTRAL = {"Steps: pad a join with loops", "Steps: pad with a detour, nobody shorter"}
+OPEN = []                                                                              # none left open (SPEC 4j)
 REAL = {"Wash usage (self-dealing)", "Self-funded bounty", "Pad a real learning, honest audits",
         "Pad a real learning, lazy audits", "Wrap honest traces in its own learning", "(honest trainer, for scale)"}
 
@@ -783,12 +1044,25 @@ def main(argv=None):
             pnl, extra, note = play(name, attack, bribed, honest=honest)
             rows.append((name, pnl, extra, note))
             print(f"{name:40} {sats(pnl):>14} {sats(extra):>14} {usd(extra):>10}   {note}")
+        if OPEN:
+            print()
+            print("Open (not defended yet, see SPEC 4j):")
+        for name, attack, bribed in OPEN:
+            pnl, extra, note = play(name, attack, bribed, honest=honest)
+            print(f"{name:40} {sats(pnl):>14} {sats(extra):>14} {usd(extra):>10}   {note}")
     else:                      # each run against its honest twin: same seed, and its real learning draws the same noise
         honest = {s: run(honest_trainer, seed=s)[0] for s in range(1, seeds + 1)}
         print(f"{'attack':40} {'mean vs honest':>18} {'about $':>10} {'best run':>16} {'runs it paid':>13}")
         for name, attack, bribed in ATTACKS:
             xs = [play(name, attack, bribed, s, honest[s])[1] for s in range(1, seeds + 1)]
             rows.append((name, sum(xs) / len(xs), max(xs), sum(x > 0 for x in xs)))
+            print(f"{name:40} {sats(sum(xs) / len(xs)):>18} {usd(sum(xs) / len(xs)):>10} {sats(max(xs)):>16} "
+                  f"{sum(x > 0 for x in xs):>6} of {seeds}")
+        if OPEN:
+            print()
+            print("Open (not defended yet, see SPEC 4j):")
+        for name, attack, bribed in OPEN:
+            xs = [play(name, attack, bribed, s, honest[s])[1] for s in range(1, seeds + 1)]
             print(f"{name:40} {sats(sum(xs) / len(xs)):>18} {usd(sum(xs) / len(xs)):>10} {sats(max(xs)):>16} "
                   f"{sum(x > 0 for x in xs):>6} of {seeds}")
     if DECOY_LOG:

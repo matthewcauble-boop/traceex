@@ -75,7 +75,9 @@ class Trace(dict):
 class Learning(dict):
     DEFAULT_SPLIT = {"traces": 0.60, "trainer": 0.25, "checkers": 0.10, "validators": 0.05}
 
-    KINDS = ("routing", "rule", "prompt_patch", "decoding", "lora", "full_finetune", "checker", "package")
+    # "tropic" (v0.8): weights trained by maximum likelihood on the best verified paths of failures' step graphs
+    # (traceex.tropic.export_tropic), parents the path traces it trained on (TROPIC, arXiv 2610.02478)
+    KINDS = ("routing", "rule", "prompt_patch", "decoding", "lora", "full_finetune", "checker", "package", "tropic")
 
     @classmethod
     def build(cls, *, kind, task, base_model, artifact, parents, trainer, attestation, per_call_msats=None,

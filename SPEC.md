@@ -620,6 +620,105 @@ reviews it and sends it (`python -m traceex.outbox list | show | send`), or they
   prompts, other messages, tool arguments, span and resource attributes, trace and span ids, timings; and a trace
   that still holds personal data or a secret after skeletonizing is dropped.
 
+## 4j. Step traces and cross-agent composition (v0.8 draft, after TROPIC)
+
+A failure's cases are usually attempted by many agents, and most attempts fail. A failed attempt still holds valid
+steps, and another agent's attempt may hold the steps that finish from where it stopped. v0.8 keeps those steps and
+joins them, following TROPIC (Tropical Reinforcement Learning: Asadulaev, Djuhera, Salta, Boche, Karray, Takac;
+arXiv 2610.02478; https://github.com/machinestein/Tropical-Reinforcement-Learning, MIT, credited in NOTICE): keep a
+graph of every valid step, value states in the max-plus (tropical) semiring, join the best prefixes and suffixes at
+shared states, replay and verify every join, and train by maximum likelihood on the best verified paths only, with no
+reward weights and no term that pushes any path down. `sdk/python/traceex/tropic.py` is the algorithm (standard
+library only), `node/composition.py` the node's service, `examples/tropical_composition` the experiment below.
+
+- **Step traces** (`steps/0.1`, `traceex.tropic.fragment`): one attempt at one case of a failure, passing or not: the
+  case's start state (`root`), every step (`action`, the `state` it led to, `success` if the goal check passed there)
+  and, for an attempt that restarted mid-way, `start: {state, depth}`. Filed with `POST /v0/failures/{id}/fragments`;
+  one step graph per case (distinct root) of a failure, time-unrolled (a node is a state at a step count, so the graph
+  is acyclic and each value pass is one sweep). States and actions travel as given, because the node replays them:
+  privacy `open`, or skeletons the environment itself runs on; both client and node refuse secrets (and personal data
+  in skeleton step traces), as for traces.
+- **Replay on arrival.** Only the operator registers a failure's environment (`register_env(checker, step, check,
+  alive)`, Python, like checker runners). Every step trace is replayed in it before it enters the graph: each recorded
+  next state and goal flag must come out exactly; one that doesn't is refused, and has paid its fee. A restart must
+  start at a state the graph already holds; `GET /v0/failures/{id}/frontier` lists the states worth restarting from (a
+  way in, no verified way out yet, least-explored depth first, then the best way in less a visit penalty: TROPIC's
+  frontier rule), so one agent picks up where another stopped. Limits: 64 steps a trace, 256 graphs per failure, 4,096
+  steps per graph, 512 per producer per graph.
+- **The composition service.** After each step trace the node certifies passing attempts (a restart after the best
+  known way into its start state), then joins the L = 4 best prefixes with the L best suffixes at every shared state,
+  replays each join from the root and keeps the ones that pass (TROPIC's composition, over everyone's steps). Every
+  verified path is filed as a trace (`composed`: its failure, graph, origin and parents), in the failure's lot, found by
+  search, citable by learnings: `GET /v0/failures/{id}/joins` lists them, `/graphs` the graphs, `/basis` what a tropic
+  learning should train on. A path that revisits a state is filed again with its loops cut. Scores: a node has no
+  model, and log-probabilities a producer reports about its own steps would steer path choice and credit, so every
+  step scores -1 (the tropical value of a path is minus its length) unless the operator registers one scorer for the
+  checker (`register_scorer`); a trainer composing locally rescores every step under its own model, as TROPIC does.
+- **Failed attempts are unpaid reports.** A step trace from an attempt that failed is filed like any other: its steps
+  stay in the graph (frontier restarts, path search, training; in the experiment below that is where the cross-agent
+  solves came from), and it counts toward the failure registry as a reported case (reporter, occurrence, one case per
+  start state, listed under `step_trace_cases` in `GET /v0/failures/{id}`, re-checkable by validators like any case,
+  with the same reporter bonds). It is never a payment parent, and nothing ever pays it.
+- **Credit: per whole passing trace.** A path trace's producer share of any payment (a learning's traces share, a
+  bounty's traces share, a licence's producer share) is split **equally over the passing step traces it uses, per
+  whole trace, never by step count**. A passing trace "uses" a path when it is the first to have filed one of the
+  path's transitions (environment state to next state, however worded, at any step count): re-filing or rewording
+  steps someone filed earlier, even a failed attempt's, is not new work and earns nothing. A path whose steps all came
+  first from failed attempts can be trained on, but its share has nobody to go to: the node places nothing and gives
+  that share back to the payer (the existing "not placed down the tree" refund in `_split` for usage and bounties; on
+  licences and on the dollar node, an explicit refund), which is the simplest way to keep the invariant. Checker
+  authors and validators are paid as before. The composer earns nothing. Padding a trace with loops or detours leaves
+  one passing trace with the same parents, so it earns exactly what the unpadded trace earns. The split is the same
+  integer apportioning as every other share (`royalty._apportion`, dust to the largest weight), inside the existing
+  `_split`/`_disburse`, so **nothing is paid out that a payer didn't pay in**; `audit()` stays balanced in every test.
+- **The learning kind `tropic`.** Weights trained by maximum likelihood on each case's basis of verified paths (the
+  best path plus up to one covering steps the others don't, loop-free when any path is), its parents the path traces
+  it trained on. Training stays with the trainer (the reference code needs Linux and several A100s):
+  `traceex.tropic.export_tropic` writes per-step rows weighted as TROPIC's `basis_rows` (each case once, each path
+  equally, normalised by its length in tokens), and `to_tropic_checkpoint` writes the graphs in the TROPIC collector's
+  checkpoint format, so a TROPIC run can start from traceX's archive. Validation, payment and bounties are those of
+  every learning.
+- **Anti-farming** (`examples/farming/attacks.py`, the `Steps:` rows, 30 seeds, 2026-10-06; the 29 earlier rows
+  unchanged to the sat):
+
+  | attack | mean vs honest work, 30 runs | best run | runs it paid |
+  |---|---|---|---|
+  | 1,000 fake step traces (transitions the environment never makes) | -58 sats | -58 sats | 0 of 30 |
+  | 200 valid but useless steps, to sit in joins | -11.6 sats | -11.6 sats | 0 of 30 |
+  | re-file and reword an honest solution's steps after it | -1.16 sats | -1.16 sats | 0 of 30 |
+  | steps valid only under its own rules, or filed under its own checker | -5.8 sats | -5.8 sats | 0 of 30 |
+  | two colluding accounts wash-pay a real tropic learning on their own join | -4,700 sats | -500 sats | 0 of 30 |
+  | split its own work into many step traces | -0.058 sats | -0.058 sats | 0 of 30 |
+  | file the failed attempt every winning path starts with | -0.058 sats | -0.058 sats | 0 of 30 |
+  | pad its passing trace with loops | 0 (exactly) | 0 | 0 of 30 |
+  | pad with a loop-free detour nobody shortens | 0 (exactly) | 0 | 0 of 30 |
+  | pad with a detour, an honest agent files the direct finish too | -2,700 sats | 0 | 0 of 30 |
+
+  Fakes and own-rules steps never enter a graph (the operator's environment replays them; each paid its fee). Junk
+  steps and failed attempts sit in the graph and earn nothing, because only passing traces are paid. Re-filed and
+  reworded steps earn nothing, because a passing trace is paid only for transitions it filed first. Collusion is wash
+  usage (4f): every share comes back but the validators' 5% and the fees. Splitting one's work just turns the first
+  piece into an unpaid failed attempt and costs a second fee. Padding with loops, or with a detour nobody shortens,
+  earns exactly 0 against the unpadded twin by construction (one passing trace, the same parents, the same fee; the
+  test asserts equality); with an honest direct finish beside it, the detour loses. No row pays. (Under the first
+  v0.8 draft's per-step credit, a detour nobody shortened paid +1,350 sats on average, 27 of 30 runs; per-trace
+  credit closes it.)
+- **Measured** (`examples/tropical_composition`, pre-registered, inference only: Qwen2.5-0.5B-Instruct as three agents
+  with different prompts and temperatures, 400 Countdown problems generated as TROPIC does, equal sampling budget per
+  condition, one RTX 3060, about 30 minutes a replicate). In one step graph shared by the three agents, **25 problems
+  (6.3%, 95% CI 4.3-9.1%) were solved only by joining two agents' steps** (no agent's own steps held a solution,
+  checked exhaustively), every one of them using a step from a failed attempt (unpaid; each such path pays the one
+  passing trace that finished it). But **the shared graph did not
+  solve more problems than the three agents running the same loop alone**: 16.3% against 15.0%, +1.3 points (95% CI
+  -2.3 to +4.8, McNemar p = 0.57), so the pre-registered hypothesis is not supported; a replicate agrees (+0.5 points,
+  CI -3.3 to +4.5; 33 cross-agent-only solves). Pooling independently collected steps after the fact added exactly
+  zero first solves, as predicted; the cross-agent solves came from agents restarting at states other agents had
+  reached, which is what `/frontier` serves, and TROPIC's prefix-suffix joins added only alternative paths. Sharing
+  changed which problems were solved, not how many.
+- **Not built yet.** MCP tools for step traces; signatures on step traces; a scorer the operator runs by default;
+  graphs for environments that are not deterministic or can't be reset (TROPIC's own requirement); training a tropic
+  learning end to end (the export is there, the run needs the TROPIC stack on Linux).
+
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
   `PayoutDistributor` (one Merkle root of `(address, amount)` per epoch). One transaction per epoch, no matter how many
@@ -667,6 +766,8 @@ reviews it and sends it (`python -m traceex.outbox list | show | send`), or they
 - `contracts/` — Solidity 0.8.24+: `Registry.sol`, `PayoutDistributor.sol` (compiles clean with solc 0.8.26; leaf
   layout matches `merkle.py`, checked in tests). v0.1's on-chain sketch, in USDC; not yet moved to bitcoin.
 - `examples/flight_emails/` — a flight-email extraction loop as the first producer, end to end (`demo.py`).
+- `sdk/python/traceex/tropic.py`, `node/composition.py` — v0.8: step graphs, tropical values, frontier, composition,
+  credit, the tropic export (4j); `examples/tropical_composition/` — the cross-agent composition experiment.
 - `examples/code_repair/` — open weights: Qwen2.5-0.5B-Instruct on MBPP, unit tests as the checker, tracebacks fed
   back, `produce.py` → `train_lora.py` (LoRA on one RTX 3060) → `evaluate.py` (500 held-out problems, paired sign
   test); every generation recorded so `demo.py` replays the run without a GPU.
@@ -698,6 +799,8 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 | GET | `/v0/failures/{id}` | one failure: counters, public repro set, checkers, status per model version, fixes, bounties |
 | GET | `/v0/failures/{id}/history` | every measurement of the failure, in order |
 | POST | `/v0/failures/{id}/repro` | operator-relayed validator message: `{validator, results: {trace: reproduced?}}` → refuted cases leave the counters |
+| POST | `/v0/failures/{id}/fragments` | v0.8: a step trace (`steps/0.1`) → replayed in the failure's environment, filed in its case's step graph, composed: `{accepted, steps_filed, outcome, joins}` (refused: `{accepted: false, reason}`, fee paid) |
+| GET | `/v0/failures/{id}/graphs`, `/frontier?root=&k=`, `/joins`, `/basis?size=` | v0.8: the failure's step graphs; states worth restarting from; verified paths with the step traces and producers each credits; what a tropic learning trains on |
 | POST | `/v0/fixes` | `{claimant, kind, claims, model, learning?, artifact?, outputs?}` → the fix, its public repro and the validators drawn (sats node: 2,000-sat bond) |
 | GET | `/v0/fixes`, `/v0/fixes/{id}` | fixes (filter by `failure`, `status`); one fix with each claim's public repro, hidden measurements and status |
 | POST | `/v0/fixes/{id}/commits`, `.../reveals` | operator-relayed validator messages: a commitment, then `{measurement: {results}, salt}` |
