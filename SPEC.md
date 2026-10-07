@@ -751,8 +751,9 @@ verifiers, `examples/challenges/sample` a small imported sample.
   problem's key with a different verifier opens its own challenge, so nobody can squat a key with a rigged test. So the Erdős
   problems database's status entry `erdos:28` and formal-conjectures' Lean statement of the same problem are one
   challenge with two sources and a Lean verifier. Posting is free (the 58-msat fee; operator imports and escalations
-  pay none). Every challenge starts unfunded and, like a v0.6 bounty, expires if nobody pledges to it within
-  `unbacked_epochs` (3), or at its deadline (26 epochs by default, at most 520).
+  pay none). Every challenge starts unfunded and, like a v0.6 bounty, expires if nobody pledges to it for 30 days, or
+  at its deadline (182 days by default, `days`, at most 3,650). **Challenges run on wall-clock time, not epochs**: an
+  epoch can be five minutes, and a big problem, a backer's patience and a prior-art search all take days.
 - **A baseline is only as good as its reference.** A post may carry a `reference` solution: the node scores it with
   the challenge's verifier (it must be one the node runs) and takes that score as the baseline; an invalid reference
   is refused. The AlphaEvolve sample carries each notebook's construction this way. A merged post whose reference beats
@@ -775,7 +776,8 @@ verifiers, `examples/challenges/sample` a small imported sample.
   suite checks it), so splitting work into epsilon steps earns nothing but extra fees. The step's job is to keep
   noise and trivial tweaks off the payroll.
 - **Where the money goes.** Each tranche is split **solver 70 / traces 20 / checkers 5 / validators 5** (the bounty
-  split) down the solution's family tree, vesting 4 epochs, inside the existing `_split` / `_disburse` (with a new
+  split) down the solution's family tree, held through the challenge's **prior-art window** (below), inside the
+  existing `_split` / `_disburse` (with a new
   `amount` argument for the tranche): nothing is paid out that a payer didn't pay in, and `audit()` stays balanced.
   The checkers' 5% goes to the verifier's author (whoever registered it; the operator for the built-ins).
 - **Solutions become traces and learnings.** Every paid improvement is filed as a trace (task `challenge.<id>`, the
@@ -791,10 +793,11 @@ verifiers, `examples/challenges/sample` a small imported sample.
   Everything else (hidden instances, Lean without a node-side runner, command benchmarks, a failure's pass rate) is
   measured by validators drawn by stake-weighted rendezvous hashing over the beacon after the submission (never the
   submitter), commit then reveal `{score, se?, n?}`, operator-relayed until signed; the median sets the leaderboard.
-  Every submission holds a **1,000-sat bond**: returned at once if it improves nothing; destroyed if validators find
-  it invalid or it **overfits** (its public score beats the hidden median by more than 10 minimum steps or 3 standard
-  errors); and, when it is paid, held with its tranches through the 4-epoch vesting window, where prior art can take
-  it (below).
+  Every submission holds a **bond of max(1,000 sats, 10% of the tranches it would unlock)** (for a validator-measured
+  one, of what its claimed public score would unlock): returned at once if it improves nothing; destroyed if
+  validators find it invalid or it **overfits** (its public score beats the hidden median by more than 10 minimum
+  steps or 3 standard errors); and, when it is paid, held with its tranches through the prior-art window, where prior
+  art can take it (below).
 - **Whoever pays judges.** A validator verdict moves no backer's money by itself. Node-scored improvements pay at once
   (the verifier is fixed code the backer pledged under, and anyone can re-run it). A validator-measured improvement
   pays a pledge only when that pledge's **judge** (its backer by default, or whoever it named, such as the poster
@@ -802,8 +805,21 @@ verifiers, `examples/challenges/sample` a small imported sample.
   confirmations`, operator-relayed), up to the lower of the two scores, and only if that beats what the pledge has
   already paid for by the step. The board's best doesn't gate a confirmation, so a fake best that a captured validator
   majority puts on the board blocks nobody from being paid for honest work. A pledge whose judge never confirms comes
-  back at expiry.
-- **Prior-art claims: a result that was already known pays nobody.** During the vesting window anyone can dispute
+  back at expiry. Judges are prompted to look for prior art before confirming (the submission says so): an upheld
+  claim returns their own escrow.
+- **The prior-art window: 14 days of wall clock** (`window_days`, per challenge, at least 7). Every paid tranche, and
+  the bond behind it, waits that long from the moment it is paid (not a number of epochs: a 4-epoch window was 20
+  minutes on a 5-minute epoch, too short for anyone to look). Then the bond goes home and the tranches vest at the
+  next settlement.
+- **Automatic prior art: what traceX already knows is never paid again.** Before it counts a pledge or a submission,
+  the node looks up the best result it already holds for the exact problem (the same verifier, instance and
+  direction, node-verified): any challenge's references (the importers' source records) and node-scored submissions.
+  If it beats the challenge's best by the step, the best rises to it, unpaid, and every pledge is rebased to start
+  there; a copy of it is refused ("already known"), and a variant below it is scored and unpaid, its bond returned.
+  Nobody has to file anything. Importers must carry the source's record (the AlphaEvolve importer ships each
+  construction as a verified `reference`; formal-conjectures and the Erdős database list open problems, which have
+  none; a Yukon benchmark.json without a baseline is refused).
+- **Prior-art claims: for what traceX doesn't hold.** During the prior-art window anyone can dispute
   paid progress as already known (`POST /v0/challenges/{id}/prior-art`, a 2,000-sat stake): a `reference` solution and
   its provenance, either `{kind: tracex}` (the same solution, under the same verifier and instance, was on traceX's
   boards before the challenge was posted: an import's reference or any earlier submission; the node checks it at
@@ -816,12 +832,17 @@ verifiers, `examples/challenges/sample` a small imported sample.
   paid), the best and every pledge are rebased to R (a pledge's remaining amount restarts from R, so `from_score`
   defaults to the larger of the posted baseline and any known reference), submissions that added nothing beyond R by
   the minimum step lose their bond, and the ones that did are paid again from R, for the new part only. The challenger
-  gets its stake back and a fixed **500-sat reward out of the destroyed bond**, never out of backers' escrow; the rest
-  of the bond is destroyed. **Rejected**: the stake is destroyed. While a claim is pending, that challenge's tranches
-  and bonds wait; a claim validators never answer lapses after 2 epochs and its stake comes back. Importers must set
-  the baseline to the source's best known result where it has one (the AlphaEvolve importer ships each notebook's
-  construction as a verified `reference`; a Yukon benchmark.json, which carries no score, is refused without a
-  baseline).
+  gets its stake back and **half the destroyed bond** (at least 500 sats, and 5% of the disputed payout above 10,000
+  sats), never out of backers' escrow; the rest of the bond is destroyed. The backers gain too: their escrow comes
+  back. **Rejected**: the stake is destroyed. While a claim is pending, that challenge's tranches
+  and bonds wait; a claim validators never answer lapses after 2 epochs and its stake comes back.
+- **Watching pays: the watchdog role.** `traceex.autopilot.Watchdog(client, sources, WatchPolicy(stake_budget_msats))`
+  scans challenges' payouts still inside their window against the sources it is given (papers, repositories, other
+  leaderboards: a callable, or `JsonRecords` from a file keyed by challenge key and alias), re-scores each record with
+  the built-in verifier where there is one, and files a prior-art claim for any record that beats where a payout's
+  progress started, within its stake budget. Expected earnings per upheld claim: half the bond, so at least 500 sats
+  and 5% of the disputed payout (a 20,000-sat lure pays its watchdog 1,000 sats); the stake comes back. A rejected
+  claim costs the 2,000-sat stake, so a watchdog files only dated records older than the challenge.
 - **Auto-posting.** (a) **Importers** (`python -m traceex.challenges import <files> --node … --address …`), all from
   openly licensed sources, as samples, not mirrors: the AlphaEvolve repository of problems (Apache-2.0 / CC-BY-4.0:
   each notebook's own best construction, scored by our verifier, is the baseline; notebooks are parsed, never run),
@@ -839,33 +860,37 @@ verifiers, `examples/challenges/sample` a small imported sample.
 - **Interoperability, and what we don't do.** The benchmark.json reader and writer follow the public format in our
   own words; traceX does not scrape or mirror any challenge platform's site, leaderboards or texts, and claims no
   affiliation. Command verifiers never run on a node.
-- **Anti-farming** (`examples/farming/attacks.py`, the `Challenges:` rows and one majority row, 30 seeds, 2026-10-06;
-  the 39 earlier rows unchanged to the sat):
+- **Anti-farming** (`examples/farming/attacks.py`, the `Challenges:` rows and one majority row, 30 seeds, 2026-10-07;
+  the 39 earlier rows unchanged to the sat; the simulation advances the wall clock 3 days a settlement):
 
   | attack | mean vs honest work, 30 runs | best run | runs it paid |
   |---|---|---|---|
   | self-funded challenge (50,000 sats), solved with its own improvements | -5,000 sats | -5,000 sats | 0 of 30 |
   | one real improvement split into 20 epsilon steps, against one submission | -1.12 sats | -1.12 sats | 0 of 30 |
-  | overfit the public instances (public 19, hidden 10.3) | -1,000 sats | -1,000 sats | 0 of 30 |
+  | overfit the public instances (public 19, hidden 10.3) | -2,250 sats | -2,250 sats | 0 of 30 |
   | 20 sybil accounts resubmit the best and 20 sub-step variants | -1.16 sats | -1.16 sats | 0 of 30 |
   | copy the best with a tweak under the minimum step | -0.058 sats | -0.058 sats | 0 of 30 |
   | 4 of 7 validator seats fake a hidden-instance score | -0.29 sats | -0.29 sats | 0 of 30 |
-  | understate the baseline (10; the record 18 was public before), then submit the record | -1,000 sats | -1,000 sats | 0 of 30 |
+  | baseline lure, watched: the record 18 is in a dated paper; a watchdog files it inside the window | -2,000 sats | -2,000 sats | 0 of 30 |
+  | baseline lure, unwatched, the record already on traceX (an importer's reference) | -0.058 sats | -0.058 sats | 0 of 30 |
   | griefing: 3 false prior-art claims against an honest improvement | -6,000 sats | -6,000 sats | 0 of 30 |
+  | **open:** baseline lure, the record only off traceX, nobody files it within 14 days | +18,000 sats | +18,000 sats | 30 of 30 |
 
   Self-funding returns the solver's 70% and its own trace's 20%; the verifier author's and validators' 10% and the
   fees do not come back. Epsilon steps telescope to one submission's pay, less 19 fees and a few msats of rounding
-  (each tranche's rounding goes back to the backer). Overfitting is caught on the hidden instances and costs the bond.
+  (each tranche's rounding goes back to the backer). Overfitting is caught on the hidden instances and costs the bond (scaled to what its claimed public score would unlock).
   Copies are refused (the first submitter holds a solution) and sub-step variants are scored but unpaid. A captured
   majority can put a fake best on the board, but no backer's judge confirms it. The baseline lure (posting a problem
-  with an understated baseline, then submitting the known record) loses its 1,000-sat bond when the honest watchdog
-  files a prior-art claim with the dated record during the vesting window, and the tranche goes back to the backer's
-  escrow. False prior-art claims lose their stake each time; the honest tranche only waits while they are open.
-  **The limit**, as with learning challenges (4f): the lure is caught only if someone files the prior art within the
-  4-epoch window (unwatched, the same run pays the attacker +18,000 sats), and an external record is only as honest as
-  the drawn validators who check its date (a `tracex` record the node checks itself). A backer who knows the record
-  can also pledge `from_score=<record>` (the attacker then earns -0.058 sats), and a record imported as a reference
-  first leaves it exactly 0 (its copy of the record is refused).
+  with an understated baseline, then submitting the known record) is caught by the node itself when traceX already
+  holds the record (the copy is refused, a variant just below it is unpaid: the attacker is out one fee), and by a
+  watchdog's prior-art claim when the record lives elsewhere: the tranche goes back to the backer's escrow and the
+  attacker loses its 2,000-sat bond (10% of the 20,000 sats it unlocked), half to the watchdog. False prior-art claims
+  lose their stake each time; the honest tranche only waits while they are open. **Open, and documented:** a record
+  that lives only off traceX and that nobody files within 14 days is paid (the same run: +18,000 sats). No node check
+  can know an outside result; what the design does is make finding one pay (half the bond) and give watchers two
+  weeks. A backer who knows the record can pledge `from_score=<record>` (the attacker then earns -0.058 sats). An
+  external record is only as honest as the drawn validators who check its date (a `tracex` record the node checks
+  itself).
 - **Not built yet.** Signatures on validator and judge messages (operator-relayed, as elsewhere); a node-side sandbox
   (the node never runs submitted code; a Lean runner belongs on a validator's machine, since it blocks while it
   compiles); paying validators for measuring submissions (they earn the 5% of what they vouched for, not per

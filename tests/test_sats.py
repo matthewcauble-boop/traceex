@@ -885,6 +885,9 @@ class VercelPreview(unittest.TestCase):
             self.assertEqual(m.ex.search(q=q)["total"], 0, q)
         self.assertFalse([x for x in m.ex.failures(limit=100)["failures"] if x["family"] != "qwen2.5"])
         self.assertTrue(all("flight" not in b["title"].lower() for b in m.ex.bounties()["bounties"]))
+        self.assertEqual(len(m.ex.challenges()["challenges"]), 5)              # v0.8: open problems, read-only
+        for name in ("post_challenge", "pledge_challenge", "submit_solution", "file_prior_art"):
+            self.assertIn(name, m.WRITES)
 
 
 class Seed(unittest.TestCase):
@@ -899,6 +902,14 @@ class Seed(unittest.TestCase):
         self.assertEqual(b[1]["failure_id"][:4], "TXF-")
         self.assertEqual([lot["lot"].split("|")[0] for lot in ex.lots()["lots"]], ["code.python"])
         self.assertGreater(e["paid_out_msats"], 0)
+        ch = {c["key"]: c for c in ex.challenges()["challenges"]}           # v0.8: the imported sample, unfunded
+        self.assertEqual(sorted(ch), ["alphaevolve:packing_circles_max_sum_of_radii:n=26",
+                                      "alphaevolve:packing_circles_max_sum_of_radii:n=32",
+                                      "alphaevolve:tammes_problem:n=25", "erdos:28", "erdos:3"])
+        self.assertAlmostEqual(ch["alphaevolve:packing_circles_max_sum_of_radii:n=26"]["best"], 2.6359830849, places=9)
+        self.assertEqual([len(ch[k]["sources"]) for k in ("erdos:3", "erdos:28")], [2, 2])   # database + Lean, merged
+        self.assertEqual({c["verifier_kind"] for k, c in ch.items() if k.startswith("erdos")}, {"lean4"})
+        self.assertEqual(sum(c["escrow_msats"] + c["backers"] for c in ch.values()), 0)     # no made-up pledges
         self.assertTrue(ex.audit()["balanced"])
 
     def test_the_sats_seed_runs_the_federation_for_real(self):

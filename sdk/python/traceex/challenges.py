@@ -16,7 +16,7 @@ The file format
    "verifier": {"id": "circle-packing-sum-radii@1", "kind": "python" | "lean4" | "command" | "registry" | "none",
                 "instance": {...}, "author"?: "0x…", "command"?: {Yukon fields}},
    "instances": {"hidden": {"digest": "sha256:…", "count": n}}?,     # held by validators; only the hash is public
-   "source": {"name", "url", "licence", "ref"}, "epochs"?: 26,
+   "source": {"name", "url", "licence", "ref"}, "days"?: 182, "window_days"?: 14,
    "reference"?: <a solution>}       # when posting: the node scores it and takes that as the baseline
 
 How a challenge pays (the curve; node/challenges.py moves the money)
@@ -45,7 +45,8 @@ VERSION = "challenge/0.1"
 DIRECTIONS = {"maximize": 1, "max": 1, "+": 1, "higher": 1, "minimize": -1, "min": -1, "-": -1, "lower": -1}
 KINDS = ("python", "lean4", "command", "registry", "none")
 PATH = re.compile(r"[a-z_]+(/[a-z_]+){0,5}")
-FINAL_SHARE = 0.5                 # with a target: half the pledges stream out along the way, half on reaching it
+FINAL_SHARE = 0.5
+WINDOW_DAYS, MIN_WINDOW_DAYS = 14, 7       # paid tranches and the bond wait this long for prior art (wall-clock days)                 # with a target: half the pledges stream out along the way, half on reaching it
 
 
 def direction(metric):
@@ -107,6 +108,8 @@ def normalize(c):
     v.setdefault("instance", {})
     c["aliases"] = sorted({str(a).strip().lower() for a in c.get("aliases") or [] if str(a).strip()})[:20]
     c["key"] = str(c.get("key") or problem_key(c)).strip().lower()[:200]
+    w = c.get("window_days")
+    c["window_days"] = max(MIN_WINDOW_DAYS, float(WINDOW_DAYS if w is None else w))   # the prior-art window, wall-clock
     c.setdefault("source", {})
     return c
 

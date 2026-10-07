@@ -38,7 +38,7 @@ class Policy:
     back_micros: int = 0             # the same on the v0.1 dollar node
     budget_micros: int = 0
     challenge_after: int = 0         # v0.8: this many unresolved cases of a kind, a bounty already out: post a challenge
-    challenge_epochs: int = 26
+    challenge_days: int = 182
 
 
 class Autopilot:
@@ -142,7 +142,7 @@ class Autopilot:
                            "instance": {"checker": self.checker, "eval_set": eval_set}},
               "instances": {"hidden": {"digest": eval_set, "count": len(cases),
                                        "held_by": "the poster; shared privately with drawn validators"}},
-              "source": {"name": "traceX autopilot"}, "epochs": self.policy.challenge_epochs}
+              "source": {"name": "traceX autopilot"}, "days": self.policy.challenge_days}
         try:
             r = self.c.post_challenge(ch)
         except RuntimeError as e:                 # a node without challenges (the retired dollar node)
@@ -197,3 +197,86 @@ class Autopilot:
             self.spent += back
             act["pledged_msats" if sats else "pledged_micros"] = back
         return dict(act, bounty=bid, path=path, failure=failure, cases=len(cases))
+
+
+# --- v0.8: the watchdog role (SPEC 4k) -----------------------------------------------------------------------------------
+@dataclass
+class WatchPolicy:
+    stake_budget_msats: int = 0      # prior-art stakes at risk at once (2,000 sats each; back when a claim is upheld)
+    stake_msats: int = 2_000_000
+    reward_share: float = 0.5        # an upheld claim earns this share of the paid submission's bond
+
+
+class Watchdog:
+    """An agent that watches challenge payouts for prior art, and is paid for it.
+
+        dog = Watchdog(Client(node, address), sources=[JsonRecords("known_records.json")],
+                       policy=WatchPolicy(stake_budget_msats=10_000_000))
+        dog.scan()          # call now and then: files a prior-art claim for every paid result a source shows was known
+
+    The node already refuses to pay twice for anything it holds (earlier submissions, imported records); the watchdog
+    covers what lives elsewhere: papers, repositories, other leaderboards. A source is a callable taking a challenge (as
+    GET /v0/challenges/{id} returns it) and giving known records: {"reference": solution, "score": number,
+    "provenance": {"kind": "external", "url", "date", "commit"?}} (or {"kind": "tracex"}). Where the verifier is one
+    of traceex.verifiers.BUILTIN, the watchdog re-scores the reference itself and never files a record that fails.
+
+    Expected earnings, per upheld claim: reward_share x the submission's bond = half of max(1,000 sats, 10% of the
+    tranches it unlocked): at least 500 sats, and 5% of the disputed payout above 10,000 sats (a 20,000-sat lure pays
+    its watchdog 1,000 sats). The 2,000-sat stake comes back. A claim validators reject costs the stake, so file only
+    records with a date before the challenge was posted. Every claim must land inside the challenge's window (14 days
+    by default), and while one is pending the disputed payout waits."""
+
+    def __init__(self, client, sources=(), policy=None):
+        self.c, self.sources, self.policy = client, list(sources), policy or WatchPolicy()
+        self.filed, self.at_risk, self.events = set(), 0, []
+
+    def scan(self, statuses=("open", "solved")):
+        from .challenges import improves
+        from .verifiers import BUILTIN
+        acts = []
+        for st in statuses:
+            for card in self.c.challenges(status=st)["challenges"]:
+                ch = self.c.get_challenge(card["id"])
+                body, m = ch["challenge"], ch["challenge"]["metric"]
+                live = [e for e in ch["leaderboard"] if e.get("window_until") and e["status"] in ("best", "improved")]
+                if not live:
+                    continue
+                for source in self.sources:
+                    for rec in source(ch) or ():
+                        score = rec.get("score")
+                        vid = (body.get("verifier") or {}).get("id")
+                        if vid in BUILTIN:
+                            score = BUILTIN[vid](rec["reference"], body["verifier"].get("instance") or {})
+                        if score is None or not any(improves(m, e["prev_best"], score) for e in live):
+                            continue
+                        key = (card["id"], json.dumps(rec["reference"], sort_keys=True))
+                        if key in self.filed or self.at_risk + self.policy.stake_msats > self.policy.stake_budget_msats:
+                            continue
+                        r = self.c.prior_art(card["id"], rec["reference"], rec["provenance"], score)
+                        self.filed.add(key)
+                        if r["status"] == "pending":
+                            self.at_risk += self.policy.stake_msats
+                        bond = max(e.get("bond_msats") or 0 for e in live)
+                        acts.append({"action": "filed_prior_art", "challenge": card["id"], "claim": r["id"],
+                                     "status": r["status"], "score": score,
+                                     "expected_reward_msats": int(bond * self.policy.reward_share)})
+        self.events += acts
+        return acts
+
+    def settle(self, claim_ids):
+        """Free the budget of claims that are no longer pending."""
+        for i in claim_ids:
+            if self.c.prior_claim(i)["status"] != "pending":
+                self.at_risk = max(0, self.at_risk - self.policy.stake_msats)
+
+
+class JsonRecords:
+    """A watchdog source from a JSON file: {"<challenge key or alias>": [{"reference", "score"?, "provenance"}], ...}."""
+
+    def __init__(self, path):
+        with open(path, encoding="utf-8") as f:
+            self.records = json.load(f)
+
+    def __call__(self, challenge):
+        keys = [challenge.get("key")] + list(challenge.get("aliases") or [])
+        return [r for k in keys if k for r in self.records.get(k, [])]

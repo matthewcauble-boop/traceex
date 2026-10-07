@@ -25,7 +25,9 @@ WRITES = ("faucet", "submit_trace", "bid", "clear", "register_learning", "usage"
           "post_bounty", "pledge", "claim_bounty", "remove", "reclassify", "register_validator", "commit", "reveal",
           "challenge", "direct_licence", "register_decoy", "unseal_decoy", "set_btc_usd",
           "claim_fix", "commit_fix", "reveal_fix", "register_model", "poster_measure", "repro_check",
-          "post_reporter_bond", "withdraw_reporter")
+          "post_reporter_bond", "withdraw_reporter",
+          "post_challenge", "pledge_challenge", "submit_solution", "commit_solution", "reveal_solution",
+          "confirm_solution", "file_prior_art", "commit_prior", "reveal_prior")
 
 os.environ.pop("TYPESAFE_API_KEY", None)            # the snapshot is filed by the keyword engine, the same every time
 DB = os.path.join(tempfile.gettempdir(), "tracex-preview.db")

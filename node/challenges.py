@@ -37,7 +37,7 @@ How it pays (whoever pays judges: the verifier the backers pledged under)
 How a submission is verified
   * A `python` verifier the node runs itself (built-ins: traceex.verifiers.BUILTIN; others registered in Python by the
     operator, never over HTTP): run twice, the two scores must agree (the determinism gate), None is invalid. The
-    submission's bond comes back at once unless it is paid (then it waits out the vesting window, for prior art).
+    submission's bond comes back at once unless it is paid (then it waits out the prior-art window).
   * Everything else (hidden instances, Lean proofs without a node-side Lean runner, command benchmarks, an escalated
     failure's pass rate): validators drawn by stake-weighted rendezvous hashing over the beacon after the submission
     (never the submitter) run the verifier in their own sandbox on their own instances, commit sha256(measurement +
@@ -46,12 +46,17 @@ How a submission is verified
     the hidden median by more than the overfit tolerance); returned otherwise.
 
 Prior art
-  * A result that was already known pays nobody. During the vesting window anyone may stake 2,000 sats on a prior-art
-    claim: a reference solution and its provenance (an earlier traceX record, checked by the node, or a dated public
-    record, checked by drawn validators). Upheld: tranches still vesting go back into the pledges' escrow, the best and
-    the pledges are rebased to the known result, submissions that added nothing beyond it lose their bond (500 sats of
-    it to the challenger, the rest destroyed), and the ones beyond it are paid again for the new part. Rejected: the
-    stake is destroyed. Paid submissions hold their bond through the window.
+  * A result that was already known pays nobody. Challenges run on wall-clock days: every paid tranche and its bond
+    (max(1,000 sats, 10% of what it unlocks)) wait out a 14-day prior-art window (`window_days`, at least 7); a
+    challenge runs 182 days and ends after 30 unbacked.
+  * Automatic: before counting a pledge or a submission the node raises the best to the best result it already holds
+    for the exact problem (references from importers, node-scored submissions on any challenge), unpaid, pledges
+    rebased; a copy of a known record is refused.
+  * Claims: anyone may stake 2,000 sats on a prior-art claim inside the window: a reference solution and its provenance
+    (an earlier traceX record, checked by the node, or a dated public record, checked by drawn validators). Upheld:
+    tranches still waiting go back into the pledges' escrow, the best and the pledges are rebased to the known result,
+    submissions that added nothing beyond it lose their bond (half to the challenger, the rest destroyed), and the ones
+    beyond it are paid again for the new part. Rejected: the stake is destroyed. traceex.autopilot.Watchdog files them.
 
 Auto-posting
   * Importers (traceex.challenges): AlphaEvolve notebooks (python verifiers), formal-conjectures (Lean), the Erdős
@@ -72,11 +77,13 @@ from traceex.challenges import (VERSION, direction, improves, min_step, normaliz
 from traceex.skeleton import find_secrets
 from traceex.verifiers import BUILTIN, similarity
 
+_frac = lambda amount, f: int(amount) * round(f * 1_000_000) // 1_000_000
+
 CHAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS challenges (id INTEGER PRIMARY KEY, key TEXT, title TEXT, path TEXT, body TEXT, best REAL,
                                        best_sub INT, poster TEXT, origin TEXT, status TEXT, epoch INT, deadline INT,
                                        pledged INT DEFAULT 0, released INT DEFAULT 0, note TEXT, failure_id TEXT,
-                                       seq INT, posted_at TEXT);
+                                       seq INT, posted_at TEXT, posted_ts REAL, deadline_at REAL);
 CREATE TABLE IF NOT EXISTS challenge_keys (key TEXT PRIMARY KEY, challenge INT);
 CREATE TABLE IF NOT EXISTS challenge_pledges (id INTEGER PRIMARY KEY, challenge INT, backer TEXT, amount INT,
                                               from_score REAL, epoch INT, payment INT, released INT DEFAULT 0,
@@ -85,7 +92,7 @@ CREATE INDEX IF NOT EXISTS challenge_pledges_c ON challenge_pledges(challenge);
 CREATE TABLE IF NOT EXISTS challenge_subs (id INTEGER PRIMARY KEY, challenge INT, submitter TEXT, digest TEXT, body TEXT,
                                            public_score REAL, score REAL, se REAL, status TEXT, epoch INT, parents TEXT,
                                            trace TEXT, learning TEXT, bond INT DEFAULT 0, paid INT DEFAULT 0,
-                                           prev_best REAL, note TEXT, bond_release INT);
+                                           prev_best REAL, note TEXT, bond_release INT, window_until REAL);
 CREATE UNIQUE INDEX IF NOT EXISTS challenge_subs_digest ON challenge_subs(challenge, digest);
 CREATE TABLE IF NOT EXISTS challenge_assign (sub INT, validator TEXT, epoch INT, PRIMARY KEY (sub, validator));
 CREATE TABLE IF NOT EXISTS challenge_commits (sub INT, validator TEXT, digest TEXT, epoch INT, PRIMARY KEY (sub, validator));
@@ -99,8 +106,11 @@ CREATE TABLE IF NOT EXISTS prior_reveals (claim INT, validator TEXT, prior INT, 
                                           PRIMARY KEY (claim, validator));
 CREATE TABLE IF NOT EXISTS escalations (failure TEXT PRIMARY KEY, streak INT, last_epoch INT, challenge INT);
 """
-LIMITS = {"solution_bytes": 48 * 1024, "open_per_poster": 20, "epochs": 520, "parents": 8}
+LIMITS = {"solution_bytes": 48 * 1024, "open_per_poster": 20, "days": 3650, "parents": 8}
+DEADLINE_DAYS, UNBACKED_DAYS = 182, 30     # wall-clock: a challenge runs half a year; one nobody backs for 30 days ends
 SPLIT = {"trainer": 0.70, "traces": 0.20, "checkers": 0.05, "validators": 0.05}   # the bounty split (exchange.BOUNTY_SPLIT)
+FAR = 10 ** 12                     # a vesting row a challenge's wall-clock window holds: never released by epoch
+DAY = 86_400
 SIMILAR = 0.5                      # repeating half an earlier paid solution's numbers (or words) makes it a parent
 STATUSES = ("open", "solved", "expired", "removed")
 
@@ -110,6 +120,12 @@ class Challenges:
 
     def _open_challenges(self):
         self.db.executescript(CHAL_SCHEMA)
+        for table, col in (("challenge_subs", "window_until"), ("challenges", "posted_ts"),
+                           ("challenges", "deadline_at")):   # a v0.8 database from before wall-clock times
+            try:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {col} REAL")
+            except Exception:
+                pass
         self.verifiers = getattr(self, "verifiers", {})
         for vid, fn in BUILTIN.items():
             self.verifiers.setdefault(vid, fn)
@@ -157,7 +173,8 @@ class Challenges:
             if ref_score is None:
                 raise ValueError("the reference solution fails the verifier")
             c = normalize(dict(b, metric=dict(b.get("metric") or {}, baseline=ref_score)))
-        epochs = max(1, min(int(c.pop("epochs", 26) or 26), LIMITS["epochs"]))
+        c.pop("epochs", None)                            # v0.8 drafts counted epochs; challenges run on days
+        days = max(1.0, min(float(c.pop("days", None) or DEADLINE_DAYS), LIMITS["days"]))
         keys = [c["key"], *c["aliases"]]
         self._room()
         with self.lock:
@@ -192,11 +209,11 @@ class Challenges:
                 c["sources"] = [c.pop("source")] if c.get("source") else []
                 cid = self.db.execute(
                     "INSERT INTO challenges (key, title, path, body, best, poster, origin, status, epoch, deadline, "
-                    "failure_id, seq, posted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "failure_id, seq, posted_at, posted_ts, deadline_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (c["key"], c["title"], c["path"], json.dumps(c, ensure_ascii=False), c["metric"]["baseline"],
-                     poster, origin, "open", self.epoch, self.epoch + epochs, b.get("failure_id"),
+                     poster, origin, "open", self.epoch, None, b.get("failure_id"),
                      self.db.execute("SELECT COALESCE(MAX(id), 0) FROM challenge_subs").fetchone()[0],
-                     self._now())).lastrowid
+                     self._now(), self.clock(), self.clock() + days * DAY)).lastrowid
                 for k in keys:
                     self.db.execute("INSERT OR REPLACE INTO challenge_keys VALUES (?,?)", (k, cid))
                 if c["verifier"].get("id"):
@@ -205,8 +222,8 @@ class Challenges:
                     self._reference_row(cid, ref, ref_score, poster, c["sources"][0] if c["sources"] else None)
                 self._event(f"challenge #{cid} posted free ({origin}): {c['title'][:120]}")
                 self.db.commit()
-                out = {"id": cid, "status": "open", "deadline_epoch": self.epoch + epochs,
-                       "unbacked_expires_epoch": self.epoch + self.unbacked_epochs, "key": c["key"]}
+                out = {"id": cid, "status": "open", "deadline_at": self.clock() + days * DAY,
+                       "unbacked_expires_at": self.clock() + self.p.challenge_unbacked_days * DAY, "key": c["key"]}
         if seed:
             out["pledge"] = self.pledge_challenge(out["id"], poster, int(seed))
         return out
@@ -226,11 +243,58 @@ class Challenges:
     def _reference_row(self, cid, ref, score, poster, source):
         """A verified reference solution on the board: the record a challenge starts from (never paid)."""
         dig = object_id({"solution": ref})
+        if self.db.execute("SELECT 1 FROM challenge_subs WHERE challenge=? AND digest=?", (int(cid), dig)).fetchone():
+            dig = object_id({"solution": ref, "reference": score})
         self.db.execute("INSERT OR IGNORE INTO challenge_subs (challenge, submitter, digest, body, public_score, score, se, "
                         "status, epoch, parents, prev_best, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (int(cid), poster or "", dig, json.dumps({"solution": ref, "meta": {}}), score, score, 0.0,
                          "reference", self.epoch, "[]", score,
                          f"reference from {(source or {}).get('name') or 'the poster'}"))
+
+    def _known_record(self, cid):
+        """The best result traceX already holds for this exact problem (the same verifier, instance and direction):
+        references (the importers' source records) and node-verified submissions on any challenge. Only for verifiers
+        the node runs itself, whose scores mean the same thing on every board."""
+        body = self._body(cid)
+        v, d = body["verifier"], direction(body["metric"])
+        if v.get("id") not in self.verifiers or (body.get("instances") or {}).get("hidden"):
+            return None
+        best = None
+        for rc, rbody in self.db.execute("SELECT id, body FROM challenges").fetchall():
+            ob = json.loads(rbody)
+            ov = ob["verifier"]
+            if (ov.get("id"), ov.get("instance"), ob["metric"]["direction"]) != (v.get("id"), v.get("instance"),
+                                                                                 body["metric"]["direction"]):
+                continue
+            if (ob.get("instances") or {}).get("hidden"):
+                continue
+            for sid, sc, sb in self.db.execute(
+                    "SELECT s.id, s.score, s.body FROM challenge_subs s WHERE s.challenge=? AND s.score IS NOT NULL AND "
+                    "s.status IN ('reference', 'best', 'improved', 'rebased', 'scored') AND NOT EXISTS (SELECT 1 FROM "
+                    "challenge_assign a WHERE a.sub=s.id)", (rc,)).fetchall():
+                if best is None or d * (sc - best[0]) > 0:
+                    best = (sc, json.loads(sb).get("solution"), rc, sid)
+        return best
+
+    def _sync_known(self, cid):
+        """Automatic prior art: before a pledge or a submission is counted, the best the node already knows for this
+        problem becomes the challenge's best (unpaid, every pledge rebased), so a result traceX or an importer already
+        holds can never be paid again, and nobody has to file a claim for it."""
+        k = self._known_record(cid)
+        if k and k[1] is not None:
+            self._raise_best(cid, k[1], k[0], None, {"name": f"traceX record (challenge #{k[2]}, submission #{k[3]})"})
+
+    def _rebase_pledges(self, cid, score):
+        """Every pledge that started below `score` restarts there with what it still holds."""
+        d = direction(self._body(cid)["metric"])
+        for pk, start, base, done, based in self.db.execute(
+                "SELECT id, from_score, base, released, base_released FROM challenge_pledges WHERE challenge=?",
+                (int(cid),)).fetchall():
+            if d * (score - start) > 0:
+                self.db.execute("UPDATE challenge_pledges SET from_score=?, level=?, base=?, base_released=? WHERE id=?",
+                                (score, score, base - (done - based), done, pk))
+            else:
+                self.db.execute("UPDATE challenge_pledges SET level=from_score WHERE id=?", (pk,))
 
     def _raise_best(self, cid, ref, score, poster, source):
         """A merged post brought a verified reference better than the board's best by the minimum step: the best
@@ -240,12 +304,7 @@ class Challenges:
         if not improves(m, c["best"], score):
             return
         self._reference_row(cid, ref, score, poster, source)
-        d = direction(m)
-        for pk, start, amount, done in self.db.execute(
-                "SELECT id, from_score, amount, released FROM challenge_pledges WHERE challenge=?", (int(cid),)).fetchall():
-            if d * (score - start) > 0:
-                self.db.execute("UPDATE challenge_pledges SET from_score=?, level=?, base=?, base_released=? WHERE id=?",
-                                (score, score, amount - done, done, pk))
+        self._rebase_pledges(cid, score)
         self.db.execute("UPDATE challenges SET best=? WHERE id=?", (score, int(cid)))
         if reached(m, score):
             self._refund_challenge(int(cid), "already solved by a known result")
@@ -279,11 +338,13 @@ class Challenges:
 
     def _row(self, cid):
         r = self.db.execute("SELECT id, key, title, path, best, best_sub, poster, origin, status, epoch, deadline, pledged, "
-                            "released, note, failure_id, seq, posted_at FROM challenges WHERE id=?", (int(cid),)).fetchone()
+                            "released, note, failure_id, seq, posted_at, deadline_at FROM challenges WHERE id=?",
+                            (int(cid),)).fetchone()
         if not r:
             raise KeyError(f"challenge {cid}")
         return dict(zip(("id", "key", "title", "path", "best", "best_sub", "poster", "origin", "status", "posted_epoch",
-                         "deadline_epoch", "pledged_msats", "released_msats", "note", "failure_id", "seq", "posted_at"), r))
+                         "deadline_epoch", "pledged_msats", "released_msats", "note", "failure_id", "seq", "posted_at",
+                         "deadline_at"), r))
 
     def _card(self, cid):
         row, body = self._row(cid), self._body(cid)
@@ -330,9 +391,9 @@ class Challenges:
         c, body = self._row(cid), self._body(cid)
         d = direction(body["metric"])
         rows = self.db.execute("SELECT id, submitter, score, public_score, se, status, epoch, paid, learning, trace, "
-                               "prev_best FROM challenge_subs WHERE challenge=?", (int(cid),)).fetchall()
+                               "prev_best, window_until, bond FROM challenge_subs WHERE challenge=?", (int(cid),)).fetchall()
         keys = ("id", "submitter", "score", "public_score", "se", "status", "epoch", "paid_msats", "learning", "trace",
-                "prev_best")
+                "prev_best", "window_until", "bond_msats")
         subs = [dict(zip(keys, r)) for r in rows]
         scored = sorted((s for s in subs if s["score"] is not None),
                         key=lambda s: (-d * s["score"], s["epoch"], s["id"]))
@@ -379,6 +440,7 @@ class Challenges:
         if msats <= 0:
             raise ValueError("a pledge must be more than 0 msats")
         with self.lock:
+            self._sync_known(cid)                        # from_score defaults to the larger of baseline and any record
             c, body = self._row(cid), self._body(cid)
             if c["status"] != "open":
                 raise ValueError(f"challenge {cid} is {c['status']}")
@@ -406,6 +468,8 @@ class Challenges:
         from exchange import need_address
         submitter = need_address(b.get("submitter"), "submitter")
         with self.lock:
+            if self._row(cid)["status"] == "open":
+                self._sync_known(cid)                    # automatic prior art: what the node knows is never paid again
             c, body = self._row(cid), self._body(cid)
             if c["status"] != "open":
                 raise ValueError(f"challenge {cid} is {c['status']}")
@@ -426,19 +490,23 @@ class Challenges:
             dup = self.db.execute("SELECT id, submitter FROM challenge_subs WHERE challenge=? AND digest=?",
                                   (int(cid), dig)).fetchone()
             if dup:
+                st = self.db.execute("SELECT status FROM challenge_subs WHERE id=?", (dup[0],)).fetchone()[0]
+                if st == "reference":
+                    raise ValueError(f"already known: this solution is the challenge's record (#{dup[0]}); it is "
+                                     "never paid again")
                 raise ValueError(f"already submitted as #{dup[0]}: the first submitter holds it")
             parents = sorted({int(x) for x in (b.get("parents") or [])[:LIMITS["parents"]]})
             local = v["id"] in self.verifiers and not body.get("instances", {}).get("hidden")
-            bond = self.p.challenge_sub_bond_msats           # held through the vesting window if it is paid
-            self._need_funds(submitter, bond)
-            self._tx_fee(submitter)
-            if bond:
-                self._move(submitter, f"csubbond:{cid}:{dig[7:23]}", bond, "challenge submission bond")
             public = None
             if v["id"] in self.verifiers and "solution" in sol:
                 public = self._run_verifier(v, sol["solution"])
             elif b.get("public_score") is not None:
                 public = float(b["public_score"])
+            bond = self._bond_for(cid, public)              # held through the prior-art window if it is paid
+            self._need_funds(submitter, bond)
+            self._tx_fee(submitter)
+            if bond:
+                self._move(submitter, f"csubbond:{cid}:{dig[7:23]}", bond, "challenge submission bond")
             meta = {k: b[k] for k in ("model", "per_call_msats", "note") if b.get(k) is not None}
             sid = self.db.execute(
                 "INSERT INTO challenge_subs (challenge, submitter, digest, body, public_score, status, epoch, parents, "
@@ -451,6 +519,30 @@ class Challenges:
                 self._draw_sub(sid)
             self.db.commit()
         return self.submission(sid)
+
+    def _unlocks(self, cid, score):
+        """What a score would release from the pledges now (the tranches it unlocks), in msats."""
+        c, m = self._row(cid), self._body(cid)["metric"]
+        if score is None or not improves(m, c["best"], score):
+            return 0
+        return sum(max(0, min(owed(base, m, start, score) - done, self._held(pid)))
+                   for _, pid, base, start, done, _ in self._pledge_rows(cid))
+
+    def _bond_for(self, cid, score):
+        """A submission's bond: at least 1,000 sats, and 10% of the tranches it would unlock, so watching a large
+        payout for prior art pays in proportion to it."""
+        return max(self.p.challenge_sub_bond_msats, _frac(self._unlocks(cid, score), self.p.challenge_bond_share))
+
+    def _window(self, cid):
+        return max(7.0, float(self._body(cid).get("window_days") or 14)) * DAY
+
+    def _open_window(self, cid, sid):
+        """A paid submission's tranches (held back from epoch vesting) and its bond wait out the challenge's
+        wall-clock prior-art window."""
+        lid = self.db.execute("SELECT learning FROM challenge_subs WHERE id=?", (int(sid),)).fetchone()[0]
+        if lid:
+            self.db.execute("UPDATE vesting SET release=? WHERE learning=? AND status='vesting'", (FAR, lid))
+        self.db.execute("UPDATE challenge_subs SET window_until=? WHERE id=?", (self.clock() + self._window(cid), int(sid)))
 
     def _run_verifier(self, v, solution):
         fn = self.verifiers[v["id"]]
@@ -473,6 +565,12 @@ class Challenges:
         out["parents"] = json.loads(out["parents"] or "[]")
         out["validators"] = [a for (a,) in self.db.execute("SELECT validator FROM challenge_assign WHERE sub=?",
                                                           (int(sid),))]
+        out["window_until"] = self.db.execute("SELECT window_until FROM challenge_subs WHERE id=?",
+                                              (int(sid),)).fetchone()[0]
+        if out["validators"] and out["status"] in ("best", "improved", "scored", "rebased"):
+            out["before_confirming"] = ("judges: measure it yourself and check it is new (search its key and aliases, "
+                                        "the sources, the leaderboards); a known result is prior art, and an upheld "
+                                        "claim returns your escrow")
         return out
 
     # --- validators ----------------------------------------------------------------------------------------------------
@@ -573,9 +671,8 @@ class Challenges:
         if bond:
             if status in ("invalid", "overfit") and measured:
                 self._forfeit(acct, self._bal(acct), "challenge submission bond", f"{cid}:{sid}")
-            elif status == "improved":                      # held through the vesting window: prior art can take it
-                self.db.execute("UPDATE challenge_subs SET bond_release=? WHERE id=?",
-                                (self.epoch + self.p.vest_epochs, int(sid)))
+            elif status == "improved":                      # held through the prior-art window (_open_window)
+                pass
             else:
                 self._move(acct, sub["submitter"], self._bal(acct), "challenge submission bond returned", payout=True)
         self.db.execute("UPDATE challenge_subs SET score=?, se=?, status=?, note=? WHERE id=?",
@@ -620,6 +717,7 @@ class Challenges:
         self.db.execute("UPDATE challenge_subs SET status='best' WHERE id=?", (int(sid),))
         if pay:
             self._pay_pledges(cid, sid, new, self._pledge_rows(cid))
+        self._open_window(cid, sid)
         solved = reached(m, new) and pay
         self.db.execute("UPDATE challenges SET best=?, best_sub=?, status=? WHERE id=?",
                         (new, int(sid), "solved" if solved else "open", int(cid)))
@@ -650,11 +748,14 @@ class Challenges:
                 vals = [v for (v,) in self.db.execute("SELECT validator FROM challenge_reveals WHERE sub=?", (int(sid),))]
                 self._file_solution(cid, sid, s["prev_best"], s["score"], vals)
             paid = self._pay_pledges(cid, sid, level, mine)
+            self._open_window(cid, sid)                 # what a judge releases waits out the window too
             if reached(m, c["best"]) and not any(self._held(p) for (_, p, *_r) in self._pledge_rows(cid)):
                 self.db.execute("UPDATE challenges SET status='solved' WHERE id=?", (int(cid),))
             self._event(f"challenge #{cid}: a backer's judge confirmed submission #{sid}")
             self.db.commit()
-        return dict(self.submission(sid), confirmed_level=level, paid_now_msats=paid)
+        return dict(self.submission(sid), confirmed_level=level, paid_now_msats=paid,
+                    prior_art=("released after the window; until then anyone (you too) can show it was already known: "
+                               "POST /v0/challenges/{id}/prior-art, and an upheld claim returns it to your escrow"))
 
     def _file_solution(self, cid, sid, old, new, validators):
         """The improvement as a trace (the solution, open) and an accepted learning (kind challenge_solution) whose
@@ -747,14 +848,14 @@ class Challenges:
         return None
 
     def file_prior_art(self, cid, b):
-        """A prior-art challenge, during the vesting window of what it disputes: {challenger, reference (a solution),
+        """A prior-art claim, inside the prior-art window of what it disputes: {challenger, reference (a solution),
         provenance: {kind: "tracex"} (the same solution was on traceX's boards before the challenge was posted: an
         import's reference or any earlier submission) or {kind: "external", url, date, commit?} (a dated public record
         that drawn validators check), score? (for a verifier the node does not run)}. It stakes 2,000 sats. Upheld
         (the reference scores R with the challenge's verifier, R beats where some still-vesting paid progress started,
         and the record is older than the challenge): every tranche still vesting from progress at or below R goes back
         into the backers' escrow, the best and every pledge are rebased to R, submissions that added nothing beyond R
-        lose their bond (the challenger's reward, a fixed 500 sats, comes out of it; the rest is destroyed), and the
+        lose their bond (half of it is the challenger's reward; the rest is destroyed), and the
         ones that went beyond R are paid again for that part only. Rejected: the stake is destroyed."""
         from exchange import need_address
         challenger = need_address(b.get("challenger"), "challenger")
@@ -914,7 +1015,7 @@ class Challenges:
         subs = self.db.execute("SELECT id, learning, score, submitter, digest, bond FROM challenge_subs WHERE challenge=? "
                                "AND id >= ? AND learning IS NOT NULL AND status IN ('best', 'improved', 'rebased') "
                                "ORDER BY id", (int(cid), first)).fetchall()
-        reward_left, replay = self.p.prior_art_reward_msats, []
+        reward, replay = 0, []
         for sid, lid, sc, submitter, dig, bond in subs:
             back = {}
             for vid, pid, msats in self.db.execute("SELECT id, payment, msats FROM vesting WHERE learning=? AND "
@@ -934,21 +1035,14 @@ class Challenges:
                             (f"already known: {R:.12g} (prior-art claim #{pa})", sid))
             acct = f"csubbond:{cid}:{dig[7:23]}"
             held = self._bal(acct)
-            if held > 0:
-                cut = min(reward_left, held)
+            if held > 0:                                   # a real share of the bond to whoever showed it; never escrow
+                cut = _frac(held, self.p.prior_art_reward_share) if challenger else 0
                 if cut:
                     self._move(acct, challenger, cut, "prior-art reward, from the bond", payout=True)
-                    reward_left -= cut
+                    reward += cut
                 self._forfeit(acct, held - cut, "challenge submission bond", f"{cid}:{sid}")
-            self.db.execute("UPDATE challenge_subs SET bond_release=NULL WHERE id=?", (sid,))
-        for pk, start, base, done, based in self.db.execute(
-                "SELECT id, from_score, base, released, base_released FROM challenge_pledges WHERE challenge=?",
-                (int(cid),)).fetchall():
-            if d * (R - start) > 0:
-                self.db.execute("UPDATE challenge_pledges SET from_score=?, level=?, base=?, base_released=? WHERE id=?",
-                                (R, R, base - (done - based), done, pk))
-            else:
-                self.db.execute("UPDATE challenge_pledges SET level=from_score WHERE id=?", (pk,))
+            self.db.execute("UPDATE challenge_subs SET window_until=NULL WHERE id=?", (sid,))
+        self._rebase_pledges(cid, R)
         self.db.execute("INSERT OR IGNORE INTO challenge_subs (challenge, submitter, digest, body, public_score, score, se, "
                         "status, epoch, parents, prev_best, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (int(cid), challenger, object_id({"solution": ref, "prior_art": int(pa)}),
@@ -960,6 +1054,7 @@ class Challenges:
             if improves(m, best, sc):
                 if not measured:                           # judged pledges wait for their judge again, from R
                     self._pay_pledges(cid, sid, sc, self._pledge_rows(cid))
+                self._open_window(cid, sid)
                 if best_sub:
                     self.db.execute("UPDATE challenge_subs SET status='improved' WHERE id=?", (best_sub,))
                 self.db.execute("UPDATE challenge_subs SET status='best' WHERE id=?", (sid,))
@@ -971,7 +1066,7 @@ class Challenges:
         if st in ("expired", "removed"):
             self._refund_challenge(int(cid), "prior art")
         self._event(f"challenge #{cid}: prior art upheld; tranches up to {R:.6g} went back to the backers' escrow")
-        return self.p.prior_art_reward_msats - reward_left
+        return reward
 
     def _challenge_paused(self):
         """Learnings whose tranches wait: every paid solution on a challenge with a prior-art claim pending."""
@@ -1004,10 +1099,11 @@ class Challenges:
         """Expire challenges past their deadline or never backed (refunding what each pledge holds), settle validator
         rounds that ran a whole epoch with a majority revealed, and escalate failures that keep growing."""
         e = self.epoch
+        now = self.clock()
         for cid, deadline, posted, pledged in self.db.execute(
-                "SELECT id, deadline, epoch, pledged FROM challenges WHERE status='open'").fetchall():
-            unbacked = not pledged and e - posted >= self.unbacked_epochs
-            if deadline >= e and not unbacked:
+                "SELECT id, deadline_at, posted_ts, pledged FROM challenges WHERE status='open'").fetchall():
+            unbacked = not pledged and now - (posted or now) >= self.p.challenge_unbacked_days * DAY
+            if (deadline is None or now < deadline) and not unbacked:
                 continue
             self._refund_challenge(cid, "ended")
             for sid, who, dig in self.db.execute("SELECT id, submitter, digest FROM challenge_subs WHERE challenge=? AND "
@@ -1016,7 +1112,7 @@ class Challenges:
                 self._move(acct, who, self._bal(acct), "challenge submission bond returned", payout=True)
                 self.db.execute("UPDATE challenge_subs SET status='unjudged' WHERE id=?", (sid,))
             self.db.execute("UPDATE challenges SET status='expired', note=? WHERE id=?",
-                            ("unbacked" if unbacked and deadline >= e else "deadline", cid))
+                            ("unbacked" if unbacked and (deadline is None or now < deadline) else "deadline", cid))
             self._event(f"challenge #{cid} expired: what its pledges still held went back to its backers")
         for (sid,) in self.db.execute(
                 "SELECT s.id FROM challenge_subs s WHERE s.status='pending' AND EXISTS (SELECT 1 FROM challenge_assign a "
@@ -1034,14 +1130,17 @@ class Challenges:
                 self._move(f"priorart:{pa}", who, self._bal(f"priorart:{pa}"), "prior-art stake back", payout=True)
                 self.db.execute("UPDATE prior_claims SET status='lapsed' WHERE id=?", (pa,))
         paused = {c for (c,) in self.db.execute("SELECT challenge FROM prior_claims WHERE status='pending'")}
-        for sid, cid, who, dig in self.db.execute(
-                "SELECT id, challenge, submitter, digest FROM challenge_subs WHERE bond_release IS NOT NULL AND "
-                "bond_release <= ?", (e,)).fetchall():
+        for sid, cid, who, dig, lid in self.db.execute(
+                "SELECT id, challenge, submitter, digest, learning FROM challenge_subs WHERE window_until IS NOT NULL AND "
+                "window_until <= ?", (self.clock(),)).fetchall():
             if cid in paused:
                 continue
-            acct = f"csubbond:{cid}:{dig[7:23]}"            # the window closed with no prior art: the bond goes home
+            acct = f"csubbond:{cid}:{dig[7:23]}"            # the window closed with no prior art: the bond goes home...
             self._move(acct, who, self._bal(acct), "challenge submission bond returned", payout=True)
-            self.db.execute("UPDATE challenge_subs SET bond_release=NULL WHERE id=?", (sid,))
+            if lid:                                         # ...and the tranches vest at this settlement
+                self.db.execute("UPDATE vesting SET release=? WHERE learning=? AND status='vesting' AND release=?",
+                                (e, lid, FAR))
+            self.db.execute("UPDATE challenge_subs SET window_until=NULL WHERE id=?", (sid,))
         self._escalate_failures()
 
     def _challenge_assign(self):

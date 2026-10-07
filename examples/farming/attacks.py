@@ -37,8 +37,10 @@ splitting one improvement into 20 epsilon steps (the payout curve depends on the
 telescope), overfitting a challenge's public instances (validators score hidden ones; the submission bond is
 destroyed), 20 sybil submissions of the best, copying the best with a tweak below the minimum step, and a validator
 majority faking a hidden-instance score (each pledge pays only on its own judge's confirmation), a poster who
-understates the baseline and submits the known record (a prior-art claim in the vesting window claws it back and
-destroys the bond), and griefing with false prior-art claims (each stake is destroyed).
+understates the baseline and submits the known record (the node's own records catch it at once; a record only off
+traceX is caught by a watchdog's prior-art claim inside the 14-day window, which costs the bond), and griefing with
+false prior-art claims (each stake is destroyed). One row is open: a record that lives only off traceX and that nobody
+files within the window.
 """
 import json
 import math
@@ -85,11 +87,26 @@ def fund(ex, who, msats):
     ex.db.commit()
 
 
+class SimClock:
+    def __init__(self):
+        self.t = 1_790_000_000.0
+
+    def __call__(self):
+        return self.t
+
+
 def node(seed=7, attacker_validators=0, lazy=()):
     """A node with 7 validators: the first `attacker_validators` answer to the attacker; `lazy` ones never measure.
     Licences clear at no less than 2,000 sats."""
+    clock = SimClock()
     ex = SatsExchange(":memory:", test_credits=30_000_000, beacon_delay=1, reserve_msats=2_000_000,
-                      params=Params(quorum=3), fee_to=FEES)
+                      params=Params(quorum=3), fee_to=FEES, clock=clock)
+    settle = ex.settle
+
+    def settle_a_day_later():                              # one epoch is 3 days of wall clock here (challenge windows
+        clock.t += 3 * 86_400                              # are 14 days, so a run's 6 settlements close them)
+        return settle()
+    ex.settle = settle_a_day_later
     ex.seed = seed
     vals = [V(i) for i in range(N_VALIDATORS)]
     for v in vals:
@@ -1015,7 +1032,7 @@ def ch_overfit(ex):
     s = ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 19}})
     s = measure_sub(ex, s["id"], truth=10.3)
     return (f"overfits the public instances (19 public, 10.3 hidden): validators' median {s['score']}, status "
-            f"{s['status']}: no tranche, and its 1,000-sat bond is destroyed")
+            f"{s['status']}: no tranche, and its bond (10% of the 22,500 sats its public score would unlock) is destroyed")
 
 
 def ch_sybil(ex):
@@ -1073,24 +1090,26 @@ def measure_prior(ex, pa, prior):
 
 
 def _lure_world(seed, guard="watchdog"):
-    """It posts a challenge whose baseline (10) understates the best known result (18, published before the challenge),
-    which it then submits. guard "watchdog": the honest watchdog files a prior-art claim with the dated public record
-    during the vesting window; "from_score": the backer pledges from the record; "reference": an importer posts the
-    same problem with the record as a verified reference first; None: nobody notices for 4 epochs."""
+    """It posts a challenge whose baseline (10) understates the best known result (18), then submits the record.
+    guard "watchdog": the record is public off traceX (a dated paper) and a watchdog files it as prior art inside the
+    14-day window; "tracex": the record is already on traceX (an importer's reference on an earlier challenge of the
+    same problem) and nobody watches: the node's own check catches it; None: the record is only off traceX and nobody
+    files it; "from_score": the backer pledges from the record."""
     ex = node(seed)
     ex.register_verifier("toy-max@1", toy_score, author=FEES)
+    if guard == "tracex":
+        ex.post_challenge({"v": "challenge/0.1", "title": "Open problem: make x large", "statement": "Maximize x.",
+                           "path": "math/toy", "key": "imported-record", "metric": {"direction": "maximize",
+                                                                                   "target": 20.0},
+                           "verifier": {"id": "toy-max@1", "kind": "python"}, "reference": {"x": 18}},
+                          origin="import")
     cid = chal_node(ex, key="lure", poster=ATTACKER, fund_it=False)
     start = worth(ex, [ATTACKER])
     ex.pledge_challenge(cid, BACKER, 50_000_000, from_score=18.0 if guard == "from_score" else None)
-    if guard == "reference":
-        ex.post_challenge({"v": "challenge/0.1", "title": "Open problem: make x large", "statement": "Maximize x.",
-                           "path": "math/toy", "key": "lure", "metric": {"direction": "maximize", "target": 20.0},
-                           "verifier": {"id": "toy-max@1", "kind": "python"}, "reference": {"x": 18}},
-                          origin="import")
     try:
         ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 18}})
-    except ValueError:                                   # the record is on the board already: it can't be resubmitted
-        pass
+    except ValueError:                                   # the node knows the record: it is never paid again
+        ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 17.999}})
     if guard == "watchdog":
         c = ex.file_prior_art(cid, {"challenger": WATCHDOG, "reference": {"x": 18},
                                     "provenance": {"kind": "external", "url": "https://example.org/record-18",
@@ -1102,14 +1121,25 @@ def _lure_world(seed, guard="watchdog"):
     return worth(ex, [ATTACKER]) - start
 
 
-def ch_lure(ex):
-    caught = _lure_world(ex.seed)
-    unwatched = _lure_world(ex.seed, None)
-    guarded, imported = _lure_world(ex.seed, "from_score"), _lure_world(ex.seed, "reference")
-    return (f"understates the baseline (10, the record 18 was public before) and submits the record: a watchdog's "
-            f"prior-art claim in the vesting window claws the tranche back to the backer's escrow and destroys the bond "
-            f"({sats(caught)}); from_score at the record: {sats(guarded)}; record imported as a reference first: "
-            f"{sats(imported)}; nobody notices within 4 epochs: {sats(unwatched)}", caught)
+def ch_lure_watched(ex):
+    gain = _lure_world(ex.seed)
+    return ("understates the baseline (10; the record 18 is in a dated paper) and submits the record; a watchdog files "
+            "it as prior art inside the 14-day window: the tranche goes back to the backer's escrow and the 2,000-sat "
+            "bond (10% of the 20,000 sats it unlocked) is lost, half to the watchdog", gain)
+
+
+def ch_lure_tracex(ex):
+    gain = _lure_world(ex.seed, "tracex")
+    guarded = _lure_world(ex.seed, "from_score")
+    return ("the same lure, nobody watching, but the record is already on traceX (an importer's reference): the node "
+            "raises the best to it before counting the submission, the copy is refused and a variant just below it is "
+            f"unpaid; (a backer pledging from the record: {sats(guarded)})", gain)
+
+
+def ch_lure_unwatched(ex):
+    gain = _lure_world(ex.seed, None)
+    return ("the record exists only off traceX and nobody files it within the 14-day window: it pays. No node check "
+            "can know an outside result; a watchdog that files it earns half the bond (1,000 sats here)", gain)
 
 
 def ch_prior_grief(ex):
@@ -1173,13 +1203,15 @@ ATTACKS = [
     ("Challenges: 20 sybil submissions", ch_sybil, 0),
     ("Challenges: copy the best, trivial tweak", ch_copy_tweak, 0),
     ("Majority: fake a hidden-instance score", ch_majority_fake, 4),
-    ("Challenges: understated baseline lure", ch_lure, 0),
+    ("Challenges: baseline lure, watched", ch_lure_watched, 0),
+    ("Challenges: baseline lure, record on traceX", ch_lure_tracex, 0),
     ("Challenges: false prior-art claims", ch_prior_grief, 0),
 ]
 # Earn exactly what the same work filed without padding earns: one passing trace, one fee, the same parents, so the
 # difference is provably 0 (credit is per whole passing trace; nothing about a trace's length moves money).
 NEUTRAL = {"Steps: pad a join with loops", "Steps: pad with a detour, nobody shorter"}
-OPEN = []                       # none left open (SPEC 4k: the baseline lure is closed by prior-art claims)
+# Open (SPEC 4k): a known result that lives only off traceX, which nobody files as prior art inside the window.
+OPEN = [("Challenges: baseline lure, off traceX, unwatched", ch_lure_unwatched, 0)]
 REAL = {"Wash usage (self-dealing)", "Self-funded bounty", "Pad a real learning, honest audits",
         "Pad a real learning, lazy audits", "Wrap honest traces in its own learning", "(honest trainer, for scale)"}
 

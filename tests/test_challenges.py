@@ -32,9 +32,25 @@ def toy(sol, inst):
     return float(x) if isinstance(x, (int, float)) and 0 <= x <= 100 else None
 
 
+class Clock:
+    """Wall-clock time the tests move by hand (the prior-art window is days, not epochs)."""
+
+    def __init__(self):
+        self.t = 1_790_000_000.0
+
+    def __call__(self):
+        return self.t
+
+
+def later(ex, days):
+    """Let `days` pass, then settle."""
+    ex.clock.t += days * 86_400
+    return ex.settle()
+
+
 def make_ex(validators=3, **params):
     ex = SatsExchange(":memory:", test_credits=30_000_000, beacon_delay=0, params=Params(quorum=3, **params),
-                      fee_to=OPERATOR)
+                      fee_to=OPERATOR, clock=Clock())
     for i in range(validators):
         ex.faucet(V(i))
         ex.register_validator(V(i), 15_000_000)
@@ -114,6 +130,8 @@ class Paying(unittest.TestCase):
         self.assertEqual(ex.wallet(SOLVER)["balance_msats"], 29_000_000 - FEE)         # all of it vests first
         for _ in range(ex.p.vest_epochs + 1):
             ex.settle()
+        self.assertEqual(ex.wallet(SOLVER)["balance_msats"], 29_000_000 - FEE)         # epochs alone release nothing:
+        later(ex, 14)                                                                  # the window is 14 days
         self.assertEqual(ex.wallet(SOLVER)["balance_msats"], 30_900_000 - FEE)         # tranche and bond, home
         L = ex.get_learning(r["learning"])
         self.assertEqual((L["kind"], L["verdict"]["status"]), ("challenge_solution", "accepted"))
@@ -152,8 +170,10 @@ class Paying(unittest.TestCase):
         ex.submit_solution(self.cid, {"submitter": SOLVER, "solution": {"x": 12}})
         lonely = ex.post_challenge(dict(toy_challenge(key="toy:lonely"), poster=POSTER))["id"]
         b0 = ex.wallet(BACKER)["balance_msats"]
-        for _ in range(30):
-            ex.settle()
+        later(ex, 31)                                                                  # 30 days with nobody behind it
+        st = {c["id"]: c["status"] for c in ex.challenges(status="")["challenges"]}
+        self.assertEqual((st[self.cid], st[lonely]), ("open", "expired"))
+        later(ex, 152)                                                                 # past the 182-day deadline
         st = {c["id"]: c["status"] for c in ex.challenges(status="")["challenges"]}
         self.assertEqual((st[self.cid], st[lonely]), ("expired", "expired"))
         self.assertEqual(ex.wallet(BACKER)["balance_msats"] - b0, 9_000_000)            # exactly what was left
@@ -242,58 +262,75 @@ class References(unittest.TestCase):
 
 
 class PriorArt(unittest.TestCase):
-    """A result that was already known pays nobody: prior-art claims during the vesting window."""
+    """A result that was already known pays nobody: the node's own records at once, anyone's within the window."""
 
-    def lure(self):
+    def lure(self, pledge=50_000_000):
         ex = make_ex(validators=5)
-        old = ex.post_challenge(dict(toy_challenge(key="elsewhere"), poster=OTHER))["id"]   # the record, on traceX before
-        ex.pledge_challenge(old, OTHER, 1_000)
-        ex.submit_solution(old, {"submitter": OTHER, "solution": {"x": 18}})
+        ex.db.execute("UPDATE grants SET micros=? WHERE account=?", (100_000_000, BACKER))   # a backer with 100,000 sats
         cid = ex.post_challenge(dict(toy_challenge(key="lure"), poster=SOLVER))["id"]     # baseline 10 understated
-        ex.pledge_challenge(cid, BACKER, 10_000_000)
-        sub = ex.submit_solution(cid, {"submitter": SOLVER, "solution": {"x": 18}})
-        self.assertEqual(ex.wallet(SOLVER)["vesting_msats"], 10_000_000 * 4 // 10 * 9 // 10)
+        ex.pledge_challenge(cid, BACKER, pledge)
+        sub = ex.submit_solution(cid, {"submitter": SOLVER, "solution": {"x": 18}})       # the record, public elsewhere
         return ex, cid, sub
 
-    def test_a_tracex_record_claws_back_the_lure_rebases_and_destroys_the_bond(self):
+    def claim(self, ex, cid, ref, prior, who=POSTER):
+        c = ex.file_prior_art(cid, {"challenger": who, "reference": ref,
+                                    "provenance": {"kind": "external", "url": "https://example.org/r", "date": "2020"}})
+        self.assertEqual(c["status"], "pending")
+        for v in c["validators"]:
+            ex.commit_prior(c["id"], v, measurement_digest({"prior": prior}, "s"))
+        for v in c["validators"]:
+            c = ex.reveal_prior(c["id"], v, {"prior": prior}, "s")
+        return c
+
+    def test_what_traceX_already_knows_is_never_paid_again_without_a_claim(self):
+        ex = make_ex()
+        old = ex.post_challenge(dict(toy_challenge(key="elsewhere"), poster=OTHER, reference={"x": 18}))["id"]
+        cid = ex.post_challenge(dict(toy_challenge(key="lure"), poster=SOLVER))["id"]     # its own key, baseline 10
+        ex.pledge_challenge(cid, BACKER, 10_000_000)
+        self.assertEqual(ex.challenge_backers(cid)["pledges"][0]["from_score"], 18.0)    # pledges start at the record
+        with self.assertRaisesRegex(ValueError, "already known"):
+            ex.submit_solution(cid, {"submitter": SOLVER, "solution": {"x": 18}})
+        r = ex.submit_solution(cid, {"submitter": SOLVER, "solution": {"x": 17.99}})
+        self.assertEqual((r["status"], r["paid_msats"]), ("scored", 0))
+        self.assertEqual(ex.get_challenge(cid)["best"], 18.0)
+        self.assertEqual(ex.wallet(SOLVER)["balance_msats"], 30_000_000 - 2 * FEE)     # its bond came back at once
+        self.assertNotEqual(old, cid)
+        balanced(self, ex)
+
+    def test_the_bond_scales_with_the_payout_and_an_upheld_claim_takes_half(self):
         ex, cid, sub = self.lure()
+        self.assertEqual(sub["bond_msats"], 2_000_000)                                 # 10% of the 20,000 sats unlocked
         w0, b0 = held(ex, POSTER), ex.wallet(SOLVER)["balance_msats"]
-        c = ex.file_prior_art(cid, {"challenger": POSTER, "reference": {"x": 18}, "provenance": {"kind": "tracex"}})
+        c = self.claim(ex, cid, {"x": 18}, prior=True)
         self.assertEqual(c["status"], "upheld")
         self.assertEqual(ex.wallet(SOLVER)["vesting_msats"], 0)                        # every tranche clawed back
         self.assertEqual(ex.submission(sub["id"])["status"], "prior_art")
-        self.assertEqual(held(ex, POSTER) - w0, 500_000 - FEE)                         # reward, from the bond only
+        self.assertEqual(held(ex, POSTER) - w0, 1_000_000 - FEE)                       # half the bond; never escrow
+        self.assertEqual(ex.economy_stats()["forfeited_msats"], 1_000_000)             # the other half destroyed
         g = ex.get_challenge(cid)
-        self.assertEqual((g["best"], g["escrow_msats"]), (18.0, 10_000_000))           # all of it back in escrow
+        self.assertEqual((g["best"], g["escrow_msats"]), (18.0, 50_000_000))           # all of it back in escrow
         self.assertEqual(ex.challenge_backers(cid)["pledges"][0]["from_score"], 18.0)
-        for _ in range(30):
-            ex.settle()
-        self.assertEqual(ex.wallet(SOLVER)["balance_msats"], b0)                       # nothing came home: no bond
-        self.assertEqual(ex.wallet(BACKER)["balance_msats"], 30_000_000 - FEE)         # the backer: whole again
+        later(ex, 15)
+        later(ex, 183)                                                                 # past the 182-day deadline
+        self.assertEqual(ex.wallet(SOLVER)["balance_msats"], b0)                       # nothing came home
+        self.assertEqual(ex.wallet(BACKER)["balance_msats"], 100_000_000 - FEE)        # the backer: whole again
         balanced(self, ex)
 
     def test_beyond_the_known_result_is_paid_again_for_the_new_part_only(self):
-        ex, cid, sub = self.lure()
+        ex, cid, sub = self.lure(10_000_000)
         better = ex.submit_solution(cid, {"submitter": AUTHOR, "solution": {"x": 19}})
-        ex.file_prior_art(cid, {"challenger": POSTER, "reference": {"x": 18}, "provenance": {"kind": "tracex"}})
+        self.claim(ex, cid, {"x": 18}, prior=True)
         m = ex._body(cid)["metric"]
         self.assertEqual(ex.submission(better["id"])["status"], "best")
         self.assertEqual(ex.challenge_backers(cid)["pledges"][0]["released_msats"], C.owed(10_000_000, m, 18, 19))
         self.assertEqual(ex.get_challenge(cid)["best"], 19.0)
         balanced(self, ex)
 
-    def test_an_external_record_is_checked_by_validators_and_a_false_claim_loses_its_stake(self):
+    def test_a_false_claim_loses_its_stake_and_only_pauses_the_payout(self):
         ex, cid, sub = self.lure()
         before = held(ex, POSTER)
-        c = ex.file_prior_art(cid, {"challenger": POSTER, "reference": {"x": 17},
-                                    "provenance": {"kind": "external", "url": "https://example.org/x", "date": "2031-01-01"}})
-        self.assertEqual(c["status"], "pending")
-        ex.settle()                                                                   # paused: nothing vests meanwhile
-        for v in c["validators"]:
-            ex.commit_prior(c["id"], v, measurement_digest({"prior": False}, "s"))
-        for v in c["validators"]:
-            r = ex.reveal_prior(c["id"], v, {"prior": False}, "s")
-        self.assertEqual(r["status"], "rejected")
+        c = self.claim(ex, cid, {"x": 17}, prior=False)
+        self.assertEqual(c["status"], "rejected")
         self.assertEqual(held(ex, POSTER) - before, -2_000_000 - FEE)
         self.assertGreater(ex.wallet(SOLVER)["vesting_msats"], 0)                     # the payout stands
         with self.assertRaisesRegex(ValueError, "earlier record"):
@@ -302,12 +339,17 @@ class PriorArt(unittest.TestCase):
             ex.file_prior_art(cid, {"challenger": POSTER, "reference": {"x": 9}, "provenance": {"kind": "tracex"}})
         balanced(self, ex)
 
-    def test_once_the_window_closes_the_bond_and_tranche_go_home(self):
+    def test_the_window_is_wall_clock_days_not_epochs(self):
         ex, cid, sub = self.lure()
-        for _ in range(ex.p.vest_epochs + 1):
+        self.assertEqual(ex.get_challenge(cid)["challenge"]["window_days"], 14)
+        for _ in range(50):                                                            # 50 epochs, a few minutes
             ex.settle()
+        self.assertEqual(ex.submission(sub["id"])["status"], "best")
+        self.assertIsNotNone(ex.submission(sub["id"])["window_until"])                # still open to prior art
+        later(ex, 14)
         with self.assertRaisesRegex(ValueError, "still vesting"):
             ex.file_prior_art(cid, {"challenger": POSTER, "reference": {"x": 18}, "provenance": {"kind": "tracex"}})
+        self.assertEqual(C.normalize(dict(toy_challenge(), window_days=2))["window_days"], 7)   # at least 7 days
         balanced(self, ex)
 
 
@@ -359,8 +401,7 @@ class Validators(unittest.TestCase):
         ex.confirm_solution(honest["id"], BACKER, {"score": 14.0})                     # ...but the backer pays for it
         self.assertEqual(ex.wallet(OTHER)["vesting_msats"], 10_000_000 * 2 // 10 * 90 // 100)
         b0 = ex.wallet(BACKER)["balance_msats"]
-        for _ in range(30):
-            ex.settle()
+        later(ex, 183)                                                                 # past the 182-day deadline
         self.assertEqual(ex.wallet(BACKER)["balance_msats"] - b0, 8_000_000)           # the fake was never confirmed
         self.assertEqual(ex.wallet(SOLVER)["vesting_msats"], 0)
         balanced(self, ex)
@@ -437,8 +478,7 @@ class Posting(unittest.TestCase):
         cs = ex.challenges(origin="escalation")["challenges"]
         self.assertEqual(len(cs), 1)
         self.assertEqual((cs[0]["failure_id"], cs[0]["key"], cs[0]["escrow_msats"]), (fid, f"failure|{fid}".lower(), 0))
-        for _ in range(ex.unbacked_epochs + 1):
-            ex.settle()
+        later(ex, 31)                                                                  # 30 days unbacked
         self.assertEqual(ex.challenges(status="")["challenges"][0]["status"], "expired")
         balanced(self, ex)
 
@@ -535,6 +575,31 @@ class Interfaces(unittest.TestCase):
         self.assertTrue({"traceex_challenges", "traceex_post_challenge", "traceex_submit_challenge",
                          "traceex_back_challenge"} <= names)
         balanced(self, self.ex)
+
+    def test_a_watchdog_agent_files_prior_art_and_is_paid_from_the_bond(self):
+        from traceex import Client
+        from traceex.autopilot import Watchdog, WatchPolicy
+        ex = self.ex
+        cid = Client(self.url, SOLVER).post_challenge(toy_challenge(key="lure"))["id"]
+        Client(self.url, BACKER).pledge_challenge(cid, 10_000_000)
+        Client(self.url, SOLVER).submit_solution(cid, {"x": 18})
+        known = {"lure": [{"reference": {"x": 18}, "score": 18.0, "provenance": {"kind": "external", "url": "https://example.org/18",
+                                                                  "date": "2020-01-01"}}]}
+        dog = Watchdog(Client(self.url, OTHER), sources=[lambda ch: known.get(ch["key"], [])],
+                       policy=WatchPolicy(stake_budget_msats=2_000_000))
+        w0 = held(ex, OTHER)
+        acts = dog.scan()
+        self.assertEqual([a["action"] for a in acts], ["filed_prior_art"])
+        self.assertEqual(acts[0]["expected_reward_msats"], 500_000)
+        self.assertEqual(dog.scan(), [])                                               # once, and within budget
+        c = ex.prior_claim(acts[0]["claim"])
+        for v in c["validators"]:
+            ex.commit_prior(c["id"], v, measurement_digest({"prior": True}, "s"))
+        for v in c["validators"]:
+            ex.reveal_prior(c["id"], v, {"prior": True}, "s")
+        self.assertEqual(ex.prior_claim(c["id"])["status"], "upheld")
+        self.assertEqual(held(ex, OTHER) - w0, 500_000 - FEE)                          # stake back, half the bond
+        balanced(self, ex)
 
     def test_autopilot_posts_a_challenge_when_a_bounty_did_not_fix_it(self):
         from traceex import Client

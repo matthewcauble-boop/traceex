@@ -130,15 +130,18 @@ curl "$NODE/v0/challenges/1/leaderboard"
 curl "$NODE/v0/challenges/1/export?format=yukon"                    # benchmark.json + a standalone verify.py
 ```
 
-A result that was already known pays nobody: during the 4-epoch vesting window anyone can file a **prior-art claim**
-(a 2,000-sat stake) with the known solution and its provenance (an earlier traceX record, or a dated public URL or
-commit that validators check). Upheld, the tranches go back to the backers' escrow, the best and every pledge are
-rebased to the known result, and the submitter's bond pays the challenger a fixed 500 sats (the rest is destroyed);
-rejected, the stake is destroyed. Paid submissions hold their 1,000-sat bond through that window.
+A result that was already known pays nobody. The node never pays twice for anything it holds (earlier submissions,
+importers' records): it raises the best to the known record before counting a submission. For records that live
+elsewhere, every payout and its bond (the larger of 1,000 sats and 10% of the payout) wait out a **14-day prior-art
+window**, and anyone can file a **prior-art claim** (a 2,000-sat stake) with the known solution and its dated source.
+Upheld, the tranches go back to the backers' escrow, the best and every pledge are rebased, and the challenger takes
+half the bond; rejected, the stake is destroyed. `traceex.autopilot.Watchdog` lets an agent do this for a living.
 
 Every challenge attack in `examples/farming/attacks.py` loses: self-funding, epsilon steps, overfitting, sybil
 submissions, copy-and-tweak, a validator majority faking a score, a poster who understates the baseline and submits
-the known record (caught by a prior-art claim within the window), and griefing with false prior-art claims (SPEC 4k).
+the known record (caught by the node when traceX holds the record, by a watchdog's claim otherwise), and griefing
+with false prior-art claims. One is documented as open (SPEC 4k): a record that lives only off traceX and that nobody
+files within the 14 days.
 
 ## Run a public exchange
 

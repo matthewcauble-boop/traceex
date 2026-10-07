@@ -126,7 +126,10 @@ class Params:
                                                # destroyed if it is invalid or overfits its public instances
     challenge_overfit_steps: float = 10.0      # public score beating the hidden median by more than this many minimum
                                                # steps (or 3 standard errors): overfit
-    prior_art_reward_msats: int = 500_000      # v0.8: an upheld prior-art claim's reward, out of the destroyed bond
+    challenge_bond_share: float = 0.10         # v0.8: a submission's bond is the larger of 1,000 sats and 10% of what
+                                               # it would unlock, held through the challenge's prior-art window
+    prior_art_reward_share: float = 0.50       # an upheld prior-art claim earns half the bond; the rest is destroyed
+    challenge_unbacked_days: float = 30.0      # a challenge nobody pledges to for this many days (wall clock) ends
     escalate_after: int = 6                    # a failure open this many epochs...
     escalate_streak: int = 3                   # ...whose growth stayed positive this many settlements becomes a challenge
 

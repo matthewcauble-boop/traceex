@@ -262,7 +262,33 @@ def seed(ex, url, flight=False):
                      f"so it pledged {money(1_000_000)} of its budget to that one")
     if sats_mode:
         story += federate(ex, url, fl, model, routed, lid, lid2, fb, rep, parents, lot1 + lot2)
+    if hasattr(ex, "post_challenge"):
+        story += seed_challenges(ex)
     return story
+
+
+SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples", "challenges", "sample")
+
+
+def seed_challenges(ex):
+    """v0.8 (SPEC 4k): the repo's imported sample, as open challenges with no pledges (nothing made up): the AlphaEvolve
+    problems with each published construction as the verified baseline (the node re-scores it), and two Erdős problems,
+    each listed from the Erdős problems database and merged with its formal-conjectures Lean statement."""
+    from traceex import challenges as C
+    files = [os.path.join(SAMPLE, "alphaevolve_sample.json"),
+             os.path.join(SAMPLE, "erdosproblems", "problems_sample.yaml"),
+             *(os.path.join(SAMPLE, "formal_conjectures", "FormalConjectures", "ErdosProblems", f"{n}.lean")
+               for n in (3, 28))]
+    posted, merged = [], 0
+    for f in files:
+        for c in C.load(f):
+            r = ex.post_challenge(dict(c, days=365), origin="import")
+            merged += bool(r.get("merged"))
+            if not r.get("merged"):
+                posted.append(r["id"])
+    return [f"{len(posted)} open problems posted as challenges from openly licensed sources (AlphaEvolve's packing "
+            f"records, the verified baselines; Erdős problems 3 and 28 with their Lean statements, {merged} merged "
+            "sources); unfunded: nobody has pledged yet"]
 
 
 def _direct(ex, lot, buyers):
