@@ -1469,7 +1469,8 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
         def log_message(self, fmt, *a):
             if public:                                   # one line per request in the host's log, no bodies
                 sys.stderr.write(f"{self.command} {urlparse(self.path).path} {a[1] if len(a) > 1 else ''}\n")
-    return H
+    from identity import wrap               # signed actions + optional AgentID: /v0/identity, `_sig` (node/identity.py)
+    return wrap(H, ex)
 
 
 def serve(port=8787, db="exchange.db", host="127.0.0.1", public=False, admin_token=None, economy="usdc", **kw):

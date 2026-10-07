@@ -18,12 +18,19 @@ def privacy_leaks(trace):
 
 
 class Client:
-    def __init__(self, endpoint: str, address: str = None, timeout: float = 30, token: str = None):
+    def __init__(self, endpoint: str, address: str = None, timeout: float = 30, token: str = None, key=None):
         """token: the operator's admin token, for the calls a public node keeps to its operator (settle, clear,
-        register learnings, claim bounties)."""
-        self.endpoint, self.address, self.timeout, self.token = endpoint.rstrip("/"), address, timeout, token
+        register learnings, claim bounties). key: a traceex.identity.AddressKey; when given, every POST is signed by
+        it (`_sig`), so validator, judge and poster messages reach the node without the operator (docs/identity.md),
+        and address defaults to the key's."""
+        self.endpoint, self.timeout, self.token, self.key = endpoint.rstrip("/"), timeout, token, key
+        self.address = address or (key.address if key is not None else None)
 
     def _call(self, method, path, body=None, text=False):
+        if method == "POST" and self.key is not None and isinstance(body, dict) and "_sig" not in body \
+                and path != "/mcp":
+            from .identity import node_identity, sign_action
+            body = sign_action(self.key, node_identity(self)["node"], path, body)
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -37,6 +44,17 @@ class Client:
             if e.code == 402:   # L402: a Lightning invoice and a macaroon; a Lightning-backed client pays and retries
                 raise PaymentRequired(json.loads(e.read() or b"{}"), e.headers.get("WWW-Authenticate", ""))
             raise RuntimeError(f"{e.code}: {e.read().decode()[:300]}")
+
+    # --- identity (optional; docs/identity.md) -------------------------------------------------------------------------
+    def sign_in_with_agentid(self, key=None, approve=None, **kw):
+        """Bind this client's address to the agent's AgentID: the node runs the OIDC flow, approve(authorize_url) gets
+        the one browser step done (default: print the link), the key signs the binding. Optional; never required."""
+        from .identity import sign_in_with_agentid
+        return sign_in_with_agentid(self, key or self.key, approve=approve, **kw)
+
+    def identity(self, address=None):
+        """The node's identity settings, or an address's bindings."""
+        return self._call("GET", f"/v0/identity/bindings/{address}" if address else "/v0/identity")
 
     def submit(self, trace):
         leaks = privacy_leaks(trace)

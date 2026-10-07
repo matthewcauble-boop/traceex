@@ -43,6 +43,7 @@ def _frozen(*a, **k):
 
 for _name in WRITES:                                # instance attributes shadow the methods: every write refuses
     setattr(ex, _name, _frozen)
+ex.identity_read_only = True                        # identity (node/identity.py): reads only, no bindings here
 _describe = ex.describe
 ex.describe = lambda: dict(_describe(), read_only=True, preview=READ_ONLY)
 

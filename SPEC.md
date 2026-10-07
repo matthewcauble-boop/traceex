@@ -471,8 +471,8 @@ policy, enough decoys that every validator meets at least two inside each 30-epo
 Every attack loses on average. The majority rows are what a federation captured by most of the stake can still do: it
 controls the vote, so it can reject honest learnings or claw them back with challenges, and their trainers lose bonds;
 it gains nothing by it. That griefing is the remaining limit, and the reason a real network still wants many
-independent validators. Not covered on the testnet yet: signatures (the operator relays validator and poster
-messages), a public randomness beacon (the testnet's comes from each epoch's payout root; mainnet would use drand),
+independent validators. Signatures (4l) now let validators, judges and posters send their own messages; the operator
+still settles epochs and funds decoys. Not covered on the testnet yet: a public randomness beacon (the testnet's comes from each epoch's payout root; mainnet would use drand),
 decoys from someone other than the operator, real Lightning payments (the L402 challenge is issued, but its invoice is
 a placeholder and no preimage is checked), and the burn batch's on-chain `OP_RETURN` output (the testnet only records
 it).
@@ -898,6 +898,32 @@ verifiers, `examples/challenges/sample` a small imported sample.
   importers for more AlphaEvolve families (two are wired: circle packing and Tammes); after an upheld prior-art
   claim, a validator-measured solution beyond the known result is paid again only through its judges.
 
+## 4l. Identity: signed messages, and optional Sign in with AgentID
+
+- **Signed actions.** An address is an Ethereum-style key, so any request body may carry `_sig: {address, nonce, ts,
+  signature}`: an EIP-191 `personal_sign` over the node id (`GET /v0/identity`), the route, the body's sha256, a
+  one-time nonce and the time. The node recovers the signer, refuses a reused nonce or a time more than 5 minutes off,
+  and refuses a signer who is not the route's actor (`validator`, `judge`, `backer`, `producer`, the bounty's
+  `poster`...). Validator commits and reveals (learnings, fixes, prior art, submissions), repro checks, pledge
+  confirmations, a bounty poster's measurements and claims, validator stakes and direct licences, operator-relayed
+  until now, are accepted when signed by their actor; the operator's relay keeps working. Open routes can be signed
+  too, and `TRACEX_REQUIRE_SIGNATURES=1` makes it mandatory. Epoch clearing and settlement, checkers, learning
+  registration, decoys and prices stay with the operator: they are not one actor's message about itself.
+- **AgentID (optional).** AgentID (AgentMail) is an OpenID Connect provider for agents: ES256 ID tokens, an opaque
+  per-agent `sub`, `actor_type: "agent"`, authorization code + PKCE only, 10-minute tokens, free for apps, no
+  registration needed for an open client (client id = the node's https URL). A node with `TRACEX_AGENTID_CLIENT_ID`
+  set binds an agent's subject to its address when the agent proves both: an ID token the node verified (JWKS
+  signature, issuer, audience, expiry, single-use jti, and a nonce issued for that address) and the address's
+  signature over (node, issuer, subject, address, nonce). One subject, one address; moving it needs an unbind signed by
+  the address. `TRACEX_SIGNERS_MUST_BIND=1` accepts signed validator messages only from bound addresses.
+- **Not a bond.** Logins are cheap (one owner, many inboxes), so identity grants no standing: reporter and validator
+  bonds and the sybil analysis (4f, 4g) are unchanged. A binding adds only a keyed hash of the owner id, so an operator
+  can see clusters.
+- **Privacy.** The node keeps the subject, the address and keyed hashes of the email and owner id; never the email,
+  the owner's name, or any token. It never asks for AgentID's owner scopes.
+- **Not built yet.** MCP tools for binding and signing; staleness of old bindings (AgentID has no revocation feed);
+  a wallet button that signs the binding in the browser. Details and the attack table: `docs/identity.md`.
+
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
   `PayoutDistributor` (one Merkle root of `(address, amount)` per epoch). One transaction per epoch, no matter how many
@@ -925,6 +951,8 @@ verifiers, `examples/challenges/sample` a small imported sample.
 | Eval gaming | evals rotate and stay hidden; attestations name the eval-set hash and expire |
 | Licence violations | traces carry the base model; registry blocks closed-model outputs whose terms forbid training competitors |
 | Sybil validators | validator deposits; attestations need k-of-n agreement for high-value learnings |
+| Forged or replayed actor messages | `_sig` by the actor's address key: node, route, body hash, one-time nonce, 5-minute window (4l) |
+| Sybil logins (many AgentIDs) | identity grants no standing; bonds stay; owner hashes make clusters visible (4l) |
 | Inflated failure frequency (sybil reports) | counters count distinct bonded reporters; a copy counts for its original; validators re-run new reporters' cases, and one that doesn't reproduce leaves the counters and destroys its reporter's bond (4g) |
 | False fix claims | the public repro can only hold a fix back; validators measure the hidden part on their own cases; a claim that fixes nothing loses its 2,000-sat bond; fixes can only improve a failure's status (4h) |
 | Code or prompts leaking through ingestion | skeletons on the producer's machine (code: no strings, comments, project identifiers or paths; text: typed placeholders), a secrets and contact-details scan before anything is written, dry run by default (4i) |
@@ -935,7 +963,9 @@ verifiers, `examples/challenges/sample` a small imported sample.
   maths, Merkle payouts, `export` (SFT / DPO / repair datasets, refill, dataset and model cards), `mcp`
   (MCP server, stdio and the node's `/mcp`), `autopilot` (agents that use the exchange on their own); v0.7:
   `pytest_plugin` and `codeskel` (ingestion from tests), `otel` (ingestion from OpenTelemetry), `outbox` (review
-  before sending).
+  before sending); `identity` (address keys, EIP-191 signed actions, `sign_in_with_agentid`; 4l).
+- `node/identity.py` — signed actions, the provider-agnostic OIDC verifier with the AgentID preset, bindings, the
+  `/v0/identity` routes (4l, `docs/identity.md`).
 - `node/` — a reference exchange node (Python stdlib + SQLite) exposing the HTTP API below: `exchange.py` (the API,
   the retired v0.1 dollar node), `sats.py` (every payment in sats, the payout invariant, stakes, the federation;
   v0.7 adds reporter and fix bonds), `registry.py` (v0.7: the failure registry and fix tracking),
@@ -1024,3 +1054,10 @@ wallet can't cover answers `402 Payment Required` with an L402 challenge (4e). v
 | POST | `/v0/decoys`, `/v0/decoys/unseal` | operator: `{learning, digest, funder}`, then `{learning, gain, salt}` → a strike for each validator far from the truth; a second strike in 30 epochs costs 25% of stake |
 | POST | `/v0/reporters`, `/v0/reporters/withdraw` | v0.7: `{address}` → a 1,000-sat reporter bond, so its reports count as a verified reporter's; withdrawn, it returns after 4 epochs |
 | GET | `/v0/reporters/{address}` | the bond, whether it counts, its cases and how many were refuted |
+| GET | `/v0/identity` | 4l: the node id signatures name, identity providers, policies, the routes a `_sig` can authorise |
+| POST | `/v0/identity/challenges` | `{address}` → a one-time nonce for an ID token, 10 minutes |
+| POST | `/v0/identity/bindings` | `{id_token, address, signature}` or `{pending, address, signature}` → the subject bound to the address |
+| GET | `/v0/identity/bindings/{address}` | an address's live bindings (provider, subject, time) |
+| POST | `/v0/identity/sessions` | `{id_token}` → the address that subject is bound to here, if any |
+| POST | `/v0/identity/unbind` | signed by the address: `{address}` |
+| GET / POST | `/v0/identity/agentid/start`, `GET .../callback`, `GET .../pending/{state}` | Sign in with AgentID (authorization code + PKCE); the node keeps the subject, never the token |
