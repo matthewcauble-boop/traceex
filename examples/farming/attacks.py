@@ -31,6 +31,14 @@ one's work into many step traces, padding a join with loops or with a detour, an
 path starts with. Failed attempts are unpaid reports and payment is per whole passing trace, for the transitions it
 filed first, so two rows (NEUTRAL: padding with loops, a detour nobody shortens) earn exactly what the same work
 without padding earns, 0 by construction, and every other row loses.
+
+v0.8 also adds attacks on challenge bounties (SPEC 4k): a self-funded challenge solved with its own improvements,
+splitting one improvement into 20 epsilon steps (the payout curve depends on the best score alone, so the tranches
+telescope), overfitting a challenge's public instances (validators score hidden ones; the submission bond is
+destroyed), 20 sybil submissions of the best, copying the best with a tweak below the minimum step, and a validator
+majority faking a hidden-instance score (each pledge pays only on its own judge's confirmation), a poster who
+understates the baseline and submits the known record (a prior-art claim in the vesting window claws it back and
+destroys the bond), and griefing with false prior-art claims (each stake is destroyed).
 """
 import json
 import math
@@ -932,6 +940,193 @@ def steps_detour_alone(ex):
             "still one passing trace, paid exactly what the direct finish is", diff)
 
 
+# --- v0.8: challenge bounties (SPEC 4k) ---------------------------------------------------------------------------------
+def toy_score(sol, inst):
+    """The attacks' verifier: maximize x in [0, 100] (deterministic; the node runs it)."""
+    x = sol.get("x") if isinstance(sol, dict) else None
+    return float(x) if isinstance(x, (int, float)) and 0 <= x <= 100 else None
+
+
+def chal_node(ex, key="open-problem", hidden=False, poster=POSTER, target=20.0, baseline=10.0, fund_it=True):
+    """An honest challenge (maximize x, baseline 10, target 20, minimum step 0.1), its verifier written and registered
+    by the honest operator, backed by an honest backer with 50,000 sats. hidden: validators measure it on their own
+    instances (the node scores only the public part)."""
+    if "toy-max@1" not in ex.verifiers:
+        ex.register_verifier("toy-max@1", toy_score, author=FEES)
+    c = {"v": "challenge/0.1", "title": "Open problem: make x large", "statement": "Maximize x in [0, 100].",
+         "path": "math/toy", "key": key, "metric": {"direction": "maximize", "baseline": baseline, "target": target},
+         "verifier": {"id": "toy-max@1", "kind": "python"}, "poster": poster}
+    if hidden:
+        c["instances"] = {"hidden": {"digest": "sha256:held-by-validators", "count": 200}}
+    cid = ex.post_challenge(c)["id"]
+    if fund_it:
+        ex.pledge_challenge(cid, BACKER, 50_000_000)
+    return cid
+
+
+def measure_sub(ex, sid, truth, fake=None):
+    """Drawn validators run the verifier on their own hidden instances: honest ones reveal the truth (sampling noise
+    0.05), bribed ones whatever the attacker says."""
+    ex.settle()                                          # validators are drawn from the beacon after the submission
+    rng = random.Random(f"{ex.seed}|csub|{sid}")
+    reports = {}
+    for v in ex.submission(sid)["validators"]:
+        noise = rng.gauss(0, 0.05)
+        score = fake if v in ex.corrupt and fake is not None else (None if truth is None else round(truth + noise, 4))
+        reports[v] = {"score": score, "se": 0.05}
+        ex.commit_solution(sid, v, measurement_digest(reports[v], "s" + v))
+    for v, mres in reports.items():
+        ex.reveal_solution(sid, v, mres, "s" + v)
+    return ex.submission(sid)
+
+
+def ch_self_funded(ex):
+    """It posts its own challenge, pledges 50,000 sats to it and solves it with its own real improvement."""
+    ex.register_verifier("toy-max@1", toy_score, author=FEES)
+    cid = chal_node(ex, key="mine", poster=ATTACKER, fund_it=False)
+    ex.pledge_challenge(cid, ATTACKER, 50_000_000)
+    ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 20}})
+    return ("posts a challenge, pledges 50,000 sats, reaches the target itself: solver 70% and its own solution trace's "
+            "20% come back; the verifier author's 5% and the validators' 5% do not")
+
+
+def _epsilon_world(seed, steps):
+    """The attacker's real improvement, 10 -> 14, on an honest challenge: in `steps` submissions or one."""
+    ex = node(seed)
+    cid = chal_node(ex)
+    start = worth(ex, [ATTACKER])
+    for k in range(1, steps + 1):
+        ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": round(10 + 4 * k / steps, 6)}})
+    for _ in range(ex.p.vest_epochs + 2):
+        ex.settle()
+    assert ex.audit()["balanced"]
+    return worth(ex, [ATTACKER]) - start
+
+
+def ch_epsilon(ex):
+    diff = _epsilon_world(ex.seed, 20) - _epsilon_world(ex.seed, 1)
+    return ("splits one real improvement (10 -> 14) into 20 minimum-size steps: the curve depends on the best score "
+            "alone, so the tranches telescope to what one submission is paid, less 19 more fees and rounding", diff)
+
+
+def ch_overfit(ex):
+    """A program that memorises the public instances: public score 19, true score on hidden instances 10.3."""
+    cid = chal_node(ex, key="hidden", hidden=True)
+    s = ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 19}})
+    s = measure_sub(ex, s["id"], truth=10.3)
+    return (f"overfits the public instances (19 public, 10.3 hidden): validators' median {s['score']}, status "
+            f"{s['status']}: no tranche, and its 1,000-sat bond is destroyed")
+
+
+def ch_sybil(ex):
+    """20 sybil accounts copy the honest best: exact copies are refused (the first submitter holds a solution), and
+    variants below the minimum step are scored but never paid."""
+    cid = chal_node(ex)
+    ex.submit_solution(cid, {"submitter": HONEST, "solution": {"x": 14}})
+    sybils = ["0x" + f"{0x30 + i:02x}" * 20 for i in range(20)]
+    for s in sybils:
+        fund(ex, s, 3_000_000)                         # a submission holds a 1,000-sat bond until it is judged
+    start = worth(ex, sybils)
+    refused = 0
+    for i, s in enumerate(sybils):
+        try:
+            ex.submit_solution(cid, {"submitter": s, "solution": {"x": 14}})
+        except ValueError:
+            refused += 1
+        ex.submit_solution(cid, {"submitter": s, "solution": {"x": round(14 + 0.001 * (i + 1), 6)}})
+    for _ in range(ex.p.vest_epochs + 2):
+        ex.settle()
+    return (f"20 sybils resubmit the best ({refused} refused as copies) and 20 variants below the minimum step "
+            "(scored, unpaid): each paid its fee", worth(ex, sybils) - start)
+
+
+def ch_copy_tweak(ex):
+    """It copies the honest best construction and nudges one number by less than the minimum step."""
+    cid = chal_node(ex)
+    ex.submit_solution(cid, {"submitter": HONEST, "solution": {"x": 14}})
+    s = ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 14.05}})
+    return (f"copies the best (14) with a trivial tweak (14.05, under the 0.1 minimum step): status {s['status']}, "
+            "nothing paid; a tweak that does clear the step is a real improvement, paid only for its increment, and "
+            "names the copied solution as a parent")
+
+
+def ch_majority_fake(ex):
+    """4 of 7 validator seats report a fake hidden score for the attacker's junk artifact."""
+    cid = chal_node(ex, key="hidden", hidden=True)
+    s = ex.submit_solution(cid, {"submitter": ATTACKER, "artifact": {"uri": "junk", "hash": "sha256:junk"}})
+    s = measure_sub(ex, s["id"], truth=None, fake=20.0)
+    return (f"its seats put {s['score']} on the board ({s['status']}); the backer's judge measures it, finds nothing, "
+            "and never confirms: no validator verdict moves a backer's money, and the pledge comes back at expiry")
+
+
+def measure_prior(ex, pa, prior):
+    """Drawn validators check a prior-art claim's external record (its date against the challenge's posting); bribed
+    ones say whatever the attacker wants."""
+    ex.settle()
+    reports = {}
+    for v in ex.prior_claim(pa)["validators"]:
+        reports[v] = {"prior": bool(prior) if v not in ex.corrupt else True}
+        ex.commit_prior(pa, v, measurement_digest(reports[v], "p" + v))
+    for v, r in reports.items():
+        ex.reveal_prior(pa, v, r, "p" + v)
+    return ex.prior_claim(pa)
+
+
+def _lure_world(seed, guard="watchdog"):
+    """It posts a challenge whose baseline (10) understates the best known result (18, published before the challenge),
+    which it then submits. guard "watchdog": the honest watchdog files a prior-art claim with the dated public record
+    during the vesting window; "from_score": the backer pledges from the record; "reference": an importer posts the
+    same problem with the record as a verified reference first; None: nobody notices for 4 epochs."""
+    ex = node(seed)
+    ex.register_verifier("toy-max@1", toy_score, author=FEES)
+    cid = chal_node(ex, key="lure", poster=ATTACKER, fund_it=False)
+    start = worth(ex, [ATTACKER])
+    ex.pledge_challenge(cid, BACKER, 50_000_000, from_score=18.0 if guard == "from_score" else None)
+    if guard == "reference":
+        ex.post_challenge({"v": "challenge/0.1", "title": "Open problem: make x large", "statement": "Maximize x.",
+                           "path": "math/toy", "key": "lure", "metric": {"direction": "maximize", "target": 20.0},
+                           "verifier": {"id": "toy-max@1", "kind": "python"}, "reference": {"x": 18}},
+                          origin="import")
+    try:
+        ex.submit_solution(cid, {"submitter": ATTACKER, "solution": {"x": 18}})
+    except ValueError:                                   # the record is on the board already: it can't be resubmitted
+        pass
+    if guard == "watchdog":
+        c = ex.file_prior_art(cid, {"challenger": WATCHDOG, "reference": {"x": 18},
+                                    "provenance": {"kind": "external", "url": "https://example.org/record-18",
+                                                   "date": "before the challenge", "commit": "0" * 40}})
+        measure_prior(ex, c["id"], prior=True)
+    for _ in range(ex.p.vest_epochs + 2):
+        ex.settle()
+    assert ex.audit()["balanced"]
+    return worth(ex, [ATTACKER]) - start
+
+
+def ch_lure(ex):
+    caught = _lure_world(ex.seed)
+    unwatched = _lure_world(ex.seed, None)
+    guarded, imported = _lure_world(ex.seed, "from_score"), _lure_world(ex.seed, "reference")
+    return (f"understates the baseline (10, the record 18 was public before) and submits the record: a watchdog's "
+            f"prior-art claim in the vesting window claws the tranche back to the backer's escrow and destroys the bond "
+            f"({sats(caught)}); from_score at the record: {sats(guarded)}; record imported as a reference first: "
+            f"{sats(imported)}; nobody notices within 4 epochs: {sats(unwatched)}", caught)
+
+
+def ch_prior_grief(ex):
+    """It files 3 false prior-art claims (a made-up dated record) against an honest improvement, hoping to claw it back
+    or freeze its payout."""
+    cid = chal_node(ex)
+    ex.submit_solution(cid, {"submitter": HONEST, "solution": {"x": 14}})
+    statuses = []
+    for i in range(3):
+        c = ex.file_prior_art(cid, {"challenger": ATTACKER, "reference": {"x": 14 + i * 0.001},
+                                    "provenance": {"kind": "external", "url": f"https://example.org/fake-{i}",
+                                                   "date": "2020-01-01"}})
+        statuses.append(measure_prior(ex, c["id"], prior=False)["status"])
+    return (f"3 false prior-art claims against an honest improvement: {', '.join(statuses)}; each 2,000-sat stake is "
+            "destroyed, the honest tranche only waited while the claims were open")
+
+
 ATTACKS = [
     ("Trace spam", trace_spam, 0),
     ("Stuff an honest lot with junk", stuff_lot, 0),
@@ -972,11 +1167,19 @@ ATTACKS = [
     ("Steps: pad with a detour, honest rescue", steps_detour, 0),
     ("Steps: pad with a detour, nobody shorter", steps_detour_alone, 0),
     ("Steps: failed attempt on the winning path", steps_failed_on_path, 0),
+    ("Challenges: self-funded, own improvements", ch_self_funded, 0),
+    ("Challenges: 20 epsilon steps, not one", ch_epsilon, 0),
+    ("Challenges: overfit the public instances", ch_overfit, 0),
+    ("Challenges: 20 sybil submissions", ch_sybil, 0),
+    ("Challenges: copy the best, trivial tweak", ch_copy_tweak, 0),
+    ("Majority: fake a hidden-instance score", ch_majority_fake, 4),
+    ("Challenges: understated baseline lure", ch_lure, 0),
+    ("Challenges: false prior-art claims", ch_prior_grief, 0),
 ]
 # Earn exactly what the same work filed without padding earns: one passing trace, one fee, the same parents, so the
 # difference is provably 0 (credit is per whole passing trace; nothing about a trace's length moves money).
 NEUTRAL = {"Steps: pad a join with loops", "Steps: pad with a detour, nobody shorter"}
-OPEN = []                                                                              # none left open (SPEC 4j)
+OPEN = []                       # none left open (SPEC 4k: the baseline lure is closed by prior-art claims)
 REAL = {"Wash usage (self-dealing)", "Self-funded bounty", "Pad a real learning, honest audits",
         "Pad a real learning, lazy audits", "Wrap honest traces in its own learning", "(honest trainer, for scale)"}
 
@@ -1046,7 +1249,7 @@ def main(argv=None):
             print(f"{name:40} {sats(pnl):>14} {sats(extra):>14} {usd(extra):>10}   {note}")
         if OPEN:
             print()
-            print("Open (not defended yet, see SPEC 4j):")
+            print("Open (not defended yet, see SPEC 4k):")
         for name, attack, bribed in OPEN:
             pnl, extra, note = play(name, attack, bribed, honest=honest)
             print(f"{name:40} {sats(pnl):>14} {sats(extra):>14} {usd(extra):>10}   {note}")
@@ -1060,7 +1263,7 @@ def main(argv=None):
                   f"{sum(x > 0 for x in xs):>6} of {seeds}")
         if OPEN:
             print()
-            print("Open (not defended yet, see SPEC 4j):")
+            print("Open (not defended yet, see SPEC 4k):")
         for name, attack, bribed in OPEN:
             xs = [play(name, attack, bribed, s, honest[s])[1] for s in range(1, seeds + 1)]
             print(f"{name:40} {sats(sum(xs) / len(xs)):>18} {usd(sum(xs) / len(xs)):>10} {sats(max(xs)):>16} "

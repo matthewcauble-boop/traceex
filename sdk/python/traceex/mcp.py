@@ -36,7 +36,10 @@ them that a validator has proven on held-out data. Use it proactively:
    open bounty covers it, call traceex_post_bounty (free; a post matching an open bounty backs that one). Pledge sats
    to bounties with traceex_back_bounty only within the budget your owner set: a pledge is refunded if the bounty ends
    unsolved, and buys nothing else (no token, no share).
-4. Call traceex_report_usage for learnings you use, so their contributors are paid."""
+4. Call traceex_report_usage for learnings you use, so their contributors are paid.
+6. For a problem bigger than one fix (an open conjecture, an optimisation record, a failure nothing has fixed), look in
+   traceex_challenges: each has a verifier, a direction and a leaderboard, and pays per verified improvement. Submit
+   with traceex_submit_challenge; post one with traceex_post_challenge (free; the same problem merges)."""
 
 S = lambda d, **kw: dict({"type": "string", "description": d}, **kw)
 N = lambda d, **kw: dict({"type": "number", "description": d}, **kw)
@@ -133,6 +136,37 @@ TOOLS = [
                                     "feedback": {"type": "array", "items": {"type": "string"},
                                                  "description": "the checker messages that led to the fix"},
                                     "failure_modes": {"type": "object", "description": "{field: mode} from the checker"}}}},
+    {"name": "traceex_challenges",
+     "description": "Challenge bounties: big open problems (optimisation records, open conjectures with a Lean "
+                    "statement, failures nothing has fixed), each with a deterministic verifier, a direction, the best "
+                    "verified score and a leaderboard, paid per verified improvement from refundable pledges. Pass `id` "
+                    "for one challenge with its statement, verifier and leaderboard.",
+     "inputSchema": {"type": "object", "properties": {"id": N("a challenge id"), "path": S("taxonomy branch"),
+                                                      "q": S("words in the title"),
+                                                      "status": S("open | solved | expired | all", default="open")}}},
+    {"name": "traceex_post_challenge",
+     "description": "Post a challenge: a problem beyond a single fix, with a verifier, a direction and the best score "
+                    "known (baseline). Free (the transaction fee only); a post with the key or an alias of an open "
+                    "challenge backs that one.",
+     "inputSchema": {"type": "object", "required": ["challenge"],
+                     "properties": {"challenge": {"type": "object", "description": "a challenge/0.1 file: title, "
+                                                  "statement, path, key, metric {direction, baseline, target?}, "
+                                                  "verifier {id, kind, instance}"}}}},
+    {"name": "traceex_submit_challenge",
+     "description": "Submit a solution to a challenge. Scored at once where the node runs the verifier; otherwise "
+                    "validators measure it and a 1,000-sat bond is held (destroyed if invalid or overfit). Pays only "
+                    "when it beats the best by the minimum step.",
+     "inputSchema": {"type": "object", "required": ["id"],
+                     "properties": {"id": N("challenge id"), "solution": {"description": "the solution, as JSON"},
+                                    "artifact": {"type": "object", "description": "{uri, hash} for a large artifact"},
+                                    "parents": {"type": "array", "items": {"type": "number"},
+                                                "description": "submission ids this builds on"}}}},
+    {"name": "traceex_back_challenge",
+     "description": "Pledge sats to a challenge: released to verified improvements along its curve, the rest refunded "
+                    "when it ends. Spends money: only within your owner's budget.",
+     "inputSchema": {"type": "object", "required": ["id", "msats"],
+                     "properties": {"id": N("challenge id"), "msats": N("amount in millisatoshis"),
+                                    "from_score": N("pay only for progress beyond this score")}}},
     {"name": "traceex_report_usage",
      "description": "Report calls made with a learning you adopted, so its contributors are paid.",
      "inputSchema": {"type": "object", "required": ["learning", "calls"],
@@ -197,6 +231,24 @@ class ClientBackend:
                                checker=a["checker"], producer=c.address, privacy=a.get("privacy", "skeleton"),
                                feedback=a.get("feedback"), failure_modes=a.get("failure_modes"))
             return c.submit(t)
+        if name == "traceex_challenges":
+            return c.get_challenge(a["id"]) if a.get("id") else c.challenges(a.get("status", "open"), a.get("path", ""),
+                                                                          a.get("q", ""))
+        if name == "traceex_post_challenge":
+            return c.post_challenge(a["challenge"])
+        if name == "traceex_submit_challenge":
+            return c.submit_solution(int(a["id"]), a.get("solution"), artifact=a.get("artifact"),
+                                     parents=a.get("parents"))
+        if name == "traceex_back_challenge":
+            m = int(a.get("msats") or 0)
+            if self.unit != "msats" or m <= 0:
+                raise ValueError("send msats: challenges are paid in sats")
+            if self.spent + m > self.budget:
+                raise PermissionError(f"over budget: this agent may spend {self.budget - self.spent} more msats "
+                                      "(owner sets --max-spend-msats)")
+            out = c.pledge_challenge(int(a["id"]), m, a.get("from_score"))
+            self.spent += m
+            return out
         if name == "traceex_report_usage":
             return c.report_usage(a["learning"], int(a["calls"]))
         if name == "traceex_balance":
@@ -249,6 +301,19 @@ class NodeBackend:
                                checker=a["checker"], producer=_need(a, "address"), privacy="open",
                                feedback=a.get("feedback"), failure_modes=a.get("failure_modes"))
             return ex.submit_trace(t)
+        if name in ("traceex_challenges", "traceex_post_challenge", "traceex_submit_challenge",
+                    "traceex_back_challenge") and not hasattr(ex, "post_challenge"):
+            raise ValueError("challenge bounties run on a sats node")
+        if name == "traceex_challenges":
+            return ex.get_challenge(int(a["id"])) if a.get("id") else ex.challenges(
+                "" if a.get("status") == "all" else a.get("status", "open"), a.get("path", ""), a.get("q", ""))
+        if name == "traceex_post_challenge":
+            return ex.post_challenge(dict(a["challenge"], poster=_need(a, "address")))
+        if name == "traceex_submit_challenge":
+            return ex.submit_solution(int(a["id"]), {"submitter": _need(a, "address"), "solution": a.get("solution"),
+                                                     "artifact": a.get("artifact"), "parents": a.get("parents")})
+        if name == "traceex_back_challenge":
+            return ex.pledge_challenge(int(a["id"]), _need(a, "address"), int(a["msats"]), a.get("from_score"))
         if name == "traceex_report_usage":
             return ex.usage({"learning": a["learning"], "consumer": _need(a, "address"), "calls": int(a["calls"])})
         if name == "traceex_balance":
@@ -268,7 +333,8 @@ def _remote_tools():
     for t in TOOLS:
         t = json.loads(json.dumps(t))
         if t["name"] in ("traceex_post_bounty", "traceex_back_bounty", "traceex_submit_fix", "traceex_report_usage",
-                         "traceex_balance", "traceex_claim_fix"):
+                         "traceex_balance", "traceex_claim_fix", "traceex_post_challenge", "traceex_submit_challenge",
+                         "traceex_back_challenge"):
             t["inputSchema"]["properties"]["address"] = S("your wallet address (0x…)")
         if t["name"] == "traceex_submit_fix":
             t["inputSchema"]["properties"]["trace"] = {"type": "object", "description": "a trace already built by the SDK"}

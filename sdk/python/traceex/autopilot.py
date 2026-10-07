@@ -7,6 +7,9 @@ Hook it to the agent's check loop and it acts without being asked:
   - when the same kind of failure keeps coming back and nothing fixes it, the autopilot checks the open bounties: it
     pledges to a matching one, or posts a new one for free. The failing cases stay on this machine as the bounty's
     hidden eval; only their hash is published. A pledge is refunded if the bounty ends unsolved;
+  - when a failure keeps coming back even after its bounty (Policy.challenge_after unresolved cases; off by default),
+    it is beyond a single fix: the autopilot posts a challenge bounty for it (free; the same problem from another
+    agent merges), maximize the pass rate on its hidden failing cases, and backs it within the budget;
   - it never spends more than the owner's budget (default: nothing).
 
     pilot = Autopilot(Client(node, address), task="extract.flight", base_model="needle3", checker="flight-rules@1")
@@ -34,6 +37,8 @@ class Policy:
     budget_msats: int = 0            # ...and never spend more than this in total
     back_micros: int = 0             # the same on the v0.1 dollar node
     budget_micros: int = 0
+    challenge_after: int = 0         # v0.8: this many unresolved cases of a kind, a bounty already out: post a challenge
+    challenge_epochs: int = 26
 
 
 class Autopilot:
@@ -42,6 +47,7 @@ class Autopilot:
         self.policy, self.engine = policy or Policy(), engine or default_engine()
         self.unresolved = defaultdict(list)       # (path, failure) -> local failing cases: the hidden eval
         self.bounties, self.spent, self.events, self.tried = {}, 0, [], set()
+        self.challenges = {}                      # (path, failure) -> challenge id (v0.8)
 
     # -- hooks -------------------------------------------------------------------------------------------------------
     def on_result(self, text, out, failure=None):
@@ -71,6 +77,10 @@ class Autopilot:
         due = [k for k in keys if len(self.unresolved[k]) >= self.policy.bounty_after and k not in self.bounties]
         if due:
             return [self._bounty(path, due)]
+        big = [k for k in keys if self.policy.challenge_after and k in self.bounties and k not in self.challenges
+               and len(self.unresolved[k]) >= self.policy.challenge_after]
+        if big:
+            return [self._challenge(path, big)]
         if all(k in self.bounties for k in keys):
             return [{"action": "already_posted", "bounty": self.bounties[keys[0]], "path": path}]
         return [{"action": "noted", "path": path, "failures": kinds, "seen": max(len(self.unresolved[k]) for k in keys)}]
@@ -114,6 +124,42 @@ class Autopilot:
 
     def _model_name(self):
         return self.base_model["name"] if isinstance(self.base_model, dict) else str(self.base_model)
+
+    def _challenge(self, path, due):
+        """A failure its bounty hasn't fixed: post it as a challenge bounty (SPEC 4k), maximize the pass rate on the
+        hidden failing cases kept here (only their hash is published; drawn validators get them privately)."""
+        cases = list({json.dumps(c, sort_keys=True): c for k in due for c in self.unresolved[k]}.values())
+        failure = due[0][1] if len(due) == 1 else "unresolved:" + ",".join(sorted(k.split(":", 1)[1] for _, k in due if ":" in k))
+        eval_set = "sha256:" + hashlib.sha256(canonical(cases)).hexdigest()
+        model = self._model_name()
+        ch = {"v": "challenge/0.1", "title": f"Beyond one fix: {self._title(path, failure, len(cases))}"[:200],
+              "statement": (f"Agents on {model} keep failing {failure} on {path} (task {self.task}, checker "
+                            f"{self.checker}); a bounty did not fix it. Raise the pass rate on the hidden failing cases."),
+              "path": path or "uncategorised", "key": f"autopilot|{path}|{failure}|{model}".lower(),
+              "metric": {"name": "pass_rate", "direction": "maximize", "baseline": 0.0,
+                         "target": self.policy.bounty_target, "min_step": 0.05},
+              "verifier": {"id": "pass-rate@1", "kind": "registry",
+                           "instance": {"checker": self.checker, "eval_set": eval_set}},
+              "instances": {"hidden": {"digest": eval_set, "count": len(cases),
+                                       "held_by": "the poster; shared privately with drawn validators"}},
+              "source": {"name": "traceX autopilot"}, "epochs": self.policy.challenge_epochs}
+        try:
+            r = self.c.post_challenge(ch)
+        except RuntimeError as e:                 # a node without challenges (the retired dollar node)
+            for k in due:
+                self.challenges[k] = None
+            return {"action": "challenge_unavailable", "path": path, "failure": failure, "why": str(e)[:120]}
+        cid = r["id"]
+        for k in due:
+            self.challenges[k] = cid
+        act = {"action": "backed_existing_challenge" if r.get("merged") else "posted_challenge", "challenge": cid,
+               "path": path, "failure": failure, "cases": len(cases), "eval_set": eval_set}
+        back = min(self.policy.back_msats, self.policy.budget_msats - self.spent)
+        if back > 0:
+            self.c.pledge_challenge(cid, back)
+            self.spent += back
+            act["pledged_msats"] = back
+        return act
 
     def _bounty(self, path, due):
         cases = list({json.dumps(c, sort_keys=True): c for k in due for c in self.unresolved[k]}.values())

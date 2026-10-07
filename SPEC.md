@@ -225,7 +225,9 @@ an agent a participant by default.
 
 - **MCP server.** `python -m traceex.mcp --node <url> --address <wallet>` (or `traceex-mcp`) gives any MCP-capable
   agent the exchange as tools: `traceex_taxonomy`, `traceex_search`, `traceex_find_learnings`, `traceex_list_bounties`,
-  `traceex_post_bounty`, `traceex_back_bounty` (a refundable pledge), `traceex_submit_fix`, `traceex_report_usage`, `traceex_balance`. The
+  `traceex_post_bounty`, `traceex_back_bounty` (a refundable pledge), `traceex_submit_fix`, `traceex_report_usage`, `traceex_balance`
+  (v0.8 adds `traceex_challenges`, `traceex_post_challenge`, `traceex_submit_challenge` and `traceex_back_challenge`,
+  4k). The
   server's instructions tell the agent when to act: search before giving up, adopt proven learnings, submit every
   verified fix, post a bounty when a failure keeps recurring. It runs on the agent's machine, so fixes become skeletons
   before anything is sent, and bounty pledges are capped by the owner's budget (default 0).
@@ -719,6 +721,158 @@ library only), `node/composition.py` the node's service, `examples/tropical_comp
   graphs for environments that are not deterministic or can't be reset (TROPIC's own requirement); training a tropic
   learning end to end (the export is there, the run needs the TROPIC stack on Linux).
 
+## 4k. Challenge bounties (v0.8 draft)
+
+A bounty pays one fix of one failure. Some problems are bigger than any single fix: an open conjecture, an
+optimisation record, a failure that keeps growing however many fixes are tried. traceX hosts those as **challenges**:
+a problem with a deterministic verifier, a direction and a public leaderboard, posted free, backed by refundable
+pledges, and paid **per verified improvement**. `node/challenges.py` is the node's service (sats node only),
+`sdk/python/traceex/challenges.py` the file format, payout curve, importers and exporter, `traceex/verifiers.py` the
+verifiers, `examples/challenges/sample` a small imported sample.
+
+- **The challenge file** (`challenge/0.1`): `title`, `statement`, `path`; `key` (what the problem *is*, e.g.
+  `alphaevolve:packing_circles_max_sum_of_radii:n=26`) and `aliases` (`erdos:28`); `metric` (`name`, `direction`
+  maximize or minimize, `baseline`: the best score known when posted, with its source; optional `target`; `scale`,
+  `min_step`, `min_step_rel`, `final_share`); `verifier` (`id`, `kind`, `instance`); optional `instances.hidden` (held
+  by validators, only a digest published); `source` (name, url, licence, ref).
+- **The verifier contract** is the same for every kind and matches a Yukon-style benchmark: a verifier returns one
+  finite score, or says the submission is invalid (a nonzero exit and no score file, for a command). Kinds: `python`
+  (the node runs it, twice: the two scores must agree, the determinism gate; built-ins are circle packing in a square,
+  maximize the sum of radii, and the Tammes problem, re-implementing the AlphaEvolve repository's checks without
+  dependencies); `lean4` (a proof of the exact statement: `lean_gate` checks in Python that the declaration's statement
+  is the challenge's up to whitespace, an `answer(sorry)` may be filled, and that it uses no sorry, admit, axioms,
+  unsafe code, imports or kernel-skipping tactics; `LeanRunner` compiles it in a checkout of the source repository and
+  accepts it only if `#print axioms` shows nothing beyond propext, Classical.choice and Quot.sound); `command` (a
+  benchmark.json's setup and benchmark commands, run by validators in their own sandbox, never by the node);
+  `registry` (a failure's pass rate on validators' own hidden cases); `none` (a listing with no verifier yet).
+- **One problem, one challenge.** A post whose key or any alias matches an open challenge's, judged the same way
+  (the same verifier, instance and direction, or one side with no verifier yet), backs that one (`merged`); its
+  aliases and source are added, and a source with a verifier upgrades a listing that had none. A post that borrows a
+  problem's key with a different verifier opens its own challenge, so nobody can squat a key with a rigged test. So the Erdős
+  problems database's status entry `erdos:28` and formal-conjectures' Lean statement of the same problem are one
+  challenge with two sources and a Lean verifier. Posting is free (the 58-msat fee; operator imports and escalations
+  pay none). Every challenge starts unfunded and, like a v0.6 bounty, expires if nobody pledges to it within
+  `unbacked_epochs` (3), or at its deadline (26 epochs by default, at most 520).
+- **A baseline is only as good as its reference.** A post may carry a `reference` solution: the node scores it with
+  the challenge's verifier (it must be one the node runs) and takes that score as the baseline; an invalid reference
+  is refused. The AlphaEvolve sample carries each notebook's construction this way. A merged post whose reference beats
+  the board's best by the step raises the best (unpaid; the reference sits on the board, and resubmitting it is
+  refused as a copy) and **rebases every pledge** to start from it, so no pledge ever pays for a result that was
+  already known.
+- **Pledges and the payout curve.** Anyone pledges sats (`POST /v0/challenges/{id}/pledges`), each pledge its own
+  payment in its own escrow, as for bounties. A pledge is released along a curve of the best verified score alone.
+  Progress is `u = (score - baseline) / scale` (reversed when minimizing). With a target, `scale = |target - baseline|`
+  and `P(u) = (1 - final_share) x min(u, 1) + final_share x [u >= 1]`: by default half streams out in proportion to
+  progress and half waits for the target; reaching it releases everything left and the challenge is **solved**.
+  Without a target, `P(u) = 1 - 2^-u`: every `scale` of improvement releases half of what is left. A pledge made when
+  the best was `b` (or at the `from_score` its backer names; never anything worse than the best then) has released
+  `floor(amount x (P(best) - P(b)) / (1 - P(b)))`. Each improvement's tranche is that, less what the pledge already
+  released.
+- **The improvement step.** A submission counts only if it beats the best by `max(min_step, min_step_rel x |best|)`
+  (default `min_step = scale / 100`; Yukon's `minScoreImprovementBips` maps to `min_step_rel`), and where validators
+  measure it, by that much beyond twice their standard error. Because P is a function of the best score alone,
+  payouts **telescope**: k small improvements pay exactly what one improvement to the same score pays (the test
+  suite checks it), so splitting work into epsilon steps earns nothing but extra fees. The step's job is to keep
+  noise and trivial tweaks off the payroll.
+- **Where the money goes.** Each tranche is split **solver 70 / traces 20 / checkers 5 / validators 5** (the bounty
+  split) down the solution's family tree, vesting 4 epochs, inside the existing `_split` / `_disburse` (with a new
+  `amount` argument for the tranche): nothing is paid out that a payer didn't pay in, and `audit()` stays balanced.
+  The checkers' 5% goes to the verifier's author (whoever registered it; the operator for the built-ins).
+- **Solutions become traces and learnings.** Every paid improvement is filed as a trace (task `challenge.<id>`, the
+  solution as its verified output, privacy open, the verifier as its checker, findable in search under
+  `failure_id challenge:<id>`) and an accepted learning of kind `challenge_solution`, whose parents are its own trace
+  and the paid solutions it builds on: the ones it names, and any earlier paid solution it mostly repeats
+  (`traceex.verifiers.similarity` >= 0.5: the share of numbers, or words, two solutions have in common). So a
+  copy-and-tweak that does clear the step pays the copied solution's producer part of the traces' share, and a
+  learning built on the solutions keeps paying their producers through ordinary metered usage. A challenge solution is
+  not re-measured as a learning (the learning challenge refuses it): its verifier is deterministic, or validators
+  measured it.
+- **Verification.** A `python` verifier the node runs scores a submission at once; the fee is its only cost.
+  Everything else (hidden instances, Lean without a node-side runner, command benchmarks, a failure's pass rate) is
+  measured by validators drawn by stake-weighted rendezvous hashing over the beacon after the submission (never the
+  submitter), commit then reveal `{score, se?, n?}`, operator-relayed until signed; the median sets the leaderboard.
+  Every submission holds a **1,000-sat bond**: returned at once if it improves nothing; destroyed if validators find
+  it invalid or it **overfits** (its public score beats the hidden median by more than 10 minimum steps or 3 standard
+  errors); and, when it is paid, held with its tranches through the 4-epoch vesting window, where prior art can take
+  it (below).
+- **Whoever pays judges.** A validator verdict moves no backer's money by itself. Node-scored improvements pay at once
+  (the verifier is fixed code the backer pledged under, and anyone can re-run it). A validator-measured improvement
+  pays a pledge only when that pledge's **judge** (its backer by default, or whoever it named, such as the poster
+  holding the hidden instances) confirms it with its own measurement (`POST /v0/challenges/submissions/{id}/
+  confirmations`, operator-relayed), up to the lower of the two scores, and only if that beats what the pledge has
+  already paid for by the step. The board's best doesn't gate a confirmation, so a fake best that a captured validator
+  majority puts on the board blocks nobody from being paid for honest work. A pledge whose judge never confirms comes
+  back at expiry.
+- **Prior-art claims: a result that was already known pays nobody.** During the vesting window anyone can dispute
+  paid progress as already known (`POST /v0/challenges/{id}/prior-art`, a 2,000-sat stake): a `reference` solution and
+  its provenance, either `{kind: tracex}` (the same solution, under the same verifier and instance, was on traceX's
+  boards before the challenge was posted: an import's reference or any earlier submission; the node checks it at
+  once) or `{kind: external, url, date, commit?}` (a dated public record, which validators drawn as for submissions,
+  never the challenger or the challenge's submitters, check against the challenge's posting time, commit then reveal,
+  operator-relayed). The node re-runs its verifier on the reference (validators score it for other verifiers; the
+  claim's own score is a ceiling). **Upheld** when the record is older than the challenge, the reference is valid, and
+  it scores R above where some still-vesting paid progress started: every tranche still vesting from the first
+  disputed submission on goes back into the pledges' escrow (it never left it: the vesting rows are released, not
+  paid), the best and every pledge are rebased to R (a pledge's remaining amount restarts from R, so `from_score`
+  defaults to the larger of the posted baseline and any known reference), submissions that added nothing beyond R by
+  the minimum step lose their bond, and the ones that did are paid again from R, for the new part only. The challenger
+  gets its stake back and a fixed **500-sat reward out of the destroyed bond**, never out of backers' escrow; the rest
+  of the bond is destroyed. **Rejected**: the stake is destroyed. While a claim is pending, that challenge's tranches
+  and bonds wait; a claim validators never answer lapses after 2 epochs and its stake comes back. Importers must set
+  the baseline to the source's best known result where it has one (the AlphaEvolve importer ships each notebook's
+  construction as a verified `reference`; a Yukon benchmark.json, which carries no score, is refused without a
+  baseline).
+- **Auto-posting.** (a) **Importers** (`python -m traceex.challenges import <files> --node … --address …`), all from
+  openly licensed sources, as samples, not mirrors: the AlphaEvolve repository of problems (Apache-2.0 / CC-BY-4.0:
+  each notebook's own best construction, scored by our verifier, is the baseline; notebooks are parsed, never run),
+  formal-conjectures (Apache-2.0: every `@[category research open]` theorem proved by `sorry` becomes a Lean
+  challenge, Erdős problems with the alias `erdos:<n>`), the Erdős problems database (Apache-2.0: status data only;
+  statements live on erdosproblems.com and are not copied) and Yukon-style benchmark.json (schemaVersion 1, or 2 with
+  one challenge per track). `GET /v0/challenges/{id}/export?format=yukon` writes benchmark.json, a standalone
+  verify.py for a python verifier (it keeps the score-file contract: `{"score", "metrics"}` and exit 0, or exit 1 and
+  no score file) and our own fields in a separate tracex.json. (b) **Escalation**: a registry failure open (or
+  regressed) for 6 epochs whose growth stays positive for 3 settlements in a row becomes a challenge, key
+  `failure|TXF-…`: maximize its pass rate on validators' hidden cases, target the registry's fixed rate. (c)
+  **Agents**: the autopilot (`Policy(challenge_after=N)`, off by default) posts a challenge when a failure keeps coming
+  back after its bounty, keeping the failing cases on the device (only their hash is published) and backing it within
+  the owner's budget; the same problem from another agent merges.
+- **Interoperability, and what we don't do.** The benchmark.json reader and writer follow the public format in our
+  own words; traceX does not scrape or mirror any challenge platform's site, leaderboards or texts, and claims no
+  affiliation. Command verifiers never run on a node.
+- **Anti-farming** (`examples/farming/attacks.py`, the `Challenges:` rows and one majority row, 30 seeds, 2026-10-06;
+  the 39 earlier rows unchanged to the sat):
+
+  | attack | mean vs honest work, 30 runs | best run | runs it paid |
+  |---|---|---|---|
+  | self-funded challenge (50,000 sats), solved with its own improvements | -5,000 sats | -5,000 sats | 0 of 30 |
+  | one real improvement split into 20 epsilon steps, against one submission | -1.12 sats | -1.12 sats | 0 of 30 |
+  | overfit the public instances (public 19, hidden 10.3) | -1,000 sats | -1,000 sats | 0 of 30 |
+  | 20 sybil accounts resubmit the best and 20 sub-step variants | -1.16 sats | -1.16 sats | 0 of 30 |
+  | copy the best with a tweak under the minimum step | -0.058 sats | -0.058 sats | 0 of 30 |
+  | 4 of 7 validator seats fake a hidden-instance score | -0.29 sats | -0.29 sats | 0 of 30 |
+  | understate the baseline (10; the record 18 was public before), then submit the record | -1,000 sats | -1,000 sats | 0 of 30 |
+  | griefing: 3 false prior-art claims against an honest improvement | -6,000 sats | -6,000 sats | 0 of 30 |
+
+  Self-funding returns the solver's 70% and its own trace's 20%; the verifier author's and validators' 10% and the
+  fees do not come back. Epsilon steps telescope to one submission's pay, less 19 fees and a few msats of rounding
+  (each tranche's rounding goes back to the backer). Overfitting is caught on the hidden instances and costs the bond.
+  Copies are refused (the first submitter holds a solution) and sub-step variants are scored but unpaid. A captured
+  majority can put a fake best on the board, but no backer's judge confirms it. The baseline lure (posting a problem
+  with an understated baseline, then submitting the known record) loses its 1,000-sat bond when the honest watchdog
+  files a prior-art claim with the dated record during the vesting window, and the tranche goes back to the backer's
+  escrow. False prior-art claims lose their stake each time; the honest tranche only waits while they are open.
+  **The limit**, as with learning challenges (4f): the lure is caught only if someone files the prior art within the
+  4-epoch window (unwatched, the same run pays the attacker +18,000 sats), and an external record is only as honest as
+  the drawn validators who check its date (a `tracex` record the node checks itself). A backer who knows the record
+  can also pledge `from_score=<record>` (the attacker then earns -0.058 sats), and a record imported as a reference
+  first leaves it exactly 0 (its copy of the record is refused).
+- **Not built yet.** Signatures on validator and judge messages (operator-relayed, as elsewhere); a node-side sandbox
+  (the node never runs submitted code; a Lean runner belongs on a validator's machine, since it blocks while it
+  compiles); paying validators for measuring submissions (they earn the 5% of what they vouched for, not per
+  measurement, and are not slashed for not revealing); re-measuring a validator-measured solution after it is paid;
+  importers for more AlphaEvolve families (two are wired: circle packing and Tammes); after an upheld prior-art
+  claim, a validator-measured solution beyond the known result is paid again only through its judges.
+
 ## 5. Ownership and settlement at near-zero cost
 - **On-chain (L2, e.g. Base):** `Registry` (trace and learning ids, owners, licences, parents, attestations) and
   `PayoutDistributor` (one Merkle root of `(address, amount)` per epoch). One transaction per epoch, no matter how many
@@ -768,6 +922,9 @@ library only), `node/composition.py` the node's service, `examples/tropical_comp
 - `examples/flight_emails/` — a flight-email extraction loop as the first producer, end to end (`demo.py`).
 - `sdk/python/traceex/tropic.py`, `node/composition.py` — v0.8: step graphs, tropical values, frontier, composition,
   credit, the tropic export (4j); `examples/tropical_composition/` — the cross-agent composition experiment.
+- `node/challenges.py`, `sdk/python/traceex/challenges.py`, `sdk/python/traceex/verifiers.py` — v0.8: challenge
+  bounties (4k): the challenge file, the payout curve, verifiers, importers (AlphaEvolve, formal-conjectures, Erdős
+  problems, benchmark.json) and the benchmark.json exporter; `examples/challenges/sample/` — a small imported sample.
 - `examples/code_repair/` — open weights: Qwen2.5-0.5B-Instruct on MBPP, unit tests as the checker, tracebacks fed
   back, `produce.py` → `train_lora.py` (LoRA on one RTX 3060) → `evaluate.py` (500 held-out problems, paired sign
   test); every generation recorded so `demo.py` replays the run without a GPU.
@@ -812,6 +969,16 @@ host app `extend-hq/jevbox`) for sorting traces into task lots and helping agent
 | GET | `/v0/bounties` | `path`, `status` filters; each with `pool_msats` (in escrow), `pledged_msats`, backers, deadline |
 | POST | `/v0/bounties/{id}/pledges` | `{backer, msats}` (or `sats`) → a refundable pledge into the bounty's escrow |
 | GET | `/v0/bounties/{id}/backers` | what each backer pledged, what the bounty holds |
+| GET | `/v0/challenges` | v0.8: `status` (open / solved / expired / removed / all), `path`, `q`, `origin` → challenges with metric, direction, baseline, best, target, minimum step, verifier, sources, escrow, backers |
+| GET | `/v0/challenges/{id}`, `/leaderboard`, `/backers`, `/export?format=yukon` | one challenge (its file and the top of its board); every scored submission, best first; each pledge (from_score, judge, released, held); benchmark.json + verify.py + tracex.json |
+| POST | `/v0/challenges` | a `challenge/0.1` file with `poster` (and `seed_msats`?, `reference`?: a solution the node scores as the baseline), or `{format: yukon, benchmark, baseline}` → free; a key or alias matching an open challenge judged the same way backs it (`merged`; a better reference raises its best and rebases its pledges) |
+| POST | `/v0/challenges/{id}/pledges` | `{backer, msats or sats, from_score?, judge?}` → a refundable pledge, released along the challenge's curve |
+| POST | `/v0/challenges/{id}/submissions` | `{submitter, solution or artifact, outputs?, public_score?, parents?, model?, per_call_msats?}` → scored at once by a node verifier, or pending for validators (1,000-sat bond) |
+| GET | `/v0/challenges/submissions/{id}` | one submission: scores, status, validators drawn, its trace and learning, what it was paid |
+| POST | `/v0/challenges/{id}/prior-art` | `{challenger, reference, provenance: {kind: tracex} or {kind: external, url, date, commit?}, score?}` → a 2,000-sat prior-art claim against paid progress still vesting |
+| GET | `/v0/challenges/prior-art/{id}` | one claim: provenance, score, status (pending / upheld / rejected / lapsed), validators drawn |
+| POST | `/v0/challenges/prior-art/{id}/commits`, `.../reveals` | operator-relayed: a validator's commitment, then `{measurement: {prior, score?}, salt}` |
+| POST | `/v0/challenges/submissions/{id}/commits`, `.../reveals`, `.../confirmations` | operator-relayed: a validator's commitment and `{measurement: {score, se?, n?}, salt}`; a pledge judge's `{judge, measurement: {score}}` |
 | POST | `/v0/bounties/{id}/claims` | operator-relayed: `{learning, attestation}` with the poster's own measurement on the hidden eval → the pledges vest to the solver and the tree |
 
 On the retired v0.1 dollar node the same amounts are `_micros` (and a claim needs no poster measurement). Any call a

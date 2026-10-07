@@ -96,6 +96,50 @@ budget the shared graph did **not** solve more problems overall than the three a
 example's README. Every composition attack in `examples/farming/attacks.py` loses, except padding a trace with loops
 or a detour, which earns exactly what the unpadded trace earns (SPEC 4j).
 
+## Challenge bounties (v0.8 draft)
+
+Some problems are bigger than one fix: an open conjecture, an optimisation record, a failure that keeps growing. traceX
+hosts them as **challenges**: a problem with a deterministic verifier, a direction (maximize or minimize), the best
+score known when it was posted, and a public leaderboard. Posting is free; anyone pledges sats, refunded at the end
+for whatever no improvement earned. Challenges pay **per verified improvement**, not once: each pledge is released
+along a curve of the best verified score (with a target, half streams out with progress and half waits for the
+target; without one, every `scale` of improvement releases half of what is left). The curve depends on the best score
+alone, so ten small improvements pay exactly what one improvement to the same score pays: splitting work earns only
+extra fees. An improvement must beat the best by a minimum step. Each tranche is split solver 70 / traces 20 /
+checkers 5 / validators 5, and every paid solution becomes a trace and a learning with the normal family tree, so a
+solution that others build on (or copy and tweak) keeps paying its producer.
+
+The node runs python verifiers itself (twice: the scores must agree). Hidden instances, Lean proofs and command
+benchmarks are measured by drawn validators, with a 1,000-sat bond the submission loses if it is invalid or overfits
+its public instances. Whoever pays judges: a validator-measured improvement pays a pledge only when that pledge's judge
+(its backer, or whoever it names) confirms it, so no validator verdict moves anyone's money by itself.
+
+Challenges post themselves, too: importers read openly licensed sources (Google DeepMind's AlphaEvolve repository of
+problems, formal-conjectures' open Lean statements, the Erdős problems database's status data; Apache-2.0, see
+[NOTICE](NOTICE)) and Yukon-style `benchmark.json` manifests; the same problem from two sources merges into one
+challenge (`erdos:28` from the database and its Lean statement are one challenge with a Lean verifier). A registry
+failure that stays open and keeps growing becomes a challenge, and an agent's autopilot can post one when a bounty
+didn't fix its failure. Imported and escalated challenges start unfunded and expire if nobody backs them.
+
+```bash
+python -m traceex.challenges import examples/challenges/sample/*.json --node $NODE --address 0xYou   # free; duplicates merge
+curl "$NODE/v0/challenges"                                          # open problems, best scores, escrow
+curl -X POST "$NODE/v0/challenges/1/pledges" -d '{"backer": "0x…", "sats": 5000, "from_score": 2.6359}'
+curl -X POST "$NODE/v0/challenges/1/submissions" -d '{"submitter": "0x…", "solution": {"centers": [...], "radii": [...]}}'
+curl "$NODE/v0/challenges/1/leaderboard"
+curl "$NODE/v0/challenges/1/export?format=yukon"                    # benchmark.json + a standalone verify.py
+```
+
+A result that was already known pays nobody: during the 4-epoch vesting window anyone can file a **prior-art claim**
+(a 2,000-sat stake) with the known solution and its provenance (an earlier traceX record, or a dated public URL or
+commit that validators check). Upheld, the tranches go back to the backers' escrow, the best and every pledge are
+rebased to the known result, and the submitter's bond pays the challenger a fixed 500 sats (the rest is destroyed);
+rejected, the stake is destroyed. Paid submissions hold their 1,000-sat bond through that window.
+
+Every challenge attack in `examples/farming/attacks.py` loses: self-funding, epsilon steps, overfitting, sybil
+submissions, copy-and-tweak, a validator majority faking a score, a poster who understates the baseline and submits
+the known record (caught by a prior-art claim within the window), and griefing with false prior-art claims (SPEC 4k).
+
 ## Run a public exchange
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/matthewcauble-boop/traceex)
@@ -286,6 +330,8 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
 | `examples/otel_agent/`, `examples/ci/` | a fake agent's GenAI spans through the exporter; the plugin in a GitHub Action |
 | `sdk/python/traceex/tropic.py`, `node/composition.py` | v0.8 draft: step graphs, tropical values, frontier, composition with replay, failed attempts as unpaid reports, per-trace credit to passing step traces, the `tropic` export (after TROPIC, MIT, see NOTICE) |
 | `examples/tropical_composition/` | the pre-registered test: does joining fragments across agents solve problems no single agent solved? (Countdown, Qwen2.5-0.5B) |
+| `node/challenges.py`, `sdk/python/traceex/challenges.py`, `verifiers.py` | v0.8 draft: challenge bounties: the challenge file, the payout curve, verifiers (circle packing, Tammes, the Lean gate and runner), importers and the benchmark.json exporter |
+| `examples/challenges/sample/` | a small imported sample: three AlphaEvolve problems, two formal-conjectures statements, three Erdős database entries, an exported benchmark |
 | `examples/farming/` | `attacks.py`: farming strategies run against a real sats node, with profit or loss |
 | `examples/scaling/` | `simulate.py`: payouts are the same share of paid usage from $10 to $1B a day |
 | `examples/fees/` | `measure.py`: what each kind of transaction costs in electricity, and so the standard fee |

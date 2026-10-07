@@ -1,0 +1,32 @@
+{
+  "v": "challenge/0.1",
+  "title": "Pack 26 disjoint circles in a unit square, maximizing the sum of their radii",
+  "statement": "Place 26 disjoint circles (touching allowed) inside the unit square [0,1]^2 so that the sum of their radii is as large as possible. Submit {\"centers\": [[x, y]] * 26, \"radii\": [r] * 26}.",
+  "path": "math/packing",
+  "key": "alphaevolve:packing_circles_max_sum_of_radii:n=26",
+  "metric": {
+    "name": "sum_of_radii",
+    "direction": "maximize",
+    "baseline": 2.6359830849176067,
+    "baseline_source": "best construction in https://github.com/google-deepmind/alphaevolve_repository_of_problems/tree/main/experiments/packing_circles_max_sum_of_radii",
+    "scale": 0.001,
+    "min_step": 1e-06,
+    "min_step_rel": 0.0,
+    "final_share": 0.0
+  },
+  "verifier": {
+    "id": "circle-packing-sum-radii@1",
+    "kind": "python",
+    "instance": {
+      "n": 26
+    }
+  },
+  "source": {
+    "name": "AlphaEvolve repository of problems (Google DeepMind)",
+    "url": "https://github.com/google-deepmind/alphaevolve_repository_of_problems",
+    "licence": "Apache-2.0 (software); CC-BY-4.0 (other materials)",
+    "cite": "Mathematical exploration and discovery at scale, arXiv:2511.02864 (2025)",
+    "ref": "experiments/packing_circles_max_sum_of_radii/packing_circles_max_sum_of_radii.ipynb"
+  },
+  "aliases": []
+}

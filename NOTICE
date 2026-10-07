@@ -54,3 +54,33 @@ distributed under the MIT licence, whose notice reads:
 
 examples/tropical_composition runs Qwen2.5-0.5B-Instruct (Alibaba Cloud, Apache-2.0); its weights are downloaded
 separately and are not part of this repository.
+
+------------------------------------------------------------------------------------------------------------------------
+
+Challenge bounties (node/challenges.py, sdk/python/traceex/challenges.py, sdk/python/traceex/verifiers.py,
+examples/challenges) import problems from these openly licensed sources:
+
+* The AlphaEvolve repository of problems, https://github.com/google-deepmind/alphaevolve_repository_of_problems,
+  Copyright 2025 Google LLC; software under the Apache License, Version 2.0, other materials under Creative Commons
+  Attribution 4.0 International (https://creativecommons.org/licenses/by/4.0/). It accompanies "Mathematical
+  exploration and discovery at scale", arXiv:2511.02864 (2025). traceex.verifiers.circle_packing_sum_radii and
+  tammes_min_distance re-implement the checks of that repository's verification code (no code copied verbatim;
+  changes: no dependencies, IEEE double arithmetic in a fixed order, an invalid submission returns no score).
+  examples/challenges/sample/alphaevolve_sample.json holds baselines our verifiers computed from the repository's
+  constructions, with those constructions (circle packing n = 26 and n = 32, Tammes n = 25; numbers unmodified) as
+  each challenge's reference solution, and examples/challenges/sample/reference/circle_packing_26.json is its
+  construction for n = 26
+  (Construction 1 in experiments/packing_circles_max_sum_of_radii), its numbers unmodified, written as JSON with an
+  added "about" note.
+* formal-conjectures, https://github.com/google-deepmind/formal-conjectures, Copyright 2025 The Formal Conjectures
+  Authors, Apache License, Version 2.0. examples/challenges/sample/formal_conjectures/FormalConjectures/ErdosProblems/
+  3.lean and 28.lean are unmodified copies, with their licence headers.
+* erdosproblems, https://github.com/teorth/erdosproblems, Apache License, Version 2.0.
+  examples/challenges/sample/erdosproblems/problems_sample.yaml holds three entries of its data/problems.yaml,
+  unmodified (status data only; problem statements on erdosproblems.com are not copied).
+
+traceex.challenges also reads and writes benchmark manifests in the publicly documented Yukon-style benchmark.json
+format (fields such as direction, editablePaths, setupCommand, benchmarkCommand, scorePath, runner,
+minScoreImprovementBips, and the {"score", "metrics"} score file). The reader and writer were written for traceX from
+the public description of the format; no code, documentation or challenge content was copied, and traceX is not
+affiliated with or endorsed by Yukon or Eigen Labs.

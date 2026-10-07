@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "pack-26-disjoint-circles-in-a-unit-square-maximizing-the-sum",
+  "description": "Place 26 disjoint circles (touching allowed) inside the unit square [0,1]^2 so that the sum of their radii is as large as possible. Submit {\"centers\": [[x, y]] * 26, \"radii\": [r] * 26}.",
+  "category": "math-packing",
+  "direction": "+",
+  "editablePaths": [
+    "submission/"
+  ],
+  "setupCommand": [
+    "true"
+  ],
+  "benchmarkCommand": [
+    "python",
+    "verify.py",
+    "submission/solution.json",
+    "score.json"
+  ],
+  "scorePath": "score.json",
+  "runner": {
+    "provider": "github-actions",
+    "workflow": "benchmark.yml"
+  },
+  "minScoreImprovementBips": 1
+}

@@ -77,7 +77,9 @@ class Learning(dict):
 
     # "tropic" (v0.8): weights trained by maximum likelihood on the best verified paths of failures' step graphs
     # (traceex.tropic.export_tropic), parents the path traces it trained on (TROPIC, arXiv 2610.02478)
-    KINDS = ("routing", "rule", "prompt_patch", "decoding", "lora", "full_finetune", "checker", "package", "tropic")
+    # "challenge_solution" (v0.8): a verified improvement on a challenge bounty, filed by the node (SPEC 4k)
+    KINDS = ("routing", "rule", "prompt_patch", "decoding", "lora", "full_finetune", "checker", "package", "tropic",
+             "challenge_solution")
 
     @classmethod
     def build(cls, *, kind, task, base_model, artifact, parents, trainer, attestation, per_call_msats=None,

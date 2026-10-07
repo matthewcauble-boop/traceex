@@ -1127,6 +1127,7 @@ class RateLimit:
 def make_handler(ex, public=False, admin_token=None, limiter=None):
     limiter = limiter or (RateLimit() if public else None)
     sats_mode = getattr(ex, "economy", "") == "sats"
+    has_challenges = hasattr(ex, "post_challenge")       # v0.8: challenge bounties (sats node, SPEC 4k)
 
     class H(BaseHTTPRequestHandler):
         server_version = "traceX/0.1"
@@ -1265,6 +1266,26 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     return self._send(200, ex.reporter(u.path.split("/", 3)[3]))
                 if u.path == "/v0/bounties":
                     return self._send(200, ex.bounties(q.get("path", ""), q.get("status", "")))
+                if has_challenges and u.path == "/v0/challenges":
+                    st = q.get("status", "open")
+                    return self._send(200, ex.challenges("" if st == "all" else st, q.get("path", ""), q.get("q", ""),
+                                                         q.get("origin", ""), int(q.get("limit", 50))))
+                mc = re.fullmatch(r"/v0/challenges/(\d+)(?:/(leaderboard|backers|export))?", u.path)
+                if has_challenges and mc:
+                    i = int(mc[1])
+                    if mc[2] == "leaderboard":
+                        return self._send(200, ex.leaderboard(i, int(q.get("limit", 50))))
+                    if mc[2] == "backers":
+                        return self._send(200, ex.challenge_backers(i))
+                    if mc[2] == "export":
+                        return self._send(200, ex.export_challenge(i, q.get("format", "yukon")))
+                    return self._send(200, ex.get_challenge(i))
+                mpg = re.fullmatch(r"/v0/challenges/prior-art/(\d+)", u.path)
+                if has_challenges and mpg:
+                    return self._send(200, ex.prior_claim(int(mpg[1])))
+                ms = re.fullmatch(r"/v0/challenges/submissions/(\d+)", u.path)
+                if has_challenges and ms:
+                    return self._send(200, ex.submission(int(ms[1])))
                 mv = re.fullmatch(r"/v0/learnings/([^/]+)/verdict", u.path)
                 if mv and sats_mode:
                     return self._send(200, ex.verdict(mv[1]))
@@ -1360,6 +1381,40 @@ def make_handler(ex, public=False, admin_token=None, limiter=None):
                     if mfx[2] == "commits":
                         return self._send(200, ex.commit_fix(mfx[1], b["validator"], b["digest"]))
                     return self._send(200, ex.reveal_fix(mfx[1], b["validator"], b["measurement"], b.get("salt", "")))
+                if has_challenges:                       # v0.8: challenge bounties (SPEC 4k)
+                    if self.path == "/v0/challenges":
+                        return self._send(200, ex.post_challenge(self._body()))
+                    mcp_ = re.fullmatch(r"/v0/challenges/(\d+)/(pledges|submissions|prior-art)", self.path)
+                    if mcp_:
+                        b, i = self._body(), int(mcp_[1])
+                        if mcp_[2] == "prior-art":
+                            return self._send(200, ex.file_prior_art(i, b))
+                        if mcp_[2] == "pledges":
+                            return self._send(200, ex.pledge_challenge(i, b.get("backer"), msats_in(b, required=True),
+                                                                       b.get("from_score"), b.get("judge")))
+                        return self._send(200, ex.submit_solution(i, b))
+                    mpa = re.fullmatch(r"/v0/challenges/prior-art/(\d+)/(commits|reveals)", self.path)
+                    if mpa:
+                        if not self._admin():
+                            return self._send(403, {"error": "validator messages are relayed by the operator until they "
+                                                             "are signed"})
+                        b = self._body()
+                        if mpa[2] == "commits":
+                            return self._send(200, ex.commit_prior(int(mpa[1]), b["validator"], b["digest"]))
+                        return self._send(200, ex.reveal_prior(int(mpa[1]), b["validator"], b["measurement"],
+                                                               b.get("salt", "")))
+                    mcv = re.fullmatch(r"/v0/challenges/submissions/(\d+)/(commits|reveals|confirmations)", self.path)
+                    if mcv:                              # validator and judge messages: operator-relayed until signed
+                        if not self._admin():
+                            return self._send(403, {"error": "validator and judge messages are relayed by the operator "
+                                                             "until they are signed"})
+                        b = self._body()
+                        if mcv[2] == "confirmations":
+                            return self._send(200, ex.confirm_solution(int(mcv[1]), b["judge"], b["measurement"]))
+                        if mcv[2] == "commits":
+                            return self._send(200, ex.commit_solution(int(mcv[1]), b["validator"], b["digest"]))
+                        return self._send(200, ex.reveal_solution(int(mcv[1]), b["validator"], b["measurement"],
+                                                                  b.get("salt", "")))
                 mfr = re.fullmatch(r"/v0/failures/([A-Za-z0-9-]+)/fragments", self.path)
                 if mfr:                                  # v0.8: a step trace, replayed and composed on arrival
                     return self._send(200, ex.submit_fragment(mfr[1], self._body()))

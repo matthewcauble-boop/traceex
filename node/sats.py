@@ -54,6 +54,7 @@ from exchange import (ADDRESS, BOUNTY_SPLIT, MAX_DEPTH, TX_FEE_MSATS, Exchange, 
                       msats_in, split_trace_sale, split_usage, leaf, build_tree, proof, canonical, object_id,
                       clear_shared, Bid)
 from registry import Registry
+from challenges import Challenges
 from traceex.trace import Learning
 
 VERSION = "0.7"
@@ -121,6 +122,13 @@ class Params:
     fix_bond_msats: int = 2_000_000            # v0.7: 2,000 sats with each fix claim, destroyed if it fixes none of them
     reporter_bond_msats: int = 1_000_000       # v0.7: 1,000 sats makes a reporter verified (counted); destroyed if a
                                                # case it reported does not reproduce
+    challenge_sub_bond_msats: int = 1_000_000  # v0.8: a challenge submission validators must measure holds 1,000 sats,
+                                               # destroyed if it is invalid or overfits its public instances
+    challenge_overfit_steps: float = 10.0      # public score beating the hidden median by more than this many minimum
+                                               # steps (or 3 standard errors): overfit
+    prior_art_reward_msats: int = 500_000      # v0.8: an upheld prior-art claim's reward, out of the destroyed bond
+    escalate_after: int = 6                    # a failure open this many epochs...
+    escalate_streak: int = 3                   # ...whose growth stayed positive this many settlements becomes a challenge
 
 
 SATS_SCHEMA = """
@@ -223,7 +231,7 @@ def tolerance(att, z, floor):
     return max(floor, z * standard_error(att))
 
 
-class SatsExchange(Exchange):
+class SatsExchange(Challenges, Exchange):
     economy = "sats"
     money = "msats"
 
@@ -267,6 +275,7 @@ class SatsExchange(Exchange):
             self._set_meta("sats_version", VERSION)
         self.db.commit()
         Registry._open_registry(self)
+        self._open_challenges()                                 # v0.8: challenge bounties (node/challenges.py)
         if mine in UPGRADES_FROM:
             self._event(f"node upgraded from v{mine} to v{VERSION}: every stored trace filed in the failure registry",
                         force=True)
@@ -385,12 +394,15 @@ class SatsExchange(Exchange):
         left = self._bal(f"pay:{pid}") - live
         return self._disburse(pid, self._payment(pid)[1], left, f"refund: {why}", refund=True) if left > 0 else 0
 
-    def _split(self, pid, lid, split, tree, vest=(), withhold=False):
-        """Split what payment `pid` holds by the protocol's `split` down `lid`'s family tree: roles in `vest` wait
-        vest_epochs in the payment's escrow, the others are paid now; what the tree can't place (withheld parents,
-        rounding) goes back to the payer. The shares are checked against what the payment holds before anything moves."""
+    def _split(self, pid, lid, split, tree, vest=(), withhold=False, amount=None):
+        """Split what payment `pid` holds (or `amount` of it: a challenge's tranche) by the protocol's `split` down
+        `lid`'s family tree: roles in `vest` wait vest_epochs in the payment's escrow, the others are paid now; what the
+        tree can't place (withheld parents, rounding) goes back to the payer. The shares are checked against what the
+        payment holds before anything moves."""
         held = self._bal(f"pay:{pid}") - self.db.execute(
             "SELECT COALESCE(SUM(msats), 0) FROM vesting WHERE payment=? AND status='vesting'", (pid,)).fetchone()[0]
+        if amount is not None:
+            held = min(held, int(amount))
         if held <= 0:
             return {}
         shares = self._shares(lid, held, split, withhold=withhold, tree=tree)
@@ -981,6 +993,9 @@ class SatsExchange(Exchange):
                 raise KeyError(lid)
             if v[0] != "accepted":
                 raise ValueError("only an accepted learning can be challenged")
+            if self.db.execute("SELECT 1 FROM challenge_subs WHERE learning=?", (lid,)).fetchone():
+                raise ValueError("a challenge solution was scored by its challenge's verifier (re-run it: it is "
+                                 "deterministic) or by drawn validators; it is not re-measured as a learning")
             stake = self.challenge_stake_msats()
             self._need_funds(challenger, stake)
             self._tx_fee(challenger)
@@ -1167,6 +1182,7 @@ class SatsExchange(Exchange):
     def _release(self):
         e = self.epoch
         paused = {lid for (lid,) in self.db.execute("SELECT learning FROM verdicts WHERE status='challenged'")}
+        paused |= self._challenge_paused()               # v0.8: a prior-art claim is pending on its challenge
         for vid, account, msats, pid, lid in self.db.execute(
                 "SELECT id, account, msats, payment, learning FROM vesting WHERE status='vesting' AND release <= ?",
                 (e,)).fetchall():
@@ -1221,6 +1237,7 @@ class SatsExchange(Exchange):
         with self.lock:
             e = self.epoch
             self._expire_bounties()
+            self._challenge_settle()                       # v0.8: expiries, validator rounds, escalations (SPEC 4k)
             # rounds that ran out of time: settle with the majority that revealed, or re-draw validators
             for lid, rnd in self.db.execute(
                     "SELECT v.learning, v.round FROM verdicts v WHERE v.status IN ('pending','challenged') AND EXISTS "
@@ -1258,6 +1275,7 @@ class SatsExchange(Exchange):
             for lid, rnd in self.db.execute("SELECT learning, round FROM verdicts WHERE status='challenged'").fetchall():
                 self._assign(lid, rnd, exclude=self.assigned(lid, rnd - 1))
             self._registry_assign()                        # v0.7: validators for fixes, from the new beacon
+            self._challenge_assign()                       # v0.8: and for challenge submissions
             summary = {"epoch": e}
             for k in ("paid_in_msats", "paid_out_msats", "refunded_msats", "fees_msats", "forfeited_msats"):
                 summary[k] = self._m(k) - self._m("mark_" + k)          # this epoch's flow
@@ -1352,7 +1370,10 @@ class SatsExchange(Exchange):
                                  "bounty_pledges": int(self.db.execute(
                                      "SELECT COALESCE(SUM(pool), 0) FROM bounties WHERE status='open'").fetchone()[0]),
                                  "bonds": self._sum_like("bond:"), "challenge_stakes": self._sum_like("challenge:"),
-                                 "fix_bonds": self._sum_like("fixbond:"), "reporter_bonds": self._sum_like("reporter:")},
+                                 "fix_bonds": self._sum_like("fixbond:"), "reporter_bonds": self._sum_like("reporter:"),
+                                 "challenge_pledges": self.challenge_stats()["escrow_msats"],
+                                 "challenge_submission_bonds": self._sum_like("csubbond:"),
+                                 "prior_art_stakes": self._sum_like("priorart:")},
                 "staked_msats": self._sum_like("stake:"), "validators": len(self._active()),
                 "forfeited_msats": self._bal(BURN), "burn": {"account": BURN, "destination": BURN_DESTINATION,
                                                              "batches": batches},
@@ -1376,6 +1397,7 @@ class SatsExchange(Exchange):
     def stats(self):
         s = super().stats()
         s["economy"] = self.economy_stats()
+        s["challenges"] = self.challenge_stats()
         r = self.db.execute("SELECT epoch, root, total FROM sats_roots ORDER BY epoch DESC LIMIT 1").fetchone()
         s["last_root"] = {"epoch": r[0], "root": r[1], "total_msats": int(r[2])} if r else None
         return s
@@ -1396,6 +1418,13 @@ class SatsExchange(Exchange):
                            "reveal": "POST /v0/learnings/{id}/reveals", "challenge": "POST /v0/learnings/{id}/challenges"}
         d["registry"].update(reporters="POST /v0/reporters {address}: a 1,000-sat bond makes your reports count",
                              fix_bond_msats=self.p.fix_bond_msats, reporter_bond_msats=self.p.reporter_bond_msats)
+        d["challenges"] = {"list": "GET /v0/challenges", "post": "POST /v0/challenges (a challenge/0.1 file, or "
+                           "{format: yukon, benchmark})", "pledge": "POST /v0/challenges/{id}/pledges",
+                           "submit": "POST /v0/challenges/{id}/submissions", "leaderboard": "GET /v0/challenges/{id}/leaderboard",
+                           "export": "GET /v0/challenges/{id}/export?format=yukon",
+                           "pays": "per verified improvement, along the challenge's curve: solver 70 / traces 20 / "
+                                   "checkers 5 / validators 5; unreleased pledges are refunded at expiry",
+                           "submission_bond_msats": self.p.challenge_sub_bond_msats}
         return d
 
     # --- v0.7: reporters, fix bonds and fix rounds, in sats ------------------------------------------------------------

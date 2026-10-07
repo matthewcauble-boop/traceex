@@ -210,6 +210,82 @@ class Client:
             body["attestation"] = attestation
         return self._call("POST", f"/v0/bounties/{bounty_id}/claims", body)
 
+    # --- challenge bounties (v0.8, SPEC 4k): big open problems, paid per verified improvement ----------------------
+    def challenges(self, status="open", path="", q="", origin="", limit=50):
+        """Open problems with a verifier, a direction and a leaderboard (status "all" for every one)."""
+        qs = urllib.parse.urlencode({k: v for k, v in dict(status=status, path=path, q=q, origin=origin,
+                                                           limit=limit).items() if v})
+        return self._call("GET", f"/v0/challenges?{qs}")
+
+    def get_challenge(self, challenge_id):
+        """One challenge bounty (not to be confused with challenge(), which disputes a learning): its file (statement, metric, verifier, sources), escrow, best score and top of the board."""
+        return self._call("GET", f"/v0/challenges/{int(challenge_id)}")
+
+    def leaderboard(self, challenge_id, limit=50):
+        return self._call("GET", f"/v0/challenges/{int(challenge_id)}/leaderboard?limit={int(limit)}")
+
+    def challenge_export(self, challenge_id, fmt="yukon"):
+        """The challenge as a Yukon-style benchmark: benchmark.json (+ verify.py for a python verifier)."""
+        return self._call("GET", f"/v0/challenges/{int(challenge_id)}/export?format={fmt}")
+
+    def post_challenge(self, challenge, seed_msats=0):
+        """Post a challenge/0.1 file (traceex.challenges.normalize), free (the fee only). A post whose key or alias
+        matches an open challenge backs it instead (`merged`)."""
+        body = dict(challenge, poster=self.address)
+        if seed_msats:
+            body["seed_msats"] = int(seed_msats)
+        return self._call("POST", "/v0/challenges", body)
+
+    def pledge_challenge(self, challenge_id, msats, from_score=None, judge=None):
+        """A refundable pledge, released to verified improvements along the challenge's curve; from_score: pay only for
+        progress beyond this score (default: the best now); judge: who confirms validator-measured improvements for
+        this pledge (default: you)."""
+        body = {"backer": self.address, "msats": int(msats)}
+        if from_score is not None:
+            body["from_score"] = float(from_score)
+        if judge:
+            body["judge"] = judge
+        return self._call("POST", f"/v0/challenges/{int(challenge_id)}/pledges", body)
+
+    def submit_solution(self, challenge_id, solution=None, *, artifact=None, outputs=None, public_score=None,
+                        parents=None, model=None, per_call_msats=None):
+        """Submit to a challenge. A verifier the node runs scores it at once; otherwise validators measure it (a
+        1,000-sat bond is held, destroyed if it is invalid or overfits its public instances)."""
+        body = {"submitter": self.address}
+        for k, v in (("solution", solution), ("artifact", artifact), ("outputs", outputs),
+                     ("public_score", public_score), ("parents", parents), ("model", model),
+                     ("per_call_msats", per_call_msats)):
+            if v is not None:
+                body[k] = v
+        return self._call("POST", f"/v0/challenges/{int(challenge_id)}/submissions", body)
+
+    def confirm_solution(self, submission_id, score):
+        """As a pledge's judge: confirm a validator-measured improvement with your own measurement (operator-relayed)."""
+        return self._call("POST", f"/v0/challenges/submissions/{int(submission_id)}/confirmations",
+                          {"judge": self.address, "measurement": {"score": float(score)}})
+
+    def prior_art(self, challenge_id, reference, provenance, score=None):
+        """Dispute paid progress on a challenge as already known (2,000-sat stake): reference is the known solution,
+        provenance {kind: "tracex"} (it was on traceX's boards before the challenge) or {kind: "external", url, date}."""
+        body = {"challenger": self.address, "reference": reference, "provenance": provenance}
+        if score is not None:
+            body["score"] = float(score)
+        return self._call("POST", f"/v0/challenges/{int(challenge_id)}/prior-art", body)
+
+    def prior_claim(self, claim_id):
+        return self._call("GET", f"/v0/challenges/prior-art/{int(claim_id)}")
+
+    def submission(self, submission_id):
+        return self._call("GET", f"/v0/challenges/submissions/{int(submission_id)}")
+
+    def commit_solution(self, submission_id, digest):
+        return self._call("POST", f"/v0/challenges/submissions/{int(submission_id)}/commits",
+                          {"validator": self.address, "digest": digest})
+
+    def reveal_solution(self, submission_id, measurement, salt=""):
+        return self._call("POST", f"/v0/challenges/submissions/{int(submission_id)}/reveals",
+                          {"validator": self.address, "measurement": measurement, "salt": salt})
+
     def provenance(self, object_id):
         return self._call("GET", f"/v0/provenance/{object_id}")
 
