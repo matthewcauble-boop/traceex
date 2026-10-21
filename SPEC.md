@@ -584,7 +584,7 @@ what it fixed, per model version.
 
 ## 4i. Ingestion: from tests and telemetry (v0.7)
 
-Two more ways in, both dry-run by default: what they build waits in a local outbox (`.traceex/outbox/`) until a person
+Three more ways in, all dry-run by default: what they build waits in a local outbox (`.traceex/outbox/`) until a person
 reviews it and sends it (`python -m traceex.outbox list | show | send`), or they send it when told to.
 
 - **A. pytest** (`sdk/python/traceex/pytest_plugin.py`, entry point `pytest11`; opt in with `--traceex` or `traceex =
@@ -621,6 +621,20 @@ reviews it and sends it (`python -m traceex.outbox list | show | send`), or they
   of the last user message (at most 4,000 characters), both answers and the checker's message. **Never sent:** system
   prompts, other messages, tool arguments, span and resource attributes, trace and span ids, timings; and a trace
   that still holds personal data or a secret after skeletonizing is dropped.
+- **C. Agent Beacon session logs** (`adapters/beacon/`, `python -m adapters.beacon runtime.jsonl`). Beacon
+  (Asymptote Labs, MIT; THIRD_PARTY_NOTICES) records whole coding-agent sessions as normalized JSONL. The adapter finds
+  fix episodes in a session: a check command that fails (non-zero `command.exit_code`, or a failure the event or its
+  output reports), then file edits (`file.diff`, or a diff rebuilt from the edit tool's arguments), then the same
+  check (or a broader run of its test runner) passing; a pass with no edit is flaky and makes no trace. Each episode
+  becomes a `code.repair` trace with checker `<runner>@1`, the failure output as feedback and the change's removed and
+  added lines as the two outputs (`adapters/beacon/MAPPING.md` has the field mapping). **The scrub is mandatory**:
+  every string taken from the log first loses keys and tokens (provider prefixes, auth headers, URL credentials,
+  secret-named assignments, `.env` values, private keys, high-entropy strings), emails, phone numbers, street
+  addresses, home directories (to `~`) and the session's user and host names, and absolute paths outside the project;
+  the finished trace is scanned again with every secret pattern and the node's check, and refused if anything
+  survives. By default the code is also skeletonized as in A and the prompt left out (`--open` keeps the scrubbed
+  text). Each trace gets a scrub report (counts by kind and field, never values). Local outbox only; `--submit`
+  sends.
 
 ## 4j. Step traces and cross-agent composition (v0.8 draft, after TROPIC)
 
@@ -972,6 +986,7 @@ verifiers, `examples/challenges/sample` a small imported sample.
   `leviathan_search.py` (v0.7: the search index, adapted from Leviathan), `seed.py`, `validator.py`.
 - `examples/otel_agent/` — a fake agent's GenAI spans through the real OpenTelemetry SDK into the exporter;
   `examples/ci/github-action.yml` — the pytest plugin in CI.
+- `adapters/beacon/` — ingestion path C: Agent Beacon runtime logs -> fix episodes -> scrubbed traces (4i).
 - `contracts/` — Solidity 0.8.24+: `Registry.sol`, `PayoutDistributor.sol` (compiles clean with solc 0.8.26; leaf
   layout matches `merkle.py`, checked in tests). v0.1's on-chain sketch, in USDC; not yet moved to bitcoin.
 - `examples/flight_emails/` — a flight-email extraction loop as the first producer, end to end (`demo.py`).

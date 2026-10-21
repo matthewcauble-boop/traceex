@@ -48,7 +48,7 @@ curl "$NODE/v0/failures/TXF-2026-000005"                    # its repro set, sta
 curl "$NODE/v0/search?q=type+error&kind=all&format=text"    # compact cited cards, traces and failures together
 ```
 
-Two ways in besides the SDK, both dry-run by default (what they build waits in `.traceex/outbox/` until you review it
+Three ways in besides the SDK, all dry-run by default (what they build waits in `.traceex/outbox/` until you review it
 with `python -m traceex.outbox list | show | send`):
 
 - **pytest** (`pip install` the SDK, then `pytest --traceex`): a test that failed earlier and passes after a code change
@@ -59,6 +59,11 @@ with `python -m traceex.outbox list | show | send`):
   LangSmith, OpenLLMetry and OpenInference export OTel too). It spots "model answer, a check fails it, a retry the
   check passes" in GenAI semantic-convention spans and builds a skeleton trace (names, emails, dates, amounts and codes
   replaced on your machine). `python examples/otel_agent/demo.py` runs it on a fake agent.
+- **Agent Beacon** ([Asymptote-Labs/agent-beacon](https://github.com/Asymptote-Labs/agent-beacon), MIT): `python -m
+  adapters.beacon ~/.beacon/endpoint/logs/runtime.jsonl` finds the fix episodes in recorded coding-agent sessions (a
+  check fails, files are edited, the check passes) and writes them as traces, after a mandatory scrub of keys, tokens,
+  `.env` values, private keys, personal data, home directories and outside paths, with a second pass that refuses any
+  trace a secret pattern survives in. See [`adapters/beacon/MAPPING.md`](adapters/beacon/MAPPING.md).
 
 Exactly what each path sends, and never sends, is in SPEC 4i and at the top of
 [`pytest_plugin.py`](sdk/python/traceex/pytest_plugin.py) and [`otel.py`](sdk/python/traceex/otel.py). Search is a
@@ -341,6 +346,7 @@ runs the library's v0.1 dollar node, so its amounts are dollars; the hosted exch
 | `node/identity.py`, `sdk/python/traceex/identity.py`, `docs/identity.md` | signed actions (EIP-191, address keys), the OIDC verifier with the AgentID preset, bindings, `/v0/identity`, `site/agentid.html` |
 | `node/leviathan_search.py` | v0.7: the search index, adapted from Leviathan (Apache-2.0, see NOTICE): FTS5 + porter, branch and filter tokens, tiered branch resolution, labelled fallback, cited cards |
 | `sdk/python/traceex/pytest_plugin.py`, `codeskel.py`, `otel.py`, `outbox.py` | v0.7 ingestion: the pytest plugin and code skeletons, the OpenTelemetry exporter, the review outbox |
+| `adapters/beacon/` | ingestion from Agent Beacon session logs: fix-episode finder, scrubber with a refusing second pass, exporter (`MAPPING.md`) |
 | `examples/otel_agent/`, `examples/ci/` | a fake agent's GenAI spans through the exporter; the plugin in a GitHub Action |
 | `sdk/python/traceex/tropic.py`, `node/composition.py` | v0.8 draft: step graphs, tropical values, frontier, composition with replay, failed attempts as unpaid reports, per-trace credit to passing step traces, the `tropic` export (after TROPIC, MIT, see NOTICE) |
 | `examples/tropical_composition/` | the pre-registered test: does joining fragments across agents solve problems no single agent solved? (Countdown, Qwen2.5-0.5B) |
