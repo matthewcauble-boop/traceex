@@ -84,3 +84,8 @@ format (fields such as direction, editablePaths, setupCommand, benchmarkCommand,
 minScoreImprovementBips, and the {"score", "metrics"} score file). The reader and writer were written for traceX from
 the public description of the format; no code, documentation or challenge content was copied, and traceX is not
 affiliated with or endorsed by Yukon or Eigen Labs.
+
+------------------------------------------------------------------------------------------------------------------------
+
+adapters/beacon reads the runtime log of Agent Beacon (Asymptote Labs, MIT licence); its notice is in
+THIRD_PARTY_NOTICES.
